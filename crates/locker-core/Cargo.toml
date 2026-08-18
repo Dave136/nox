@@ -1,0 +1,22 @@
+[package]
+name = "locker-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+ed25519-dalek = "2"
+getrandom = "0.3"
+hkdf = "0.12"
+postcard = { version = "1", features = ["alloc"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ulid = "1"
+x25519-dalek = "2"
+zeroize = "1"
+
+[lints]
+workspace = true
