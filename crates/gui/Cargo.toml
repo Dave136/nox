@@ -10,5 +10,8 @@ gpui-rsx.workspace = true
 locker-core = { path = "../locker-core" }
 sync = { path = "../sync" }
 
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true

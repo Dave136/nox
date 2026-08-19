@@ -643,6 +643,78 @@ cargo test --workspace --all-features
 These boundaries are deliberate. Add any deferred mechanism only when a measured
 product or operational need exceeds the simpler v1 behavior.
 
+## Performance and Security Practices
+
+These are cross-cutting rules that apply to every task in every crate, not
+new features. They make the guarantees already described elsewhere in this
+document actually hold once real code is written.
+
+### Security
+
+- **Never branch on secret validity in a way that leaks timing.** Password/
+  KEK checks, signature verification, and pairing-code comparison must use
+  constant-time comparison (`subtle` crate or the constant-time compare each
+  crypto crate already provides) — do not add `==` on secret bytes.
+- **Fail closed and generic.** A wrong master password and a corrupted DEK
+  wrapper must produce the same user-visible error (already required by
+  ARCHITECTURE.md's unlock section) — apply the same rule to signature and
+  AEAD failures: report "invalid" without saying which check failed.
+- **Secrets never cross a log, panic, `Debug`, or trace boundary.** Enforce
+  this by construction: secret-owning types (Task 2 `secret.rs`) must not
+  derive `Debug`/`Display`, or must hand-implement them to print a fixed
+  redaction string.
+- **No panics on untrusted input.** Anything parsed from the network, a
+  restored backup, or another device's signed record must return `Result`,
+  never `.unwrap()`/`.expect()`/array-index panic. Reserve `unwrap`/`expect`
+  for invariants the local process itself established (e.g. "we just
+  inserted this row").
+- **Validate lengths and bounds before allocating.** Frame sizes, batch
+  counts, and archive sizes are checked against a fixed maximum *before*
+  `Vec::with_capacity`/`read_to_end`, per the transport section — apply the
+  same rule to backup import.
+- **Zeroize on drop, not just on the happy path.** Use `Drop` impls / the
+  `zeroize` crate so a secret is wiped even when a function returns early
+  via `?`.
+- **Run `cargo audit` (or `cargo deny check advisories`) before each release
+  gate**, not just once at project start — pinned git deps for GPUI/
+  gpui-component/gpui-rsx are exempt from crates.io advisories and must be
+  tracked manually against their upstream repos instead.
+- **Treat WAL files, temp files, and backup exports as sensitive** — same
+  owner-only permissions as the main DB file, same "no plaintext" rule for
+  temp files during export (write ciphertext directly, never a plaintext
+  intermediate on disk).
+
+### Performance
+
+- **Argon2id cost is a UX budget, not a security dial to tune down.** If
+  unlock feels slow on real hardware, that's a signal for the deferred
+  runtime-calibration feature, not a reason to lower the fixed v1 constants.
+- **Every mutation is one SQLite transaction** (already required by the
+  journal design) — this is also the performance rule: don't wrap multiple
+  transactions in a retry loop where one would do, and don't hold a
+  transaction open across network or GUI I/O.
+- **Index what you query.** `changes` needs indexes on `(item_id)` and
+  `(origin_device_id, origin_seq)`; `sync_cursors` is keyed by
+  `origin_device_id`. Add indexes with the migration that creates the table,
+  not as an afterthought.
+- **Batch, don't chat.** Replication sends bounded batches of changes, not
+  one round-trip per change (already specified) — keep the same principle
+  inside `locker-core`: bulk-insert a restore/import journal in one
+  transaction, not one transaction per change.
+- **Never block the GPUI foreground executor.** Any `locker-core` or `sync`
+  call that touches disk or network from a GUI callback must go through the
+  async channel bridge already specified — no synchronous SQLite call
+  directly on a GPUI view callback for anything larger than a single indexed
+  row lookup.
+- **In-memory search stays in memory.** Don't add a persisted plaintext
+  index "for speed" — v1 explicitly decrypts to memory and searches there;
+  if that's ever too slow, that's a measured decision to revisit, not a
+  default.
+- **Measure before adding caching or indexes beyond the above.** No
+  speculative LRU caches, no query result caching layer — SQLite with the
+  indexes above is fast enough for the target scale (one local vault, one
+  user's items) until a profile says otherwise.
+
 ## Primary References
 
 - [RFC 9106 — Argon2 Memory-Hard Function](https://www.rfc-editor.org/rfc/rfc9106)

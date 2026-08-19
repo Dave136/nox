@@ -1,0 +1,948 @@
+//! Vault creation, unlocking, and secret lifetime management.
+
+use crate::{
+    crypto::{
+        CipherError, cipher,
+        kdf::{self, Argon2Params, KdfError},
+        keys::{self, Ed25519Keypair, KeyError, WrappedDek, X25519Keypair},
+        secret::Dek,
+    },
+    ids::{ChangeId, DeviceId, ItemId, VaultId},
+    item::{ITEM_SCHEMA_VERSION, ItemPayload, ItemPayloadError},
+    journal::{self, Change, JournalError},
+    merge,
+    storage::{Db, DbError},
+};
+use rusqlite::{OptionalExtension, params, types::Type};
+use std::{
+    fmt, io,
+    path::{Path, PathBuf},
+};
+use zeroize::Zeroizing;
+
+const FORMAT_VERSION: i64 = 1;
+const KDF_ALGORITHM: &str = "argon2id";
+const KEY_WRAP_ALGORITHM: &str = "xchacha20poly1305";
+const AEAD_TAG_LENGTH: usize = 16;
+const LIVE_ITEMS_QUERY: &str = "SELECT changes.change_id, changes.vault_id, changes.item_id,
+    changes.parent_change_ids, changes.origin_device_id, changes.origin_seq,
+    changes.hlc_physical_ms, changes.hlc_logical, changes.operation,
+    changes.payload_schema_version, changes.nonce, changes.ciphertext,
+    changes.signature
+    FROM items JOIN changes ON changes.change_id = items.winning_change_id
+    WHERE items.deleted = 0";
+const GET_ITEM_QUERY: &str = "SELECT changes.change_id, changes.vault_id, changes.item_id,
+    changes.parent_change_ids, changes.origin_device_id, changes.origin_seq,
+    changes.hlc_physical_ms, changes.hlc_logical, changes.operation,
+    changes.payload_schema_version, changes.nonce, changes.ciphertext,
+    changes.signature
+    FROM items JOIN changes ON changes.change_id = items.winning_change_id
+    WHERE items.item_id = ?1 AND items.deleted = 0";
+const LAST_UPSERT_QUERY: &str = "SELECT changes.change_id, changes.vault_id, changes.item_id,
+    changes.parent_change_ids, changes.origin_device_id, changes.origin_seq,
+    changes.hlc_physical_ms, changes.hlc_logical, changes.operation,
+    changes.payload_schema_version, changes.nonce, changes.ciphertext,
+    changes.signature
+    FROM changes
+    WHERE changes.item_id = ?1 AND changes.operation = 0
+    ORDER BY changes.hlc_physical_ms DESC, changes.hlc_logical DESC,
+             changes.origin_device_id DESC, changes.origin_seq DESC
+    LIMIT 1";
+
+/// Errors returned by vault lifecycle operations.
+#[derive(Debug)]
+pub enum VaultError {
+    /// A filesystem operation failed.
+    Io(io::Error),
+    /// SQLite opening or mutation failed.
+    Db(DbError),
+    /// Password KDF failed.
+    Kdf(KdfError),
+    /// Key generation, wrapping, or private material handling failed.
+    Key(KeyError),
+    /// OS randomness failed while creating vault material.
+    Randomness(getrandom::Error),
+    /// Password or authenticated vault material was invalid.
+    IncorrectPasswordOrCorruptVault,
+    /// A vault already exists at the requested path.
+    VaultAlreadyExists,
+    /// No vault exists at the requested path.
+    VaultNotFound,
+    /// The platform home/data directory could not be resolved.
+    NoHomeDirectory,
+    /// A journal mutation failed.
+    Journal(JournalError),
+    /// An item ciphertext failed authentication or decryption.
+    Cipher(CipherError),
+    /// An item payload could not be encoded or decoded.
+    ItemPayload(ItemPayloadError),
+    /// The encrypted envelope and JSON payload declare different schemas.
+    SchemaVersionMismatch { envelope: u32, payload: u16 },
+    /// The requested item has no prior revision.
+    ItemNotFound,
+}
+
+impl fmt::Display for VaultError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "vault I/O error: {error}"),
+            Self::Db(error) => write!(formatter, "vault database error: {error}"),
+            Self::Kdf(error) => write!(formatter, "vault KDF error: {error}"),
+            Self::Key(error) => write!(formatter, "vault key error: {error}"),
+            Self::Randomness(error) => write!(formatter, "vault randomness error: {error}"),
+            Self::IncorrectPasswordOrCorruptVault => {
+                formatter.write_str("incorrect password or corrupted vault")
+            }
+            Self::VaultAlreadyExists => formatter.write_str("vault already exists"),
+            Self::VaultNotFound => formatter.write_str("vault not found"),
+            Self::NoHomeDirectory => formatter.write_str("home directory is unavailable"),
+            Self::Journal(error) => write!(formatter, "vault journal error: {error}"),
+            Self::Cipher(error) => write!(formatter, "vault cipher error: {error}"),
+            Self::ItemPayload(error) => write!(formatter, "vault item payload error: {error}"),
+            Self::SchemaVersionMismatch { envelope, payload } => write!(
+                formatter,
+                "item schema version mismatch: envelope {envelope}, payload {payload}"
+            ),
+            Self::ItemNotFound => formatter.write_str("item not found"),
+        }
+    }
+}
+
+impl std::error::Error for VaultError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Db(error) => Some(error),
+            Self::Kdf(error) => Some(error),
+            Self::Key(error) => Some(error),
+            Self::Randomness(error) => Some(error),
+            Self::Journal(error) => Some(error),
+            Self::Cipher(error) => Some(error),
+            Self::ItemPayload(error) => Some(error),
+            Self::IncorrectPasswordOrCorruptVault
+            | Self::VaultAlreadyExists
+            | Self::VaultNotFound
+            | Self::NoHomeDirectory
+            | Self::SchemaVersionMismatch { .. }
+            | Self::ItemNotFound => None,
+        }
+    }
+}
+
+impl From<io::Error> for VaultError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<DbError> for VaultError {
+    fn from(error: DbError) -> Self {
+        Self::Db(error)
+    }
+}
+
+impl From<rusqlite::Error> for VaultError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Db(DbError::from(error))
+    }
+}
+
+impl From<KdfError> for VaultError {
+    fn from(error: KdfError) -> Self {
+        Self::Kdf(error)
+    }
+}
+
+impl From<KeyError> for VaultError {
+    fn from(error: KeyError) -> Self {
+        Self::Key(error)
+    }
+}
+
+impl From<getrandom::Error> for VaultError {
+    fn from(error: getrandom::Error) -> Self {
+        Self::Randomness(error)
+    }
+}
+
+impl From<JournalError> for VaultError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
+impl From<CipherError> for VaultError {
+    fn from(error: CipherError) -> Self {
+        Self::Cipher(error)
+    }
+}
+
+impl From<ItemPayloadError> for VaultError {
+    fn from(error: ItemPayloadError) -> Self {
+        Self::ItemPayload(error)
+    }
+}
+
+/// An unlocked vault and the secrets required to operate on it.
+pub struct Vault {
+    db: Db,
+    vault_id: VaultId,
+    device_id: DeviceId,
+    dek: Dek,
+    ed25519: Ed25519Keypair,
+    #[allow(dead_code)]
+    x25519: X25519Keypair,
+}
+
+impl fmt::Debug for Vault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Vault(<redacted>)")
+    }
+}
+
+impl Vault {
+    /// Create and persist a new vault at `path`.
+    pub fn create(password: &[u8], path: impl AsRef<Path>) -> Result<Self, VaultError> {
+        let mut db = Db::open(path)?;
+        let (vault_id, device_id, dek, ed25519, x25519) = db.transaction(|tx| {
+            if tx
+                .query_row("SELECT singleton FROM vault_meta LIMIT 1", [], |_| Ok(()))
+                .optional()?
+                .is_some()
+            {
+                return Err(VaultError::VaultAlreadyExists);
+            }
+
+            let vault_id = VaultId::try_new()?;
+            let salt = kdf::random_salt()?;
+            let params = Argon2Params::v1();
+            let kek = kdf::derive_kek(password, salt, params)?;
+            let dek = Dek::random()?;
+            let wrapped = keys::wrap_dek(&kek, &dek)?;
+
+            tx.execute(
+                "INSERT INTO vault_meta (
+                    singleton, format_version, vault_id, kdf_algorithm, kdf_salt,
+                    argon2_memory_kib, argon2_iterations, argon2_parallelism,
+                    key_wrap_algorithm, wrapped_dek_nonce, wrapped_dek
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    FORMAT_VERSION,
+                    vault_id.as_ref(),
+                    KDF_ALGORITHM,
+                    salt.as_slice(),
+                    i64::from(params.memory_kib),
+                    i64::from(params.iterations),
+                    i64::from(params.parallelism),
+                    KEY_WRAP_ALGORITHM,
+                    wrapped.nonce.as_bytes(),
+                    wrapped.ciphertext,
+                ],
+            )?;
+
+            let ed25519 = Ed25519Keypair::generate()?;
+            let x25519 = X25519Keypair::generate()?;
+            let private_material = Zeroizing::new(
+                postcard::to_allocvec(&(ed25519.private_key_bytes(), x25519.private_key_bytes()))
+                    .map_err(|_| KeyError::Invalid)?,
+            );
+            let encrypted_private_material =
+                keys::seal_fixed_aad(&dek, keys::PRIVATE_KEY_AAD, private_material.as_slice())?;
+            let device_id = DeviceId::from_public_key(ed25519.public_key_bytes());
+            tx.execute(
+                "INSERT INTO local_device (
+                    singleton, device_id, ed25519_public_key, x25519_public_key,
+                    encrypted_private_key_material
+                ) VALUES (1, ?1, ?2, ?3, ?4)",
+                params![
+                    device_id.as_ref(),
+                    ed25519.public_key_bytes().as_slice(),
+                    x25519.public_key_bytes().as_slice(),
+                    encrypted_private_material,
+                ],
+            )?;
+
+            Ok((vault_id, device_id, dek, ed25519, x25519))
+        })?;
+
+        Ok(Self {
+            db,
+            vault_id,
+            device_id,
+            dek,
+            ed25519,
+            x25519,
+        })
+    }
+
+    /// Unlock an existing vault without creating missing paths.
+    pub fn unlock(password: &[u8], path: impl AsRef<Path>) -> Result<Self, VaultError> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Err(VaultError::VaultNotFound);
+        }
+        let db = Db::open(path)?;
+
+        let meta = db
+            .connection()
+            .query_row(
+                "SELECT format_version, vault_id, kdf_algorithm, kdf_salt,
+                        argon2_memory_kib, argon2_iterations, argon2_parallelism,
+                        key_wrap_algorithm, wrapped_dek_nonce, wrapped_dek
+                 FROM vault_meta LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, Vec<u8>>(8)?,
+                        row.get::<_, Vec<u8>>(9)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            format_version,
+            vault_id,
+            kdf_algorithm,
+            kdf_salt,
+            memory_kib,
+            iterations,
+            parallelism,
+            key_wrap_algorithm,
+            wrapped_nonce,
+            wrapped_ciphertext,
+        )) = meta
+        else {
+            return Err(VaultError::VaultNotFound);
+        };
+
+        let corrupt = || VaultError::IncorrectPasswordOrCorruptVault;
+        if format_version != FORMAT_VERSION
+            || kdf_algorithm != KDF_ALGORITHM
+            || key_wrap_algorithm != KEY_WRAP_ALGORITHM
+            || kdf_salt.len() != kdf::SALT_LENGTH
+            || wrapped_nonce.len() != cipher::NONCE_LENGTH
+            || wrapped_ciphertext.len() < AEAD_TAG_LENGTH
+        {
+            return Err(corrupt());
+        }
+        let params = match (
+            u32::try_from(memory_kib),
+            u32::try_from(iterations),
+            u32::try_from(parallelism),
+        ) {
+            (Ok(memory_kib), Ok(iterations), Ok(parallelism)) => {
+                Argon2Params::new(memory_kib, iterations, parallelism)
+            }
+            _ => return Err(corrupt()),
+        };
+        if params != Argon2Params::v1() {
+            return Err(corrupt());
+        }
+        let vault_id = match vault_id.as_slice().try_into() {
+            Ok(bytes) => VaultId::from_bytes(bytes),
+            Err(_) => return Err(corrupt()),
+        };
+        let nonce = match wrapped_nonce.as_slice().try_into() {
+            Ok(bytes) => cipher::Nonce::from_bytes(bytes),
+            Err(_) => return Err(corrupt()),
+        };
+        let kek = kdf::derive_kek(password, &kdf_salt, params).map_err(|_| corrupt())?;
+        let dek = keys::unwrap_dek(
+            &kek,
+            &WrappedDek {
+                nonce,
+                ciphertext: wrapped_ciphertext,
+            },
+        )
+        .map_err(|_| corrupt())?;
+
+        let local_device = db
+            .connection()
+            .query_row(
+                "SELECT device_id, ed25519_public_key, x25519_public_key,
+                        encrypted_private_key_material
+                 FROM local_device WHERE singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((stored_device_id, stored_ed25519, stored_x25519, encrypted_private)) =
+            local_device
+        else {
+            return Err(corrupt());
+        };
+
+        let private_material =
+            keys::open_fixed_aad(&dek, keys::PRIVATE_KEY_AAD, &encrypted_private)
+                .map_err(|_| corrupt())?;
+        let (ed25519_private, x25519_private): ([u8; 32], [u8; 32]) =
+            postcard::from_bytes(private_material.as_bytes()).map_err(|_| corrupt())?;
+        let ed25519 = Ed25519Keypair::from_private_bytes(ed25519_private);
+        let x25519 = X25519Keypair::from_private_bytes(x25519_private);
+        let stored_device_id: [u8; 32] = stored_device_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| corrupt())?;
+        let stored_ed25519: [u8; 32] = stored_ed25519
+            .as_slice()
+            .try_into()
+            .map_err(|_| corrupt())?;
+        let stored_x25519: [u8; 32] = stored_x25519.as_slice().try_into().map_err(|_| corrupt())?;
+        let device_id = DeviceId::from_public_key(ed25519.public_key_bytes());
+        if device_id != DeviceId::from_bytes(stored_device_id)
+            || ed25519.public_key_bytes() != stored_ed25519
+            || x25519.public_key_bytes() != stored_x25519
+        {
+            return Err(corrupt());
+        }
+
+        Ok(Self {
+            db,
+            vault_id,
+            device_id,
+            dek,
+            ed25519,
+            x25519,
+        })
+    }
+
+    /// Consume the unlocked handle and drop its database and secrets.
+    pub fn lock(self) {
+        drop(self);
+    }
+
+    /// Create a new encrypted item revision and return its generated id.
+    pub fn create_item(&mut self, payload: &ItemPayload) -> Result<ItemId, VaultError> {
+        let encoded = payload.to_json_bytes()?;
+        let item_id = ItemId::new();
+        journal::create_local_change(
+            &mut self.db,
+            self.vault_id,
+            item_id,
+            &self.ed25519,
+            &self.dek,
+            cipher::Operation::Upsert,
+            encoded,
+            u32::from(ITEM_SCHEMA_VERSION),
+            now_millis(),
+        )?;
+        Ok(item_id)
+    }
+
+    /// Append an encrypted update to an existing item, including tombstone restoration.
+    pub fn update_item(
+        &mut self,
+        item_id: ItemId,
+        payload: &ItemPayload,
+    ) -> Result<(), VaultError> {
+        let encoded = payload.to_json_bytes()?;
+        if !self.item_exists(item_id)? {
+            return Err(VaultError::ItemNotFound);
+        }
+        journal::create_local_change(
+            &mut self.db,
+            self.vault_id,
+            item_id,
+            &self.ed25519,
+            &self.dek,
+            cipher::Operation::Upsert,
+            encoded,
+            u32::from(ITEM_SCHEMA_VERSION),
+            now_millis(),
+        )?;
+        Ok(())
+    }
+
+    /// Append an encrypted tombstone to an existing item.
+    pub fn delete_item(&mut self, item_id: ItemId) -> Result<(), VaultError> {
+        if !self.item_exists(item_id)? {
+            return Err(VaultError::ItemNotFound);
+        }
+        journal::create_local_change(
+            &mut self.db,
+            self.vault_id,
+            item_id,
+            &self.ed25519,
+            &self.dek,
+            cipher::Operation::Tombstone,
+            [],
+            u32::from(ITEM_SCHEMA_VERSION),
+            now_millis(),
+        )?;
+        Ok(())
+    }
+
+    /// List all non-deleted items and decode their winning payloads.
+    pub fn list_items(&self) -> Result<Vec<(ItemId, ItemPayload)>, VaultError> {
+        let mut statement = self.db.connection().prepare(LIVE_ITEMS_QUERY)?;
+        let changes = statement
+            .query_map([], journal::row_to_change)?
+            .collect::<Result<Vec<_>, _>>()?;
+        changes
+            .into_iter()
+            .map(|change| {
+                let item_id = change.item_id;
+                self.decode_payload(&change)
+                    .map(|payload| (item_id, payload))
+            })
+            .collect()
+    }
+
+    /// Return one non-deleted item, or `None` for absent/tombstoned ids.
+    pub fn get_item(&self, item_id: ItemId) -> Result<Option<ItemPayload>, VaultError> {
+        let change = self
+            .db
+            .connection()
+            .query_row(GET_ITEM_QUERY, [item_id.as_ref()], journal::row_to_change)
+            .optional()?;
+        change
+            .map(|change| self.decode_payload(&change))
+            .transpose()
+    }
+
+    /// List ids whose current projection is tombstoned.
+    pub fn list_deleted_items(&self) -> Result<Vec<ItemId>, VaultError> {
+        let mut statement = self
+            .db
+            .connection()
+            .prepare("SELECT item_id FROM items WHERE deleted = 1")?;
+        Ok(statement
+            .query_map([], |row| {
+                let bytes: [u8; 16] = row.get::<_, Vec<u8>>(0)?.try_into().map_err(|_| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        Type::Blob,
+                        "invalid item id".into(),
+                    )
+                })?;
+                Ok(ItemId::from_bytes(bytes))
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Return the latest upsert payload for an item, including deleted items.
+    pub fn last_known_payload(&self, item_id: ItemId) -> Result<Option<ItemPayload>, VaultError> {
+        let change = self
+            .db
+            .connection()
+            .query_row(
+                LAST_UPSERT_QUERY,
+                [item_id.as_ref()],
+                journal::row_to_change,
+            )
+            .optional()?;
+        change
+            .map(|change| self.decode_payload(&change))
+            .transpose()
+    }
+
+    /// List all unresolved heads, retaining change ids and tombstone choices.
+    #[allow(clippy::type_complexity)]
+    pub fn list_conflicts(
+        &self,
+    ) -> Result<Vec<(ItemId, Vec<(ChangeId, Option<ItemPayload>)>)>, VaultError> {
+        let mut statement = self
+            .db
+            .connection()
+            .prepare("SELECT DISTINCT item_id FROM conflicts")?;
+        let item_ids = statement
+            .query_map([], |row| {
+                let bytes: [u8; 16] = row.get::<_, Vec<u8>>(0)?.try_into().map_err(|_| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        Type::Blob,
+                        "invalid item id".into(),
+                    )
+                })?;
+                Ok(ItemId::from_bytes(bytes))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        item_ids
+            .into_iter()
+            .map(|item_id| {
+                let heads = merge::unresolved_heads(&self.db, item_id)?;
+                let values = heads
+                    .into_iter()
+                    .map(|change| {
+                        if change.is_tombstone() {
+                            Ok((change.change_id, None))
+                        } else {
+                            self.decode_payload(&change)
+                                .map(|payload| (change.change_id, Some(payload)))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, VaultError>>()?;
+                Ok((item_id, values))
+            })
+            .collect()
+    }
+
+    /// Resolve an item conflict by carrying one selected revision forward.
+    pub fn resolve_conflict(
+        &mut self,
+        item_id: ItemId,
+        selected_change_id: ChangeId,
+    ) -> Result<(), VaultError> {
+        merge::resolve_conflicts(
+            &mut self.db,
+            self.vault_id,
+            item_id,
+            selected_change_id,
+            &self.ed25519,
+            &self.dek,
+            now_millis(),
+        )?;
+        Ok(())
+    }
+
+    fn item_exists(&self, item_id: ItemId) -> Result<bool, VaultError> {
+        Ok(self.db.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM items WHERE item_id = ?1)",
+            [item_id.as_ref()],
+            |row| row.get(0),
+        )?)
+    }
+
+    fn decode_payload(&self, change: &Change) -> Result<ItemPayload, VaultError> {
+        let decrypted = cipher::decrypt(
+            &self.dek,
+            &change.aad_context(),
+            &change.encrypted_payload(),
+        )?;
+        let payload = ItemPayload::from_json_bytes(decrypted.as_bytes())?;
+        if u32::from(payload.schema_version) != change.payload_schema_version {
+            return Err(VaultError::SchemaVersionMismatch {
+                envelope: change.payload_schema_version,
+                payload: payload.schema_version,
+            });
+        }
+        Ok(payload)
+    }
+
+    /// Return the vault identifier.
+    #[must_use]
+    pub fn vault_id(&self) -> VaultId {
+        self.vault_id
+    }
+
+    /// Return the local device identifier.
+    #[must_use]
+    pub fn device_id(&self) -> DeviceId {
+        self.device_id
+    }
+}
+
+/// Return the platform's default Locker vault path without touching the filesystem.
+pub fn default_vault_path() -> Result<PathBuf, VaultError> {
+    #[cfg(target_os = "macos")]
+    let base = {
+        let home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .ok_or(VaultError::NoHomeDirectory)?;
+        PathBuf::from(home).join("Library/Application Support")
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let base = match std::env::var_os("XDG_DATA_HOME").filter(|path| !path.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let home = std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .ok_or(VaultError::NoHomeDirectory)?;
+            PathBuf::from(home).join(".local/share")
+        }
+    };
+
+    Ok(base.join("locker/vault.db"))
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(std::time::Duration::ZERO)
+        .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Vault, VaultError, now_millis};
+    use crate::{
+        Ed25519Keypair, ITEM_SCHEMA_VERSION, ItemPayload, ItemType, Operation,
+        ids::ChangeId,
+        journal::{self, JournalError},
+    };
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn unlock_restores_the_same_signing_key() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("locker-vault-signature-{unique}"));
+        let path = directory.join("vault.db");
+        let created = Vault::create(b"password", &path).unwrap();
+        let signature = created.ed25519.sign(b"stable message");
+        created.lock();
+
+        let unlocked = Vault::unlock(b"password", &path).unwrap();
+        assert_eq!(unlocked.ed25519.sign(b"stable message"), signature);
+        unlocked.lock();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn payload(title: &str, password: &str) -> ItemPayload {
+        ItemPayload {
+            schema_version: ITEM_SCHEMA_VERSION,
+            item_type: ItemType::Login,
+            title: title.into(),
+            username: "alice".into(),
+            password: password.into(),
+            uris: vec![],
+            notes: String::new(),
+            created_at: 1,
+            updated_at: 2,
+        }
+    }
+
+    #[test]
+    fn conflicts_return_selectable_change_ids_and_resolve() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("locker-vault-conflict-{unique}"));
+        let path = directory.join("vault.db");
+        let mut vault = Vault::create(b"password", &path).unwrap();
+        let base = payload("base", "base-secret");
+        let left = payload("left", "left-secret");
+        let right = payload("right", "right-secret");
+        let item_id = vault.create_item(&base).unwrap();
+        let base_change = journal::load_item_changes(vault.db.connection(), item_id)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        vault.update_item(item_id, &left).unwrap();
+        let remote = Ed25519Keypair::from_private_bytes([42; 32]);
+        let right_bytes = right.to_json_bytes().unwrap();
+        journal::create_local_change_with_parents(
+            &mut vault.db,
+            vault.vault_id,
+            item_id,
+            vec![base_change.change_id],
+            &remote,
+            &vault.dek,
+            Operation::Upsert,
+            right_bytes,
+            u32::from(ITEM_SCHEMA_VERSION),
+            now_millis(),
+        )
+        .unwrap();
+
+        let conflicts = vault.list_conflicts().unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert!(matches!(
+            vault.resolve_conflict(item_id, ChangeId::new()),
+            Err(VaultError::Journal(JournalError::InvalidChange(_)))
+        ));
+        assert_eq!(vault.list_conflicts().unwrap(), conflicts);
+        let (selected, expected) = conflicts[0]
+            .1
+            .iter()
+            .find_map(|(change_id, payload)| payload.clone().map(|payload| (*change_id, payload)))
+            .unwrap();
+        vault.resolve_conflict(item_id, selected).unwrap();
+        assert!(vault.list_conflicts().unwrap().is_empty());
+        assert_eq!(vault.get_item(item_id).unwrap(), Some(expected));
+
+        vault.lock();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn tombstone_conflict_head_is_visible_and_selectable() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("locker-vault-tombstone-{unique}"));
+        let path = directory.join("vault.db");
+        let mut vault = Vault::create(b"password", &path).unwrap();
+        let item_id = vault.create_item(&payload("base", "base-secret")).unwrap();
+        let base_change = journal::load_item_changes(vault.db.connection(), item_id)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        vault
+            .update_item(item_id, &payload("edit", "edit-secret"))
+            .unwrap();
+        let remote = Ed25519Keypair::from_private_bytes([43; 32]);
+        journal::create_local_change_with_parents(
+            &mut vault.db,
+            vault.vault_id,
+            item_id,
+            vec![base_change.change_id],
+            &remote,
+            &vault.dek,
+            Operation::Tombstone,
+            [],
+            u32::from(ITEM_SCHEMA_VERSION),
+            now_millis(),
+        )
+        .unwrap();
+
+        let conflicts = vault.list_conflicts().unwrap();
+        let tombstone_id = conflicts[0]
+            .1
+            .iter()
+            .find_map(|(change_id, payload)| payload.is_none().then_some(*change_id))
+            .unwrap();
+        vault.resolve_conflict(item_id, tombstone_id).unwrap();
+        assert_eq!(vault.get_item(item_id).unwrap(), None);
+        assert!(vault.list_conflicts().unwrap().is_empty());
+
+        vault.lock();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn edit_conflict_head_is_visible_and_selectable() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("locker-vault-edit-head-{unique}"));
+        let path = directory.join("vault.db");
+        let mut vault = Vault::create(b"password", &path).unwrap();
+        let base = payload("base", "base-secret");
+        let edit = payload("edit", "edit-secret");
+        let item_id = vault.create_item(&base).unwrap();
+        let base_change = journal::load_item_changes(vault.db.connection(), item_id)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        vault.update_item(item_id, &edit).unwrap();
+        let remote = Ed25519Keypair::from_private_bytes([44; 32]);
+        journal::create_local_change_with_parents(
+            &mut vault.db,
+            vault.vault_id,
+            item_id,
+            vec![base_change.change_id],
+            &remote,
+            &vault.dek,
+            Operation::Tombstone,
+            [],
+            u32::from(ITEM_SCHEMA_VERSION),
+            now_millis(),
+        )
+        .unwrap();
+
+        let conflicts = vault.list_conflicts().unwrap();
+        let (edit_id, selected_edit) = conflicts[0]
+            .1
+            .iter()
+            .find_map(|(change_id, payload)| payload.clone().map(|payload| (*change_id, payload)))
+            .unwrap();
+        assert_eq!(selected_edit, edit);
+        vault.resolve_conflict(item_id, edit_id).unwrap();
+        assert_eq!(vault.get_item(item_id).unwrap(), Some(edit));
+        assert!(vault.list_conflicts().unwrap().is_empty());
+
+        vault.lock();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn envelope_and_payload_schema_mismatch_is_reported_honestly() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("locker-vault-schema-{unique}"));
+        let path = directory.join("vault.db");
+        let mut vault = Vault::create(b"password", &path).unwrap();
+        let item_id = vault.create_item(&payload("item", "secret")).unwrap();
+        let mismatched = payload("mismatch", "secret").to_json_bytes().unwrap();
+        journal::create_local_change(
+            &mut vault.db,
+            vault.vault_id,
+            item_id,
+            &vault.ed25519,
+            &vault.dek,
+            Operation::Upsert,
+            mismatched,
+            2,
+            now_millis(),
+        )
+        .unwrap();
+        assert!(matches!(
+            vault.get_item(item_id),
+            Err(VaultError::SchemaVersionMismatch {
+                envelope: 2,
+                payload: ITEM_SCHEMA_VERSION,
+            })
+        ));
+        vault.lock();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn corrupted_winning_ciphertext_aborts_item_reads() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("locker-vault-corrupt-item-{unique}"));
+        let path = directory.join("vault.db");
+        let mut vault = Vault::create(b"password", &path).unwrap();
+        let item_id = vault.create_item(&payload("item", "secret")).unwrap();
+        let mut ciphertext: Vec<u8> = vault
+            .db
+            .connection()
+            .query_row(
+                "SELECT ciphertext FROM changes WHERE item_id = ?1",
+                [item_id.as_ref()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        ciphertext[0] ^= 1;
+        vault
+            .db
+            .connection()
+            .execute(
+                "UPDATE changes SET ciphertext = ?1 WHERE item_id = ?2",
+                rusqlite::params![ciphertext, item_id.as_ref()],
+            )
+            .unwrap();
+        assert!(matches!(
+            vault.list_items(),
+            Err(VaultError::Cipher(
+                crate::crypto::CipherError::InvalidCiphertext
+            ))
+        ));
+        vault.lock();
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
