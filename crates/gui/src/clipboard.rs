@@ -1,0 +1,116 @@
+use super::Locker;
+use gpui::{ClipboardItem, Context, Task, Window};
+use locker_core::{ItemId, SecretBytes};
+use std::time::Duration;
+
+pub const DEFAULT_CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub(crate) struct ClipboardState {
+    pub(crate) timeout: Duration,
+    pub(crate) epoch: u64,
+    pub(crate) expected: Option<SecretBytes>,
+    pub(crate) clear_task: Task<()>,
+}
+
+impl ClipboardState {
+    pub(crate) fn new(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            epoch: 0,
+            expected: None,
+            clear_task: Task::ready(()),
+        }
+    }
+}
+
+impl Locker {
+    pub(crate) fn copy_username(
+        &mut self,
+        item_id: ItemId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(&self.state, super::AppState::Unlocked(_)) {
+            return;
+        }
+        let Some(value) = self
+            .vault_list
+            .as_ref()
+            .and_then(|list| list.items.iter().find(|(id, _)| *id == item_id))
+            .map(|(_, payload)| payload.username.clone())
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        self.copy_secret(SecretBytes::new(value.as_bytes()), window, cx);
+    }
+
+    pub(crate) fn copy_password(
+        &mut self,
+        item_id: ItemId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(&self.state, super::AppState::Unlocked(_)) {
+            return;
+        }
+        let Some(value) = self
+            .vault_list
+            .as_ref()
+            .and_then(|list| list.items.iter().find(|(id, _)| *id == item_id))
+            .map(|(_, payload)| payload.password.clone())
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        self.copy_secret(SecretBytes::new(value.as_bytes()), window, cx);
+    }
+
+    pub(crate) fn copy_secret(
+        &mut self,
+        value: SecretBytes,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if value.is_empty() {
+            return;
+        }
+        self.clipboard.epoch = self.clipboard.epoch.wrapping_add(1);
+        let epoch = self.clipboard.epoch;
+        self.clipboard.expected = Some(value.clone());
+        let text = String::from_utf8_lossy(value.as_bytes()).into_owned();
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        let timeout = self.clipboard.timeout;
+        self.clipboard.clear_task = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(timeout).await;
+            if let Some(this) = this.upgrade() {
+                let _ = cx.update(|_, app| {
+                    this.update(app, |this, cx| {
+                        if this.clipboard.epoch == epoch {
+                            this.clear_clipboard_if_unchanged(cx);
+                        }
+                    });
+                });
+            }
+        });
+        self.note_activity(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn clear_clipboard_if_unchanged(&mut self, cx: &mut Context<Self>) {
+        if let Some(expected) = self.clipboard.expected.as_ref() {
+            let current = cx.read_from_clipboard().and_then(|item| item.text());
+            if current.as_deref().map(str::as_bytes) == Some(expected.as_bytes()) {
+                cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+            }
+        }
+        self.clipboard.expected = None;
+        self.clipboard.epoch = self.clipboard.epoch.wrapping_add(1);
+        self.clipboard.clear_task = Task::ready(());
+        cx.notify();
+    }
+
+    pub(crate) fn discard_clipboard_state(&mut self, cx: &mut Context<Self>) {
+        self.clear_clipboard_if_unchanged(cx);
+    }
+}

@@ -201,6 +201,19 @@ impl fmt::Debug for Vault {
 }
 
 impl Vault {
+    /// Prepare a v2 backup export without scanning or serializing on the caller thread.
+    pub fn prepare_backup_export(
+        &self,
+        backup_password: &[u8],
+        destination: impl AsRef<Path>,
+    ) -> Result<crate::backup::BackupExportRequest, crate::backup::BackupError> {
+        let source = self
+            .db
+            .path()
+            .ok_or(crate::backup::BackupError::UnsupportedSource)?;
+        crate::backup::BackupExportRequest::new(source, backup_password, destination, &self.dek)
+    }
+
     /// Create and persist a new vault at `path`.
     pub fn create(password: &[u8], path: impl AsRef<Path>) -> Result<Self, VaultError> {
         let mut db = Db::open(path)?;
@@ -683,12 +696,14 @@ fn now_millis() -> u64 {
 mod tests {
     use super::{Vault, VaultError, now_millis};
     use crate::{
-        Ed25519Keypair, ITEM_SCHEMA_VERSION, ItemPayload, ItemType, Operation,
+        Ed25519Keypair, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, Operation,
         ids::ChangeId,
         journal::{self, JournalError},
+        merge,
     };
     use std::{
         fs,
+        path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -721,6 +736,145 @@ mod tests {
             notes: String::new(),
             created_at: 1,
             updated_at: 2,
+        }
+    }
+
+    fn f5_directory(label: &str) -> PathBuf {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let suffix = u128::from_le_bytes(random);
+        std::env::temp_dir().join(format!("locker-vault-f5-{label}-{suffix:032x}"))
+    }
+
+    fn assert_resolution_matches(
+        vault: &Vault,
+        item_id: ItemId,
+        previous: &[journal::Change],
+        heads: &[journal::Change],
+        selected: &journal::Change,
+    ) {
+        let previous_ids = previous
+            .iter()
+            .map(|change| change.change_id)
+            .collect::<Vec<_>>();
+        let changes = journal::load_item_changes(vault.db.connection(), item_id).unwrap();
+        let resolving = changes
+            .iter()
+            .filter(|change| !previous_ids.contains(&change.change_id))
+            .collect::<Vec<_>>();
+        assert_eq!(resolving.len(), 1);
+        let resolving = resolving[0];
+
+        assert!(
+            heads
+                .iter()
+                .all(|head| head.change_id != resolving.change_id)
+        );
+        let mut expected_parents = heads.iter().map(|head| head.change_id).collect::<Vec<_>>();
+        expected_parents.sort_unstable();
+        assert_eq!(resolving.parent_change_ids, expected_parents);
+        assert!(resolving.parent_change_ids.contains(&selected.change_id));
+        assert_eq!(resolving.operation, selected.operation);
+        assert_eq!(
+            resolving.payload_schema_version,
+            selected.payload_schema_version
+        );
+
+        let selected_plaintext = crate::crypto::cipher::decrypt(
+            &vault.dek,
+            &selected.aad_context(),
+            &selected.encrypted_payload(),
+        )
+        .unwrap();
+        let resolving_plaintext = crate::crypto::cipher::decrypt(
+            &vault.dek,
+            &resolving.aad_context(),
+            &resolving.encrypted_payload(),
+        )
+        .unwrap();
+        assert_eq!(
+            selected_plaintext.as_bytes(),
+            resolving_plaintext.as_bytes()
+        );
+
+        assert!(vault.list_conflicts().unwrap().is_empty());
+        match selected.operation {
+            Operation::Tombstone => {
+                assert_eq!(vault.get_item(item_id).unwrap(), None);
+                assert!(vault.list_deleted_items().unwrap().contains(&item_id));
+            }
+            Operation::Upsert => {
+                let expected_payload = vault.decode_payload(selected).unwrap();
+                assert_eq!(vault.get_item(item_id).unwrap(), Some(expected_payload));
+                assert!(!vault.list_deleted_items().unwrap().contains(&item_id));
+            }
+        }
+    }
+
+    #[test]
+    fn conflict_resolution_creates_all_parent_revision_and_converges() {
+        for (label, selected_tombstone) in [("edit-edit", false), ("edit-tombstone", true)] {
+            let directory = f5_directory(label);
+            let path = directory.join("vault.db");
+            let mut vault = Vault::create(b"password", &path).unwrap();
+            let item_id = vault.create_item(&payload("base", "base-secret")).unwrap();
+            let base = journal::load_item_changes(vault.db.connection(), item_id)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+
+            let local_payload = payload("local", "local-secret");
+            vault.update_item(item_id, &local_payload).unwrap();
+            let remote = Ed25519Keypair::from_private_bytes(if selected_tombstone {
+                [46; 32]
+            } else {
+                [45; 32]
+            });
+            let remote_bytes = if selected_tombstone {
+                Vec::new()
+            } else {
+                payload("remote", "remote-secret").to_json_bytes().unwrap()
+            };
+            let remote_change = journal::create_local_change_with_parents(
+                &mut vault.db,
+                vault.vault_id,
+                item_id,
+                vec![base.change_id],
+                &remote,
+                &vault.dek,
+                if selected_tombstone {
+                    Operation::Tombstone
+                } else {
+                    Operation::Upsert
+                },
+                remote_bytes,
+                u32::from(ITEM_SCHEMA_VERSION),
+                now_millis(),
+            )
+            .unwrap();
+
+            let previous = journal::load_item_changes(vault.db.connection(), item_id).unwrap();
+            let heads = merge::unresolved_heads(&vault.db, item_id).unwrap();
+            assert_eq!(heads.len(), 2);
+            assert!(
+                heads
+                    .iter()
+                    .any(|head| head.change_id == remote_change.change_id)
+            );
+            let selected = if selected_tombstone {
+                heads.iter().find(|head| head.is_tombstone()).unwrap()
+            } else {
+                heads
+                    .iter()
+                    .find(|head| head.operation == Operation::Upsert)
+                    .unwrap()
+            };
+            vault.resolve_conflict(item_id, selected.change_id).unwrap();
+            assert_resolution_matches(&vault, item_id, &previous, &heads, selected);
+
+            vault.lock();
+            fs::remove_dir_all(directory).unwrap();
         }
     }
 

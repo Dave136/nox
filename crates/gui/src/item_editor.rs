@@ -517,9 +517,40 @@ impl Locker {
             .child(type_group)
             .child(Input::new(&title));
         if item_type == ItemType::Login {
+            let copy_buttons = match mode {
+                EditorMode::Edit(item_id) | EditorMode::Restore(item_id) => div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        Button::new("copy-username")
+                            .label("Copy username")
+                            .on_click({
+                                let locker = locker.clone();
+                                move |_, window, app| {
+                                    locker.update(app, |locker, cx| {
+                                        locker.copy_username(item_id, window, cx)
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("copy-password")
+                            .label("Copy password")
+                            .on_click({
+                                let locker = locker.clone();
+                                move |_, window, app| {
+                                    locker.update(app, |locker, cx| {
+                                        locker.copy_password(item_id, window, cx)
+                                    });
+                                }
+                            }),
+                    ),
+                EditorMode::Create => div(),
+            };
             content = content
                 .child(Input::new(&username))
                 .child(Input::new(&password).mask_toggle())
+                .child(copy_buttons)
                 .child(Input::new(&uris));
         }
         content = content.child(Input::new(&notes));

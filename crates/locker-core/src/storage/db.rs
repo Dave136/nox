@@ -70,8 +70,25 @@ impl Db {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        if path_exists(parent)? {
+            reject_symlink(parent, "vault parent")?;
+            if !fs::symlink_metadata(parent)?.file_type().is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "vault parent is not a directory",
+                )
+                .into());
+            }
+        }
         fs::create_dir_all(parent)?;
+        reject_symlink(parent, "vault parent")?;
         set_owner_only_directory(parent)?;
+
+        prepare_existing_sensitive_leaf(path, "vault database")?;
+        let wal = sqlite_sidecar(path, "-wal");
+        let shm = sqlite_sidecar(path, "-shm");
+        prepare_existing_sensitive_leaf(&wal, "vault WAL")?;
+        prepare_existing_sensitive_leaf(&shm, "vault shared memory")?;
 
         let connection = Connection::open(path)?;
         set_owner_only_file(path)?;
@@ -81,6 +98,7 @@ impl Db {
         };
         db.configure()?;
         db.migrate()?;
+        db.normalize_sidecars()?;
         Ok(db)
     }
 
@@ -134,8 +152,80 @@ impl Db {
         self.connection.pragma_update(None, "foreign_keys", true)?;
         self.connection
             .busy_timeout(std::time::Duration::from_secs(5))?;
+        if self.path.is_some() {
+            let mode: String = self
+                .connection
+                .pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+            if mode.eq_ignore_ascii_case("wal") {
+                return Ok(());
+            }
+            self.connection.pragma_update(None, "journal_mode", "WAL")?;
+            let mode: String = self
+                .connection
+                .pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+            if !mode.eq_ignore_ascii_case("wal") {
+                return Err(DbError::Sql(rusqlite::Error::InvalidQuery));
+            }
+        }
         Ok(())
     }
+
+    fn normalize_sidecars(&self) -> Result<(), DbError> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        prepare_existing_sensitive_leaf(&sqlite_sidecar(path, "-wal"), "vault WAL")?;
+        prepare_existing_sensitive_leaf(&sqlite_sidecar(path, "-shm"), "vault shared memory")?;
+        Ok(())
+    }
+}
+
+fn path_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn reject_symlink(path: &Path, artifact: &'static str) -> io::Result<()> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{artifact} is a symlink"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn reject_symlink(_path: &Path, _artifact: &'static str) -> io::Result<()> {
+    Ok(())
+}
+
+fn prepare_existing_sensitive_leaf(path: &Path, artifact: &'static str) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    reject_symlink(path, artifact)?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{artifact} is not a regular file"),
+        ));
+    }
+    let file = fs::OpenOptions::new().read(true).write(true).open(path)?;
+    set_owner_only_file_handle(&file)?;
+    Ok(())
+}
+
+fn sqlite_sidecar(database: &Path, suffix: &str) -> PathBuf {
+    let mut value = database.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
 }
 
 #[cfg(unix)]
@@ -157,7 +247,19 @@ fn set_owner_only_file(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
+#[cfg(unix)]
+fn set_owner_only_file_handle(file: &fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+}
+
 #[cfg(not(unix))]
 fn set_owner_only_file(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_owner_only_file_handle(_file: &fs::File) -> io::Result<()> {
     Ok(())
 }

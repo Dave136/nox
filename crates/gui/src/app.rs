@@ -1,8 +1,18 @@
+#[path = "backup.rs"]
+mod backup;
+#[path = "clipboard.rs"]
+mod clipboard;
+#[path = "conflicts.rs"]
+mod conflicts;
 #[path = "item_editor.rs"]
 mod item_editor;
 #[path = "vault_list.rs"]
 mod vault_list;
 
+use backup::BackupState;
+use clipboard::ClipboardState;
+pub use clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
+use conflicts::ConflictState;
 use item_editor::ItemEditorState;
 use vault_list::VaultListState;
 
@@ -65,6 +75,10 @@ pub struct Locker {
 
     pub(crate) vault_list: Option<VaultListState>,
     pub(crate) item_editor: Option<ItemEditorState>,
+    pub(crate) clipboard: ClipboardState,
+    pub(crate) conflicts: ConflictState,
+    pub(crate) conflicts_open: bool,
+    pub(crate) backup: BackupState,
 }
 
 impl Locker {
@@ -72,6 +86,7 @@ impl Locker {
     pub fn new(
         vault_path: PathBuf,
         inactivity_timeout: Duration,
+        clipboard_timeout: Duration,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -99,6 +114,10 @@ impl Locker {
             _inactivity_task: Task::ready(()),
             vault_list: None,
             item_editor: None,
+            clipboard: ClipboardState::new(clipboard_timeout),
+            conflicts: ConflictState::Closed,
+            conflicts_open: false,
+            backup: BackupState::new(),
         };
 
         match locker.state {
@@ -135,7 +154,7 @@ impl Locker {
     }
 
     fn create_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.create_state == FormState::Pending {
+        if self.create_state == FormState::Pending || !self.backup.is_idle() {
             return;
         }
 
@@ -169,18 +188,21 @@ impl Locker {
                     let vault = Vault::create(secret.as_bytes(), &path)?;
                     let items = vault.list_items();
                     let deleted = vault.list_deleted_items();
-                    Ok::<_, VaultError>((vault, items, deleted))
+                    let conflicts = vault.list_conflicts();
+                    Ok::<_, VaultError>((vault, items, deleted, conflicts))
                 })
                 .await;
             if let Some(this) = this.upgrade() {
                 cx.update(|window, app| {
                     this.update(app, |this, cx| match result {
-                        Ok((vault, items, deleted)) => {
+                        Ok((vault, items, deleted, conflicts)) => {
                             this.state = AppState::Unlocked(vault);
                             this.vault_list = Some(VaultListState::from_initial_load(
                                 items, deleted, window, cx,
                             ));
                             this.item_editor = None;
+                            this.conflicts = ConflictState::from_initial_load(conflicts);
+                            this.conflicts_open = false;
                             this.create_state = FormState::Idle;
                             this.arm_inactivity_timer(window, cx);
                             window.on_next_frame(|window, _| window.focus_next());
@@ -207,7 +229,7 @@ impl Locker {
     }
 
     fn unlock_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.unlock_state == FormState::Pending {
+        if self.unlock_state == FormState::Pending || !self.backup.is_idle() {
             return;
         }
 
@@ -224,18 +246,21 @@ impl Locker {
                     let vault = Vault::unlock(secret.as_bytes(), &path)?;
                     let items = vault.list_items();
                     let deleted = vault.list_deleted_items();
-                    Ok::<_, VaultError>((vault, items, deleted))
+                    let conflicts = vault.list_conflicts();
+                    Ok::<_, VaultError>((vault, items, deleted, conflicts))
                 })
                 .await;
             if let Some(this) = this.upgrade() {
                 cx.update(|window, app| {
                     this.update(app, |this, cx| match result {
-                        Ok((vault, items, deleted)) => {
+                        Ok((vault, items, deleted, conflicts)) => {
                             this.state = AppState::Unlocked(vault);
                             this.vault_list = Some(VaultListState::from_initial_load(
                                 items, deleted, window, cx,
                             ));
                             this.item_editor = None;
+                            this.conflicts = ConflictState::from_initial_load(conflicts);
+                            this.conflicts_open = false;
                             this.unlock_state = FormState::Idle;
                             this.arm_inactivity_timer(window, cx);
                             window.on_next_frame(|window, _| window.focus_next());
@@ -304,10 +329,25 @@ impl Locker {
             return;
         }
         window.close_all_dialogs(cx);
+        self.discard_clipboard_state(cx);
         self.inactivity_epoch += 1;
         self._inactivity_task = Task::ready(());
         self.vault_list = None;
         self.item_editor = None;
+        self.conflicts = ConflictState::Closed;
+        self.conflicts_open = false;
+        if matches!(
+            self.backup.operation,
+            backup::BackupOperation::ChoosingExportPath
+                | backup::BackupOperation::Exporting
+                | backup::BackupOperation::ChoosingRestorePath
+                | backup::BackupOperation::AwaitingRestoreConfirmation { .. }
+        ) {
+            self.backup.epoch = self.backup.epoch.wrapping_add(1);
+            self.backup.operation = backup::BackupOperation::Idle;
+            self.backup.dialog = None;
+            self.backup.task = Task::ready(());
+        }
         if let AppState::Unlocked(vault) = std::mem::replace(&mut self.state, AppState::Locked) {
             vault.lock();
         }
@@ -315,12 +355,9 @@ impl Locker {
         cx.notify();
     }
 
-    fn render_no_vault(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_no_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.create_state == FormState::Pending;
+        let backup_busy = !self.backup.is_idle();
         let error = match &self.create_state {
             FormState::Error(message) => div().child(message.clone()),
             FormState::Idle | FormState::Pending => div(),
@@ -365,16 +402,18 @@ impl Locker {
                     } else {
                         "Create Vault"
                     })
-                    .disabled(pending)
+                    .disabled(pending || backup_busy)
                     .loading(pending)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.create_vault(window, cx);
                     })),
             )
+            .child(self.render_backup_actions(window, cx))
     }
 
-    fn render_locked(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_locked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.unlock_state == FormState::Pending;
+        let backup_busy = !self.backup.is_idle();
         let error = match &self.unlock_state {
             FormState::Error(message) => div().child(message.clone()),
             FormState::Idle | FormState::Pending => div(),
@@ -405,18 +444,25 @@ impl Locker {
             .child(
                 Button::new("unlock-submit")
                     .label(if pending { "Unlocking…" } else { "Unlock" })
-                    .disabled(pending)
+                    .disabled(pending || backup_busy)
                     .loading(pending)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.unlock_vault(window, cx);
                     })),
             )
+            .child(self.render_backup_actions(window, cx))
     }
 
     fn render_unlocked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locker = cx.entity();
         let list = self.render_vault_list(window, cx);
         let editor = self.render_item_editor(locker, window, cx);
+        let conflict_panel = if self.conflicts_open {
+            self.render_conflicts(window, cx)
+        } else {
+            div().into_any_element()
+        };
+        let conflict_count = self.conflicts.count();
         div()
             .size_full()
             .flex()
@@ -435,11 +481,35 @@ impl Locker {
             }))
             .child(list)
             .child(
-                div().flex().flex_col().flex_1().child(editor).child(
-                    Button::new("lock-vault")
-                        .label("Lock")
-                        .on_click(cx.listener(|this, _, window, cx| this.lock_vault(window, cx))),
-                ),
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .child(
+                        Button::new("conflicts-button")
+                            .label(format!("Conflicts ({conflict_count})"))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_conflicts(window, cx)),
+                            ),
+                    )
+                    .child(conflict_panel)
+                    .child(editor)
+                    .child(self.render_backup_actions(window, cx))
+                    .child(
+                        Button::new("lock-vault")
+                            .label("Lock")
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                if !event.keystroke.modifiers.modified()
+                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                {
+                                    window.prevent_default();
+                                    this.lock_vault(window, cx);
+                                }
+                            }))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.lock_vault(window, cx)),
+                            ),
+                    ),
             )
     }
 }
@@ -484,9 +554,12 @@ impl Render for FatalStartupError {
 mod tests {
     use super::item_editor::EditorMode;
     use super::*;
+    use super::{backup, conflicts};
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use gpui_component::Root;
-    use locker_core::{ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType};
+    use locker_core::{
+        BackupError, ChangeId, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, SecretBytes,
+    };
     use std::{
         cell::RefCell,
         fs,
@@ -542,6 +615,10 @@ mod tests {
         let _ = fs::remove_dir_all(path);
     }
 
+    fn clipboard_text(cx: &mut VisualTestContext) -> Option<String> {
+        cx.update(|_, app| app.read_from_clipboard().and_then(|item| item.text()))
+    }
+
     fn write_existing(path: &Path) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, []).unwrap();
@@ -552,10 +629,20 @@ mod tests {
         path: PathBuf,
         timeout: Duration,
     ) -> (Entity<Locker>, &mut VisualTestContext) {
+        add_locker_view_with_clipboard_timeout(cx, path, timeout, DEFAULT_CLIPBOARD_TIMEOUT)
+    }
+
+    fn add_locker_view_with_clipboard_timeout(
+        cx: &mut TestAppContext,
+        path: PathBuf,
+        inactivity_timeout: Duration,
+        clipboard_timeout: Duration,
+    ) -> (Entity<Locker>, &mut VisualTestContext) {
         let holder = Rc::new(RefCell::new(None));
         let holder_for_window = holder.clone();
         let (_, visual_cx) = cx.add_window_view(move |window, cx| {
-            let locker = cx.new(|cx| Locker::new(path, timeout, window, cx));
+            let locker =
+                cx.new(|cx| Locker::new(path, inactivity_timeout, clipboard_timeout, window, cx));
             holder_for_window.borrow_mut().replace(locker.clone());
             Root::new(locker, window, cx)
         });
@@ -796,6 +883,24 @@ mod tests {
         });
         assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::NoVault)));
         assert_eq!(view.read_with(cx, |locker, _| locker.inactivity_epoch), 0);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn locking_a_locked_vault_is_a_no_op(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("locked-no-op");
+        write_existing(&path);
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        let before_epoch = view.read_with(cx, |locker, _| locker.inactivity_epoch);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.lock_vault(window, locker_cx)
+        });
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.inactivity_epoch),
+            before_epoch
+        );
         cleanup(&path);
     }
 
@@ -1134,6 +1239,287 @@ mod tests {
                 .deleted_ids
                 .contains(&item_id)
         }));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn clipboard_timer_clears_only_unchanged_text(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("clipboard");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.copy_secret(SecretBytes::new(b"clipboard-secret"), window, locker_cx);
+        });
+        assert_eq!(clipboard_text(cx), Some("clipboard-secret".into()));
+        cx.executor().advance_clock(DEFAULT_CLIPBOARD_TIMEOUT);
+        cx.run_until_parked();
+        assert_eq!(clipboard_text(cx), Some(String::new()));
+        assert!(view.read_with(cx, |locker, _| locker.clipboard.expected.is_none()));
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.copy_secret(SecretBytes::new(b"keep-me"), window, locker_cx);
+        });
+        cx.update(|_, app| {
+            app.write_to_clipboard(gpui::ClipboardItem::new_string("external".into()))
+        });
+        cx.executor().advance_clock(DEFAULT_CLIPBOARD_TIMEOUT);
+        cx.run_until_parked();
+        assert_eq!(clipboard_text(cx), Some("external".into()));
+        assert!(view.read_with(cx, |locker, _| locker.clipboard.expected.is_none()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn newest_clipboard_copy_owns_the_injected_timeout(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("clipboard-epoch");
+        let timeout = Duration::from_secs(1);
+        let (view, cx) = add_locker_view_with_clipboard_timeout(
+            cx,
+            path.clone(),
+            DEFAULT_INACTIVITY_TIMEOUT,
+            timeout,
+        );
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.copy_secret(SecretBytes::new(b"first"), window, locker_cx);
+            locker.copy_secret(SecretBytes::new(b"second"), window, locker_cx);
+        });
+        assert_eq!(clipboard_text(cx), Some("second".into()));
+        cx.executor().advance_clock(timeout);
+        cx.run_until_parked();
+        assert_eq!(clipboard_text(cx), Some(String::new()));
+        assert!(view.read_with(cx, |locker, _| locker.clipboard.expected.is_none()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn locking_clears_our_clipboard_secret(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "lock-clipboard", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.copy_secret(SecretBytes::new(b"clipboard-secret"), window, locker_cx);
+            locker.lock_vault(window, locker_cx);
+        });
+        assert_eq!(clipboard_text(cx), Some(String::new()));
+        assert!(view.read_with(cx, |locker, _| {
+            matches!(&locker.state, AppState::Locked) && locker.clipboard.expected.is_none()
+        }));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn explicit_lock_clears_unlocked_state_and_focuses_unlock_input(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, ids) =
+            unlocked_view(cx, "lock-cleanup", &[login_payload("Lock me", "alice")]);
+        let before_epoch = view.read_with(cx, |locker, _| locker.inactivity_epoch);
+        let before_backup_epoch = view.read_with(cx, |locker, _| locker.backup.epoch);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.arm_inactivity_timer(window, locker_cx);
+            locker.open_editor_for_item(ids[0], false, window, locker_cx);
+            locker.conflicts = conflicts::ConflictState::from_initial_load(Ok(vec![(
+                ids[0],
+                vec![(ChangeId::new(), Some(login_payload("Conflict", "alice")))],
+            )]));
+            locker.conflicts_open = true;
+            locker.backup.operation = backup::BackupOperation::ChoosingExportPath;
+            locker.copy_secret(SecretBytes::new(b"clipboard-secret"), window, locker_cx);
+            locker.lock_vault(window, locker_cx);
+        });
+        let unlock_input = view.read_with(cx, |locker, _| locker.unlock_password.clone());
+        let (
+            state,
+            inactivity_epoch,
+            backup_epoch,
+            backup_idle,
+            clipboard,
+            list,
+            editor,
+            conflicts,
+            conflicts_open,
+        ) = view.read_with(cx, |locker, _| {
+            (
+                matches!(&locker.state, AppState::Locked),
+                locker.inactivity_epoch,
+                locker.backup.epoch,
+                locker.backup.is_idle(),
+                locker.clipboard.expected.is_none(),
+                locker.vault_list.is_none(),
+                locker.item_editor.is_none(),
+                matches!(&locker.conflicts, conflicts::ConflictState::Closed),
+                locker.conflicts_open,
+            )
+        });
+        assert!(state);
+        assert_eq!(inactivity_epoch, before_epoch + 2);
+        assert_eq!(backup_epoch, before_backup_epoch + 1);
+        assert!(backup_idle && clipboard && list && editor && conflicts && !conflicts_open);
+        assert!(
+            cx.update(|window, app| {
+                unlock_input.read(app).focus_handle(app).is_focused(window)
+            })
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn lock_button_enter_locks_when_focused(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "lock-button-enter", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.arm_inactivity_timer(window, locker_cx);
+        });
+        cx.update(|window, _| window.blur());
+        for _ in 0..6 {
+            cx.update(|window, _| window.focus_next());
+        }
+        cx.simulate_keystrokes("enter");
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
+        assert_eq!(view.read_with(cx, |locker, _| locker.inactivity_epoch), 2);
+        let unlock_input = view.read_with(cx, |locker, _| locker.unlock_password.clone());
+        assert!(
+            cx.update(|window, app| {
+                unlock_input.read(app).focus_handle(app).is_focused(window)
+            })
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn lock_button_space_locks_and_other_keys_do_not(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "lock-button-space", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.arm_inactivity_timer(window, locker_cx);
+        });
+        cx.update(|window, _| window.blur());
+        for _ in 0..6 {
+            cx.update(|window, _| window.focus_next());
+        }
+        cx.simulate_keystrokes("a");
+        assert!(view.read_with(cx, |locker, _| matches!(
+            &locker.state,
+            AppState::Unlocked(_)
+        )));
+        cx.simulate_keystrokes("space");
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
+        assert_eq!(view.read_with(cx, |locker, _| locker.inactivity_epoch), 2);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn unfocused_lock_button_key_does_not_lock(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "lock-button-unfocused", &[]);
+        cx.update(|window, _| window.blur());
+        cx.simulate_keystrokes("space");
+        assert!(view.read_with(cx, |locker, _| matches!(
+            &locker.state,
+            AppState::Unlocked(_)
+        )));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn conflicts_preserve_change_ids_and_tombstones_without_selection(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("conflict-model");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        let item_id = ItemId::new();
+        let edit_id = ChangeId::new();
+        let delete_id = ChangeId::new();
+        let payload = login_payload("Conflict", "alice");
+        view.update_in(cx, |locker, window, cx| {
+            locker.conflicts = conflicts::ConflictState::from_initial_load(Ok(vec![(
+                item_id,
+                vec![(edit_id, Some(payload)), (delete_id, None)],
+            )]));
+            locker.open_conflicts(window, cx);
+        });
+        let (selected, ids, has_delete) = view.read_with(cx, |locker, _| {
+            let conflicts::ConflictState::Ready(items) = &locker.conflicts else {
+                panic!("expected ready conflicts")
+            };
+            (
+                items[0].selected,
+                items[0]
+                    .choices
+                    .iter()
+                    .map(|choice| choice.change_id)
+                    .collect::<Vec<_>>(),
+                items[0]
+                    .choices
+                    .iter()
+                    .any(|choice| choice.payload.is_none()),
+            )
+        });
+        assert_eq!(selected, None);
+        assert_eq!(ids, vec![edit_id, delete_id]);
+        assert!(has_delete);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn stale_backup_completion_and_error_messages_are_safe(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("backup-state");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.backup.operation = backup::BackupOperation::ChoosingExportPath;
+            locker.backup.epoch = 2;
+            locker.finish_export_path_selection(
+                1,
+                Ok(Some(path.with_extension("lockbak"))),
+                window,
+                locker_cx,
+            );
+        });
+        assert!(view.read_with(cx, |locker, _| {
+            matches!(
+                locker.backup.operation,
+                backup::BackupOperation::ChoosingExportPath
+            ) && locker.backup.dialog.is_none()
+        }));
+        let error = backup::backup_error_message("restore", &BackupError::AuthenticationFailed);
+        assert!(!error.contains("backup-password"));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn cancelled_backup_pickers_and_failed_fresh_restore_reset_safely(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("backup-cancel-focus");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.backup.operation = backup::BackupOperation::ChoosingExportPath;
+            locker.backup.epoch = 1;
+            locker.finish_export_path_selection(1, Ok(None), window, locker_cx);
+            assert!(matches!(
+                locker.backup.operation,
+                backup::BackupOperation::Idle
+            ));
+
+            locker.backup.operation = backup::BackupOperation::ChoosingRestorePath;
+            locker.backup.epoch = 2;
+            locker.finish_restore_path_selection(2, Ok(None), window, locker_cx);
+            assert!(matches!(
+                locker.backup.operation,
+                backup::BackupOperation::Idle
+            ));
+
+            locker.backup.operation = backup::BackupOperation::Restoring;
+            locker.backup.epoch = 3;
+            locker.finish_restore(
+                3,
+                Err(BackupError::AuthenticationFailed),
+                true,
+                window,
+                locker_cx,
+            );
+        });
+        let input = view.read_with(cx, |locker, _| locker.create_password.clone());
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::NoVault)));
+        assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
         cleanup(&path);
     }
 }

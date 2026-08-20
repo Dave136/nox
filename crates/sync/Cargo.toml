@@ -3,12 +3,5 @@ name = "sync"
 version.workspace = true
 edition.workspace = true
 
-[dependencies]
-locker-core = { path = "../locker-core" }
-mdns-sd = "0.21"
-snow = "0.10"
-spake2 = "0.5.0-pre.0"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
-
 [lints]
 workspace = true

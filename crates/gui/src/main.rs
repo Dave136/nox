@@ -10,7 +10,13 @@ fn main() {
             Ok(path) => {
                 cx.open_window(WindowOptions::default(), move |window, cx| {
                     let view = cx.new(|cx| {
-                        app::Locker::new(path, app::DEFAULT_INACTIVITY_TIMEOUT, window, cx)
+                        app::Locker::new(
+                            path,
+                            app::DEFAULT_INACTIVITY_TIMEOUT,
+                            app::DEFAULT_CLIPBOARD_TIMEOUT,
+                            window,
+                            cx,
+                        )
                     });
                     cx.new(|cx| Root::new(view, window, cx))
                 })

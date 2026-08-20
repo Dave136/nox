@@ -558,13 +558,28 @@ unstable Rust memory layouts or an encoder's undocumented defaults.
    conflicts, and encrypted backup/restore.
 3. **Single-device GUI:** implement vault creation, unlock/lock, item CRUD, password
    generation, clipboard handling, conflict display, and backup without networking.
-4. **Headless sync:** implement membership, SPAKE2 pairing, Noise KK, framed TCP,
+4. **Release hardening (single-device v1):** run dependency and security review,
+   test on supported platforms, verify file permissions and suspend/session
+   locking, and document recovery limitations, scoped to the single-device
+   surface built through Phase 3. Ship a complete, usable, secure v1 release
+   here — sync is deliberately not a precondition for it.
+5. **Headless sync:** implement membership, SPAKE2 pairing, Noise KK, framed TCP,
    cursor-map replication, and mDNS discovery.
-5. **GUI sync integration:** add pairing, device/block management, sync status, and
+6. **GUI sync integration:** add pairing, device/block management, sync status, and
    manual sync.
-6. **Release hardening:** run dependency and security review, test on supported
-   platforms, verify file permissions and suspend/session locking, and document
-   recovery limitations.
+7. **Sync release hardening:** repeat dependency and security review scoped to the
+   new attack surface Phases 5–6 introduce — pairing protocol review, Noise
+   implementation audit, mDNS LAN exposure, and cross-device interoperability
+   testing on supported platforms. Does not repeat Phase 4's single-device-only
+   coverage; it is a scoped follow-up, not a second full pass.
+
+Sequencing single-device release hardening (Phase 4) before sync (Phases 5–6) is
+deliberate: it ships a complete, secure, usable product without waiting on the
+highest-risk remaining work, and it forces the item model and backup format to
+stabilize under real usage before the sync wire protocol locks in assumptions
+about them. Phase 7 exists because pairing, transport, and discovery are new
+attack surface Phase 4's review never covered — deferring sync must not mean
+deferring its own security review along with it.
 
 Do not scaffold future browser, mobile, cloud, relay, multi-user, or plugin systems
 inside these phases.
@@ -606,14 +621,18 @@ A loopback integration test runs at least three independent profiles:
 
 ### `gui`
 
-Automate core view-model behavior where practical and manually verify:
+Automate core view-model behavior where practical and manually verify. The
+first five bullets are verifiable after Phase 3 and gate Phase 4's
+single-device release; the last two depend on Phases 5–6 and gate Phase 7
+instead — this list is the complete v1 checklist, reached in two passes, not
+one:
 
 - create vault → create item → lock → unlock → item persists;
-- inactivity and suspend/session events lock and stop sync;
 - clipboard timeout does not overwrite content copied afterward;
 - password generation uses requested constraints;
 - conflict resolution creates a multi-parent revision and converges;
-- encrypted export restores into a fresh profile; and
+- encrypted export restores into a fresh profile;
+- inactivity and suspend/session events lock and stop sync; and
 - pairing and sync work across two supported machines on the same LAN.
 
 The repository-wide release gate is:

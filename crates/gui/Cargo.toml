@@ -6,9 +6,7 @@ edition.workspace = true
 [dependencies]
 gpui.workspace = true
 gpui-component.workspace = true
-gpui-rsx.workspace = true
 locker-core = { path = "../locker-core" }
-sync = { path = "../sync" }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

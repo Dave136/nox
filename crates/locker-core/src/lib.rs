@@ -12,8 +12,8 @@ pub mod storage;
 pub mod vault;
 
 pub use backup::{
-    BackupError, RestoreResult, export, export_backup, export_to_path, restore, restore_backup,
-    restore_from_path,
+    BackupError, BackupExportRequest, MAX_ARCHIVE_BYTES, MAX_BACKUP_PASSWORD_BYTES, RestoreResult,
+    export, export_backup, export_to_path, restore, restore_backup, restore_from_path,
 };
 pub use clock::{
     Accept, ChangeOrderKey, ClockStamp, Hlc, HlcClock, HlcError, HlcOrderKey, HlcOrderingKey,
@@ -224,6 +224,198 @@ mod task2_tests {
             first.public_key(),
             X25519Keypair::from_private_bytes(first.private_key_bytes()).public_key()
         );
+    }
+}
+
+#[cfg(test)]
+mod task7_tests {
+    use super::*;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    static NEXT_BACKUP_TEST: AtomicUsize = AtomicUsize::new(0);
+
+    fn path(label: &str) -> PathBuf {
+        let id = NEXT_BACKUP_TEST.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("locker-task7-{label}-{}-{id}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        path
+    }
+
+    fn cleanup(path: &PathBuf) {
+        let _ = fs::remove_file(path);
+        for suffix in ["-wal", "-shm"] {
+            let mut sidecar = path.as_os_str().to_os_string();
+            sidecar.push(suffix);
+            let _ = fs::remove_file(PathBuf::from(sidecar));
+        }
+        let temp = std::env::temp_dir();
+        if path.parent() != Some(temp.as_path()) {
+            let _ = fs::remove_dir_all(path.parent().unwrap_or(Path::new(".")));
+        }
+    }
+
+    #[test]
+    fn v2_backup_restores_with_a_new_master_password() {
+        let source = path("source").join("vault.db");
+        let archive = path("archive").with_extension("lockbak");
+        let destination = path("destination").join("vault.db");
+        let mut vault = Vault::create(b"old-master", &source).unwrap();
+        vault
+            .create_item(&ItemPayload {
+                schema_version: ITEM_SCHEMA_VERSION,
+                item_type: ItemType::Login,
+                title: "backup marker".into(),
+                username: "alice".into(),
+                password: "secret".into(),
+                uris: vec![],
+                notes: String::new(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        let request = vault
+            .prepare_backup_export(b"backup-password", &archive)
+            .unwrap();
+        assert_eq!(format!("{request:?}"), "BackupExportRequest(<redacted>)");
+        request.run().unwrap();
+        vault.lock();
+        let _result =
+            restore_from_path(&archive, &destination, b"backup-password", b"new-master").unwrap();
+        let restored = Vault::unlock(b"new-master", &destination).unwrap();
+        assert!(
+            restored
+                .list_items()
+                .unwrap()
+                .iter()
+                .any(|(_, payload)| payload.title == "backup marker")
+        );
+        assert!(matches!(
+            Vault::unlock(b"old-master", &destination),
+            Err(VaultError::IncorrectPasswordOrCorruptVault)
+        ));
+        cleanup(&source);
+        cleanup(&archive);
+        cleanup(&destination);
+    }
+
+    #[test]
+    fn v2_wrong_password_is_authentication_failed() {
+        let source = path("wrong-source").join("vault.db");
+        let archive = path("wrong-archive").with_extension("lockbak");
+        let destination = path("wrong-destination").join("vault.db");
+        let vault = Vault::create(b"master", &source).unwrap();
+        vault
+            .prepare_backup_export(b"backup-password", &archive)
+            .unwrap()
+            .run()
+            .unwrap();
+        assert!(matches!(
+            restore_from_path(&archive, &destination, b"wrong", b"new"),
+            Err(BackupError::AuthenticationFailed)
+        ));
+        cleanup(&source);
+        cleanup(&archive);
+        cleanup(&destination);
+    }
+
+    #[test]
+    fn v1_archive_is_reported_as_unsupported() {
+        let archive = path("v1-archive").with_extension("lockbak");
+        let destination = path("v1-destination").join("vault.db");
+        let mut bytes = b"LOCKBAK1".to_vec();
+        bytes.resize(64, 0);
+        fs::write(&archive, bytes).unwrap();
+        assert!(matches!(
+            restore_from_path(&archive, &destination, b"backup-password", b"new-master"),
+            Err(BackupError::UnsupportedVersion)
+        ));
+        cleanup(&archive);
+        cleanup(&destination);
+    }
+
+    #[test]
+    fn v2_tampering_is_authenticated_before_destination_mutation() {
+        let source = path("tamper-source").join("vault.db");
+        let archive = path("tamper-archive").with_extension("lockbak");
+        let destination = path("tamper-destination").join("vault.db");
+        let mut source_vault = Vault::create(b"source-master", &source).unwrap();
+        source_vault
+            .create_item(&ItemPayload {
+                schema_version: ITEM_SCHEMA_VERSION,
+                item_type: ItemType::Login,
+                title: "source".into(),
+                username: "alice".into(),
+                password: "secret".into(),
+                uris: vec![],
+                notes: String::new(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        source_vault
+            .prepare_backup_export(b"backup-password", &archive)
+            .unwrap()
+            .run()
+            .unwrap();
+        source_vault.lock();
+
+        let mut destination_vault = Vault::create(b"destination-master", &destination).unwrap();
+        destination_vault
+            .create_item(&ItemPayload {
+                schema_version: ITEM_SCHEMA_VERSION,
+                item_type: ItemType::Login,
+                title: "sentinel".into(),
+                username: "keep".into(),
+                password: "untouched".into(),
+                uris: vec![],
+                notes: String::new(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        destination_vault.lock();
+
+        let original = fs::read(&archive).unwrap();
+        for index in [11, 65, original.len() - 1] {
+            let mut tampered = original.clone();
+            tampered[index] ^= 1;
+            let tampered_path = path("tampered").with_extension(format!("{index}.lockbak"));
+            fs::write(&tampered_path, tampered).unwrap();
+            assert!(matches!(
+                restore_from_path(
+                    &tampered_path,
+                    &destination,
+                    b"backup-password",
+                    b"new-master"
+                ),
+                Err(BackupError::AuthenticationFailed)
+            ));
+            assert!(destination.exists(), "destination disappeared at {index}");
+            let _ = fs::remove_file(&tampered_path);
+        }
+        let unchanged = Vault::unlock(b"destination-master", &destination).unwrap();
+        assert_eq!(unchanged.list_items().unwrap()[0].1.title, "sentinel");
+        unchanged.lock();
+        cleanup(&source);
+        cleanup(&archive);
+        cleanup(&destination);
+    }
+
+    #[test]
+    fn file_backed_databases_use_wal() {
+        let path = path("wal").join("vault.db");
+        let db = storage::db::Db::open(&path).unwrap();
+        let mode: String = db
+            .connection()
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode.to_ascii_lowercase(), "wal");
+        cleanup(&path);
     }
 }
 

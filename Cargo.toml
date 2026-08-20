@@ -12,7 +12,6 @@ all = "warn"
 [workspace.dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "69e2130295c2649963eb639fc70b4f2ee8ea1624", package = "gpui" }
 gpui-component = { git = "https://github.com/longbridge/gpui-component.git", rev = "0f0ab35233212f8f3277028995caf0c41e13ee6c", package = "gpui-component" }
-gpui-rsx = { git = "https://github.com/Dave136/gpui-rsx.git", rev = "72a651575a41ccf2f2d13a0fa6f9b992b63a5a10", package = "gpui-rsx" }
 
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "69e2130295c2649963eb639fc70b4f2ee8ea1624", package = "gpui", version = "=0.2.2" }
