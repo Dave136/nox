@@ -5,7 +5,9 @@ use crate::{
     X25519Keypair,
     crypto::secret::SecretBytes,
     crypto::{CipherError, Operation, cipher, kdf, keys},
-    journal, merge,
+    journal,
+    membership::{self, MembershipRecord},
+    merge,
     storage::Db,
 };
 use chacha20poly1305::{
@@ -38,7 +40,6 @@ pub const MAX_CHANGES: usize = 100_000;
 pub const MAX_MEMBERSHIPS: usize = 100_000;
 /// Maximum number of item projections in one archive.
 pub const MAX_ITEMS: usize = 100_000;
-const MAX_CIPHERTEXT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
 
 /// Errors returned by backup export and restore.
@@ -285,7 +286,7 @@ struct VaultMetaArchive {
     wrapped_dek: Vec<u8>,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 struct GenesisRecord {
     vault_id: VaultId,
     device_id: DeviceId,
@@ -330,7 +331,7 @@ pub fn restore_backup(
     let payload: ArchivePayload = postcard::from_bytes(&plaintext)
         .map_err(|_| BackupError::InvalidArchive("archive decoding failed"))?;
     validate_payload(&payload, archive_key)?;
-    let fresh_vault = payload.memberships.is_empty();
+    let fresh_vault = fresh_membership_recovery(&payload);
     let target_vault_id = if fresh_vault {
         VaultId::try_new().map_err(|_| BackupError::InvalidArchive("randomness unavailable"))?
     } else {
@@ -758,7 +759,7 @@ fn restore_v2_payload(
             BackupError::InvalidArchive("database migration failed")
         }
     })?;
-    let fresh_vault = payload.memberships.is_empty();
+    let fresh_vault = fresh_membership_recovery(&payload);
     let target_vault_id = if fresh_vault {
         VaultId::try_new().map_err(|_| BackupError::InvalidArchive("randomness unavailable"))?
     } else {
@@ -947,21 +948,7 @@ fn validate_payload(payload: &ArchivePayload, key: &SecretKey) -> Result<(), Bac
             return Err(BackupError::InvalidArchive("vault header field too large"));
         }
     }
-    let mut membership_hashes = std::collections::HashSet::new();
-    for membership in &payload.memberships {
-        if membership.vault_id != payload.vault_id
-            || membership.record_hash.len() != 32
-            || membership.record_type.is_empty()
-            || membership.record.len() > MAX_RECORD_BYTES
-            || !membership_hashes.insert(membership.record_hash.clone())
-        {
-            return Err(BackupError::InvalidArchive("invalid membership record"));
-        }
-        let digest = Sha256::digest(&membership.record);
-        if digest.as_slice() != membership.record_hash.as_slice() {
-            return Err(BackupError::InvalidArchive("membership hash mismatch"));
-        }
-    }
+    validate_membership_archive(payload)?;
     let mut change_ids = std::collections::HashSet::new();
     let mut origin_sequences = std::collections::HashSet::new();
     for archived in &payload.changes {
@@ -969,7 +956,7 @@ fn validate_payload(payload: &ArchivePayload, key: &SecretKey) -> Result<(), Bac
         if change.vault_id != payload.vault_id
             || change.signature.len() != 64
             || change.ciphertext.len() < 16
-            || change.ciphertext.len() > MAX_CIPHERTEXT_BYTES
+            || change.ciphertext.len() > journal::MAX_CHANGE_CIPHERTEXT_BYTES
             || !change_ids.insert(change.change_id)
             || !origin_sequences.insert((change.origin_device_id, change.origin_seq))
         {
@@ -997,6 +984,85 @@ fn validate_payload(payload: &ArchivePayload, key: &SecretKey) -> Result<(), Bac
         }
     }
     Ok(())
+}
+
+fn validate_membership_archive(payload: &ArchivePayload) -> Result<(), BackupError> {
+    if payload.memberships.is_empty() {
+        return Ok(());
+    }
+    if payload.memberships.len() > membership::MAX_MEMBERSHIP_RECORDS {
+        return Err(BackupError::InvalidArchive(
+            "membership record limit exceeded",
+        ));
+    }
+    let mut records = Vec::with_capacity(payload.memberships.len());
+    let mut hashes = std::collections::HashSet::new();
+    for membership in &payload.memberships {
+        if membership.vault_id != payload.vault_id
+            || membership.record_hash.len() != 32
+            || membership.record.len() > MAX_RECORD_BYTES
+            || !hashes.insert(membership.record_hash.clone())
+        {
+            return Err(BackupError::InvalidArchive("invalid membership record"));
+        }
+        match MembershipRecord::from_canonical_bytes(&membership.record) {
+            Ok(record) => {
+                if record.vault_id() != payload.vault_id
+                    || membership.record_type != membership_type(&record)
+                    || record
+                        .record_hash()
+                        .map_err(|_| BackupError::InvalidArchive("invalid membership record"))?
+                        .as_bytes()
+                        != membership.record_hash.as_slice()
+                {
+                    return Err(BackupError::InvalidArchive("invalid membership record"));
+                }
+                records.push(record);
+            }
+            Err(_) if is_legacy_genesis(membership, payload.vault_id) => continue,
+            Err(_) => return Err(BackupError::InvalidArchive("invalid membership record")),
+        }
+    }
+    if records.is_empty() {
+        if payload.memberships.len() == 1
+            && is_legacy_genesis(&payload.memberships[0], payload.vault_id)
+        {
+            return Ok(());
+        }
+        return Err(BackupError::InvalidArchive("invalid membership record"));
+    }
+    if records.len() != payload.memberships.len() {
+        return Err(BackupError::InvalidArchive("mixed membership formats"));
+    }
+    membership::validate_membership(payload.vault_id, &records)
+        .map_err(|_| BackupError::InvalidArchive("invalid membership chain"))?;
+    Ok(())
+}
+
+fn fresh_membership_recovery(payload: &ArchivePayload) -> bool {
+    payload.memberships.is_empty()
+        || (payload.memberships.len() == 1
+            && is_legacy_genesis(&payload.memberships[0], payload.vault_id))
+}
+
+fn membership_type(record: &MembershipRecord) -> &'static str {
+    match record {
+        MembershipRecord::Genesis(_) => "genesis",
+        MembershipRecord::Admission(_) => "admission",
+        MembershipRecord::Acceptance(_) => "acceptance",
+    }
+}
+
+fn is_legacy_genesis(membership: &MembershipArchive, vault_id: VaultId) -> bool {
+    if membership.record_type != "genesis" || membership.vault_id != vault_id {
+        return false;
+    }
+    let Ok(legacy) = postcard::from_bytes::<GenesisRecord>(&membership.record) else {
+        return false;
+    };
+    legacy.vault_id == vault_id
+        && legacy.device_id == DeviceId::from_public_key(legacy.ed25519_public_key)
+        && Sha256::digest(&membership.record).as_slice() == membership.record_hash.as_slice()
 }
 
 fn find_vault_id(connection: &Connection) -> Result<Option<VaultId>, BackupError> {
@@ -1185,16 +1251,18 @@ fn restore_fresh_vault(
         insert_vault_meta(tx, &fresh_meta)?;
     }
     let device_id = DeviceId::from_public_key(local_ed25519.public_key_bytes());
-    let genesis = postcard::to_allocvec(&GenesisRecord {
-        vault_id,
-        device_id,
-        ed25519_public_key: local_ed25519.public_key_bytes(),
-    })
+    let creator = membership::DeviceIdentity::new_signed(
+        "This device",
+        membership::MEMBERSHIP_FORMAT_VERSION,
+        local_ed25519,
+        local_x25519.public_key_bytes(),
+    )
     .map_err(|_| BackupError::InvalidArchive("genesis encoding failed"))?;
-    tx.execute(
-        "INSERT INTO memberships (record_hash, vault_id, record_type, record) VALUES (?1, ?2, 'genesis', ?3)",
-        params![Sha256::digest(&genesis).as_slice(), vault_id.as_ref(), genesis],
-    )?;
+    let genesis =
+        membership::create_genesis(vault_id, creator, crate::Hlc::new(0, 0), local_ed25519)
+            .map_err(|_| BackupError::InvalidArchive("genesis encoding failed"))?;
+    membership::insert_membership_record_tx(tx, &genesis)
+        .map_err(|_| BackupError::InvalidArchive("genesis encoding failed"))?;
     let mut origin_seq = 0_u64;
     for item in &payload.items {
         let source = payload

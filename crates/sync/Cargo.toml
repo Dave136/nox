@@ -3,5 +3,23 @@ name = "sync"
 version.workspace = true
 edition.workspace = true
 
+[dependencies]
+async-channel = "2"
+locker-core = { path = "../locker-core" }
+mdns-sd = "0.21.0"
+chacha20poly1305 = "0.10"
+getrandom = "0.3"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+# spake2 0.4.0 is the selected stable release; its upstream docs note no independent audit (Phase 7 supply-chain review).
+spake2 = "0.4.0"
+snow = "0.10.0"
+tokio = { version = "1.53.1", features = ["net", "time", "io-util", "sync", "rt", "rt-multi-thread", "macros"] }
+zeroize = "1"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+
 [lints]
 workspace = true

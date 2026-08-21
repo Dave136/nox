@@ -6,7 +6,9 @@ pub mod crypto;
 pub mod ids;
 pub mod item;
 pub mod journal;
+pub mod membership;
 pub mod merge;
+pub mod pairing;
 pub mod password;
 pub mod storage;
 pub mod vault;
@@ -21,8 +23,23 @@ pub use clock::{
 };
 pub use ids::{ChangeId, DeviceId, ItemId, PublicKeyBytes, PublicKeyLengthError, VaultId};
 pub use item::{ITEM_SCHEMA_VERSION, ItemPayload, ItemPayloadError, ItemType};
-pub use journal::{ApplyResult, Change, JournalError, apply_received_change, create_local_change};
+pub use journal::{
+    ApplyResult, BatchApplyResult, Change, CursorMap, JournalError, MAX_BATCH_PLAINTEXT_BYTES,
+    MAX_CHANGE_CIPHERTEXT_BYTES, MAX_CHANGES_PER_BATCH, MAX_CURSOR_ENTRIES,
+    MAX_ENCODED_CHANGE_BYTES, ReplicationStore, ReplicationStoreError, apply_received_change,
+    create_local_change, decode_change, encode_change,
+};
+pub use membership::{
+    AuthorizationSnapshot, DeviceIdentity, MAX_ACTIVE_MEMBERS, MAX_DEVICE_DISPLAY_NAME_BYTES,
+    MAX_MEMBERSHIP_RECORD_BYTES, MAX_MEMBERSHIP_RECORDS, MEMBERSHIP_FORMAT_VERSION,
+    MemberPublicKeys, MembershipAcceptance, MembershipAdmission, MembershipError,
+    MembershipGenesis, MembershipInsert, MembershipRecord, MembershipRecordHash,
+    ValidatedMembership, block_device, create_acceptance, create_admission, create_genesis,
+    insert_membership_record, load_authorization, load_membership, unblock_device,
+    validate_membership,
+};
 pub use merge::{MergeError, apply_merge_projection, resolve_conflicts, unresolved_heads};
+pub use pairing::{PairingStore, PairingVaultPackage, PreparedJoiningDevice};
 pub use password::{CharClasses, MAX_LENGTH, PasswordError, generate_password};
 
 pub use crypto::cipher::{
@@ -35,7 +52,7 @@ pub use crypto::keys::{
 pub use crypto::secret::{
     DecryptedPayload, Dek, Kek, Password, Secret, SecretBytes, SecretKey, SessionKey,
 };
-pub use vault::{Vault, VaultError, default_vault_path};
+pub use vault::{UnlockedSyncAccess, Vault, VaultError, default_vault_path};
 
 #[cfg(test)]
 mod test {
@@ -1023,11 +1040,10 @@ mod task5_tests {
 #[cfg(test)]
 mod task6_tests {
     use super::{
-        BackupError, Ed25519Keypair, ItemId, Operation, SecretKey, VaultId, create_local_change,
-        export_backup, restore_backup, storage::Db,
+        BackupError, DeviceIdentity, Ed25519Keypair, Hlc, ItemId, Operation, SecretKey, VaultId,
+        X25519Keypair, create_genesis, create_local_change, export_backup, restore_backup,
+        storage::Db,
     };
-    use sha2::{Digest, Sha256};
-
     fn source(with_membership: bool) -> (Db, VaultId, ItemId, SecretKey) {
         let vault_id = VaultId::from_bytes([41; 16]);
         let item_id = ItemId::from_bytes([42; 16]);
@@ -1047,12 +1063,20 @@ mod task6_tests {
         )
         .unwrap();
         if with_membership {
-            let record = b"genesis membership";
-            let hash = Sha256::digest(record);
+            let creator = DeviceIdentity::new_signed(
+                "backup",
+                1,
+                &signing,
+                X25519Keypair::from_private_bytes([45; 32]).public_key(),
+            )
+            .unwrap();
+            let record = create_genesis(vault_id, creator, Hlc::new(1, 0), &signing).unwrap();
+            let bytes = record.to_canonical_bytes().unwrap();
+            let hash = record.record_hash().unwrap();
             db.connection()
                 .execute(
                     "INSERT INTO memberships (record_hash, vault_id, record_type, record) VALUES (?1, ?2, 'genesis', ?3)",
-                    (hash.as_slice(), vault_id.as_ref(), record.as_slice()),
+                    (hash.as_ref(), vault_id.as_ref(), bytes),
                 )
                 .unwrap();
         }

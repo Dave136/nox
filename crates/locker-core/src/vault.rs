@@ -1,6 +1,7 @@
 //! Vault creation, unlocking, and secret lifetime management.
 
 use crate::{
+    Hlc,
     crypto::{
         CipherError, cipher,
         kdf::{self, Argon2Params, KdfError},
@@ -10,11 +11,14 @@ use crate::{
     ids::{ChangeId, DeviceId, ItemId, VaultId},
     item::{ITEM_SCHEMA_VERSION, ItemPayload, ItemPayloadError},
     journal::{self, Change, JournalError},
+    membership::{self, AuthorizationSnapshot, MembershipError, ValidatedMembership},
     merge,
+    pairing::{PairingStore, PairingVaultPackage, PreparedJoiningDevice},
     storage::{Db, DbError},
 };
 use rusqlite::{OptionalExtension, params, types::Type};
 use std::{
+    collections::BTreeMap,
     fmt, io,
     path::{Path, PathBuf},
 };
@@ -80,6 +84,8 @@ pub enum VaultError {
     SchemaVersionMismatch { envelope: u32, payload: u16 },
     /// The requested item has no prior revision.
     ItemNotFound,
+    /// Membership validation or local authorization failed.
+    Membership(MembershipError),
 }
 
 impl fmt::Display for VaultError {
@@ -104,6 +110,7 @@ impl fmt::Display for VaultError {
                 "item schema version mismatch: envelope {envelope}, payload {payload}"
             ),
             Self::ItemNotFound => formatter.write_str("item not found"),
+            Self::Membership(error) => write!(formatter, "vault membership error: {error}"),
         }
     }
 }
@@ -125,6 +132,7 @@ impl std::error::Error for VaultError {
             | Self::NoHomeDirectory
             | Self::SchemaVersionMismatch { .. }
             | Self::ItemNotFound => None,
+            Self::Membership(error) => Some(error),
         }
     }
 }
@@ -183,6 +191,12 @@ impl From<ItemPayloadError> for VaultError {
     }
 }
 
+impl From<MembershipError> for VaultError {
+    fn from(error: MembershipError) -> Self {
+        Self::Membership(error)
+    }
+}
+
 /// An unlocked vault and the secrets required to operate on it.
 pub struct Vault {
     db: Db,
@@ -192,6 +206,120 @@ pub struct Vault {
     ed25519: Ed25519Keypair,
     #[allow(dead_code)]
     x25519: X25519Keypair,
+}
+
+/// Narrow, unlocked capability for the headless sync service.
+///
+/// The capability owns typed secret holders but intentionally exposes neither
+/// their bytes nor the underlying SQLite connection.  A service must be
+/// stopped before the originating vault is locked.
+pub struct UnlockedSyncAccess {
+    path: PathBuf,
+    vault_id: VaultId,
+    device_id: DeviceId,
+    identity: membership::DeviceIdentity,
+    ed25519: Ed25519Keypair,
+    x25519: X25519Keypair,
+    dek: Dek,
+}
+
+impl fmt::Debug for UnlockedSyncAccess {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("UnlockedSyncAccess(<redacted>)")
+    }
+}
+
+impl UnlockedSyncAccess {
+    /// Duplicate only the bounded typed owners needed by one blocking core job.
+    /// The duplicate retains redacted diagnostics and zeroizes on drop.
+    #[must_use]
+    pub fn clone_for_blocking_job(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            vault_id: self.vault_id,
+            device_id: self.device_id,
+            identity: self.identity.clone(),
+            ed25519: Ed25519Keypair::from_private_bytes(self.ed25519.private_key_bytes()),
+            x25519: X25519Keypair::from_private_bytes(self.x25519.private_key_bytes()),
+            dek: self.dek.clone(),
+        }
+    }
+
+    #[must_use]
+    pub fn vault_id(&self) -> VaultId {
+        self.vault_id
+    }
+
+    #[must_use]
+    pub fn local_device_id(&self) -> DeviceId {
+        self.device_id
+    }
+
+    #[must_use]
+    pub fn local_identity(&self) -> &membership::DeviceIdentity {
+        &self.identity
+    }
+
+    pub fn authorized_peer_keys(&self) -> Result<BTreeMap<DeviceId, [u8; 32]>, VaultError> {
+        let authorization = self.authorization_snapshot()?;
+        let mut peers = BTreeMap::new();
+        for identity in authorization.membership.active_members() {
+            if identity.device_id == self.device_id
+                || authorization.is_locally_blocked(identity.device_id)
+            {
+                continue;
+            }
+            if let Some(keys) = authorization.membership.member_keys(identity.device_id) {
+                peers.insert(identity.device_id, keys.x25519);
+            }
+        }
+        Ok(peers)
+    }
+
+    pub fn authorization_snapshot(&self) -> Result<AuthorizationSnapshot, VaultError> {
+        let db = Db::open(&self.path)?;
+        Ok(membership::load_authorization(&db, self.vault_id)?)
+    }
+
+    pub fn open_pairing_store(&self) -> Result<PairingStore, VaultError> {
+        let db = Db::open(&self.path)?;
+        Ok(PairingStore::new(
+            db,
+            self.vault_id,
+            self.device_id,
+            self.dek.clone(),
+            Ed25519Keypair::from_private_bytes(self.ed25519.private_key_bytes()),
+        ))
+    }
+
+    pub fn open_replication_store(&self) -> Result<journal::ReplicationStore, VaultError> {
+        let db = Db::open(&self.path)?;
+        Ok(journal::ReplicationStore::new(db, self.vault_id))
+    }
+
+    pub fn block_device(&self, device_id: DeviceId) -> Result<(), VaultError> {
+        let mut db = Db::open(&self.path)?;
+        membership::block_device(
+            &mut db,
+            self.device_id,
+            device_id,
+            Hlc::new(now_millis(), 0),
+        )?;
+        Ok(())
+    }
+
+    pub fn unblock_device(&self, device_id: DeviceId) -> Result<(), VaultError> {
+        let mut db = Db::open(&self.path)?;
+        membership::unblock_device(&mut db, device_id)?;
+        Ok(())
+    }
+
+    /// Return a typed copy for one Noise handshake.  The key type redacts
+    /// diagnostics and zeroizes its private material on drop.
+    #[must_use]
+    pub fn local_noise_keypair(&self) -> X25519Keypair {
+        X25519Keypair::from_private_bytes(self.x25519.private_key_bytes())
+    }
 }
 
 impl fmt::Debug for Vault {
@@ -275,6 +403,16 @@ impl Vault {
                 ],
             )?;
 
+            let creator = membership::DeviceIdentity::new_signed(
+                "This device",
+                membership::MEMBERSHIP_FORMAT_VERSION,
+                &ed25519,
+                x25519.public_key_bytes(),
+            )?;
+            let genesis =
+                membership::create_genesis(vault_id, creator, Hlc::new(now_millis(), 0), &ed25519)?;
+            membership::insert_membership_record_tx(tx, &genesis)?;
+
             Ok((vault_id, device_id, dek, ed25519, x25519))
         })?;
 
@@ -286,6 +424,280 @@ impl Vault {
             ed25519,
             x25519,
         })
+    }
+
+    /// Return the validated immutable membership snapshot for this vault.
+    pub fn membership(&self) -> Result<ValidatedMembership, VaultError> {
+        Ok(membership::load_membership(&self.db, self.vault_id)?)
+    }
+
+    /// Return membership plus installation-local blocking policy.
+    pub fn authorization(&self) -> Result<AuthorizationSnapshot, VaultError> {
+        Ok(membership::load_authorization(&self.db, self.vault_id)?)
+    }
+
+    /// Create the narrow capability consumed by the headless sync service.
+    pub fn open_sync_access(&self) -> Result<UnlockedSyncAccess, VaultError> {
+        let path = self
+            .db
+            .path()
+            .ok_or_else(|| {
+                VaultError::Db(DbError::Io(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "sync access requires a file-backed vault",
+                )))
+            })?
+            .to_owned();
+        let authorization = self.authorization()?;
+        if !authorization.is_current_member(self.device_id) {
+            return Err(VaultError::Membership(MembershipError::InvalidIdentity(
+                "local device is not active",
+            )));
+        }
+        let identity = authorization
+            .membership
+            .identity(self.device_id)
+            .cloned()
+            .ok_or(VaultError::Membership(MembershipError::UnknownDevice))?;
+        let access = UnlockedSyncAccess {
+            path,
+            vault_id: self.vault_id,
+            device_id: self.device_id,
+            identity,
+            ed25519: Ed25519Keypair::from_private_bytes(self.ed25519.private_key_bytes()),
+            x25519: X25519Keypair::from_private_bytes(self.x25519.private_key_bytes()),
+            dek: self.dek.clone(),
+        };
+        // Validate independent store access before returning a capability.
+        let _ = access.open_pairing_store()?;
+        let _ = access.open_replication_store()?;
+        Ok(access)
+    }
+
+    /// Open an independent synchronous store for pairing jobs.
+    pub fn open_pairing_store(&self) -> Result<PairingStore, VaultError> {
+        let path = self.db.path().ok_or_else(|| {
+            VaultError::Db(DbError::Io(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "pairing stores require a file-backed vault",
+            )))
+        })?;
+        let db = Db::open(path)?;
+        Ok(PairingStore::new(
+            db,
+            self.vault_id,
+            self.device_id,
+            self.dek.clone(),
+            Ed25519Keypair::from_private_bytes(self.ed25519.private_key_bytes()),
+        ))
+    }
+
+    /// Open an independent key-free store for authenticated replication.
+    pub fn open_replication_store(&self) -> Result<journal::ReplicationStore, VaultError> {
+        let path = self.db.path().ok_or_else(|| {
+            VaultError::Db(DbError::Io(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "replication stores require a file-backed vault",
+            )))
+        })?;
+        let db = Db::open(path)?;
+        let stored_vault = db
+            .connection()
+            .query_row("SELECT vault_id FROM vault_meta LIMIT 1", [], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })
+            .optional()?;
+        let Some(stored_vault) = stored_vault else {
+            return Err(VaultError::IncorrectPasswordOrCorruptVault);
+        };
+        let stored_vault: [u8; 16] = stored_vault
+            .try_into()
+            .map_err(|_| VaultError::IncorrectPasswordOrCorruptVault)?;
+        let stored_vault = VaultId::from_bytes(stored_vault);
+        if stored_vault != self.vault_id {
+            return Err(VaultError::IncorrectPasswordOrCorruptVault);
+        }
+        Ok(journal::ReplicationStore::new(db, self.vault_id))
+    }
+
+    /// Generate the signing and Noise identities for a fresh joining profile.
+    pub fn prepare_joining_device(
+        display_name: &str,
+        protocol_version: u16,
+    ) -> Result<PreparedJoiningDevice, VaultError> {
+        let ed25519 = Ed25519Keypair::generate()?;
+        let x25519 = X25519Keypair::generate()?;
+        let identity = membership::DeviceIdentity::new_signed(
+            display_name,
+            protocol_version,
+            &ed25519,
+            x25519.public_key(),
+        )?;
+        Ok(PreparedJoiningDevice::new(ed25519, x25519, identity))
+    }
+
+    /// Create a new profile from an authenticated inviter package atomically.
+    pub fn create_from_pairing(
+        destination: impl AsRef<Path>,
+        master_password: &[u8],
+        prepared: PreparedJoiningDevice,
+        package: PairingVaultPackage,
+        accepted_at: Hlc,
+    ) -> Result<(Self, membership::MembershipAcceptance), VaultError> {
+        let path = destination.as_ref().to_path_buf();
+        if path.exists() {
+            return Err(VaultError::VaultAlreadyExists);
+        }
+        prepared.identity.verify()?;
+        let validated = membership::validate_membership(package.vault_id, &package.records)?;
+        let admission = match validated.record(package.admission_hash) {
+            Some(membership::MembershipRecord::Admission(value)) => value,
+            _ => {
+                return Err(VaultError::Membership(MembershipError::InvalidRecord(
+                    "pairing admission",
+                )));
+            }
+        };
+        if admission.admitted_device != prepared.identity
+            || admission.invited_by != package.inviter_device_id
+            || validated.is_active(prepared.device_id())
+            || !validated.is_active(package.inviter_device_id)
+        {
+            return Err(VaultError::Membership(MembershipError::InvalidIdentity(
+                "pairing package identity",
+            )));
+        }
+        let physical_ms = i64::try_from(accepted_at.physical_ms).map_err(|_| {
+            VaultError::Membership(MembershipError::InvalidRecord("acceptance HLC"))
+        })?;
+
+        let mut db = Db::open(&path)?;
+        let result = db.transaction(|tx| {
+            if tx
+                .query_row("SELECT singleton FROM vault_meta LIMIT 1", [], |_| Ok(()))
+                .optional()?
+                .is_some()
+            {
+                return Err(VaultError::VaultAlreadyExists);
+            }
+
+            let salt = kdf::random_salt()?;
+            let params = Argon2Params::v1();
+            let kek = kdf::derive_kek(master_password, salt, params)?;
+            let wrapped = keys::wrap_dek(&kek, &package.dek)?;
+            tx.execute(
+                "INSERT INTO vault_meta (
+                    singleton, format_version, vault_id, kdf_algorithm, kdf_salt,
+                    argon2_memory_kib, argon2_iterations, argon2_parallelism,
+                    key_wrap_algorithm, wrapped_dek_nonce, wrapped_dek
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    FORMAT_VERSION,
+                    package.vault_id.as_ref(),
+                    KDF_ALGORITHM,
+                    salt.as_slice(),
+                    i64::from(params.memory_kib),
+                    i64::from(params.iterations),
+                    i64::from(params.parallelism),
+                    KEY_WRAP_ALGORITHM,
+                    wrapped.nonce.as_bytes(),
+                    wrapped.ciphertext,
+                ],
+            )?;
+
+            let private_material = Zeroizing::new(
+                postcard::to_allocvec(&(
+                    prepared.ed25519.private_key_bytes(),
+                    prepared.x25519.private_key_bytes(),
+                ))
+                .map_err(|_| KeyError::Invalid)?,
+            );
+            let encrypted_private_material = keys::seal_fixed_aad(
+                &package.dek,
+                keys::PRIVATE_KEY_AAD,
+                private_material.as_slice(),
+            )?;
+            tx.execute(
+                "INSERT INTO local_device (
+                    singleton, device_id, ed25519_public_key, x25519_public_key,
+                    encrypted_private_key_material
+                ) VALUES (1, ?1, ?2, ?3, ?4)",
+                params![
+                    prepared.device_id().as_ref(),
+                    prepared.ed25519.public_key_bytes().as_slice(),
+                    prepared.x25519.public_key().as_slice(),
+                    encrypted_private_material,
+                ],
+            )?;
+
+            for record in &package.records {
+                membership::insert_membership_record_tx(tx, record)?;
+            }
+            let acceptance_record = membership::create_acceptance(
+                package.vault_id,
+                package.admission_hash,
+                prepared.device_id(),
+                accepted_at,
+                &prepared.ed25519,
+            )?;
+            let acceptance = match acceptance_record {
+                membership::MembershipRecord::Acceptance(value) => value,
+                _ => unreachable!("acceptance constructor returned the wrong record"),
+            };
+            membership::insert_membership_record_tx(
+                tx,
+                &membership::MembershipRecord::Acceptance(acceptance.clone()),
+            )?;
+            tx.execute(
+                "INSERT INTO clock_state (vault_id, hlc_physical_ms, hlc_logical, next_origin_seq) VALUES (?1, ?2, ?3, 0)",
+                params![
+                    package.vault_id.as_ref(),
+                    physical_ms,
+                    i64::from(accepted_at.logical),
+                ],
+            )?;
+            Ok(acceptance)
+        });
+        let acceptance = match result {
+            Ok(acceptance) => acceptance,
+            Err(error) => {
+                drop(db);
+                remove_new_database_files(&path);
+                return Err(error);
+            }
+        };
+
+        let vault_id = package.vault_id;
+        let device_id = prepared.device_id();
+        let dek = package.dek;
+        let ed25519 = prepared.ed25519;
+        let x25519 = prepared.x25519;
+        Ok((
+            Self {
+                db,
+                vault_id,
+                device_id,
+                dek,
+                ed25519,
+                x25519,
+            },
+            acceptance,
+        ))
+    }
+
+    /// Block a known member on this installation.
+    pub fn block_member(&mut self, target: DeviceId, at: Hlc) -> Result<(), VaultError> {
+        Ok(membership::block_device(
+            &mut self.db,
+            self.device_id,
+            target,
+            at,
+        )?)
+    }
+
+    /// Remove an installation-local member block.
+    pub fn unblock_member(&mut self, target: DeviceId) -> Result<bool, VaultError> {
+        Ok(membership::unblock_device(&mut self.db, target)?)
     }
 
     /// Unlock an existing vault without creating missing paths.
@@ -692,6 +1104,15 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
+fn remove_new_database_files(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        let _ = std::fs::remove_file(PathBuf::from(sidecar));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Vault, VaultError, now_millis};
@@ -702,6 +1123,7 @@ mod tests {
         merge,
     };
     use std::{
+        collections::BTreeMap,
         fs,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
@@ -744,6 +1166,48 @@ mod tests {
         getrandom::fill(&mut random).unwrap();
         let suffix = u128::from_le_bytes(random);
         std::env::temp_dir().join(format!("locker-vault-f5-{label}-{suffix:032x}"))
+    }
+
+    #[test]
+    fn replication_store_uses_bounded_cursors_and_idempotent_batches() {
+        let directory = f5_directory("replication-store");
+        let path = directory.join("vault.db");
+        let mut vault = Vault::create(b"password", &path).unwrap();
+        vault
+            .create_item(&payload("replication", "secret"))
+            .unwrap();
+        let mut store = vault.open_replication_store().unwrap();
+        let changes = store
+            .missing_changes(&BTreeMap::new(), 64, 60 * 1024)
+            .unwrap();
+        assert_eq!(changes.len(), 1);
+        let authorization = store.authorization_snapshot().unwrap();
+        let result = store
+            .apply_remote_batch(vault.device_id, &authorization, &changes)
+            .unwrap();
+        assert_eq!(result.inserted, 0);
+        assert_eq!(result.duplicates, 1);
+        assert_eq!(store.cursor_map().unwrap().len(), 1);
+        drop(store);
+        drop(vault);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn sync_access_keeps_typed_secrets_redacted_and_opens_stores() {
+        let directory = f5_directory("sync-access");
+        let path = directory.join("vault.db");
+        let vault = Vault::create(b"password", &path).unwrap();
+        let access = vault.open_sync_access().unwrap();
+        assert_eq!(access.vault_id(), vault.vault_id());
+        assert_eq!(access.local_device_id(), vault.device_id());
+        assert_eq!(access.local_identity().device_id, access.local_device_id());
+        assert!(!format!("{access:?}").contains("password"));
+        let _pairing = access.open_pairing_store().unwrap();
+        let _replication = access.open_replication_store().unwrap();
+        drop(access);
+        vault.lock();
+        fs::remove_dir_all(directory).unwrap();
     }
 
     fn assert_resolution_matches(
