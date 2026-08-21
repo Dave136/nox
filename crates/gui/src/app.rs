@@ -6,6 +6,8 @@ mod clipboard;
 mod conflicts;
 #[path = "item_editor.rs"]
 mod item_editor;
+#[path = "ui/mod.rs"]
+pub mod ui;
 #[path = "vault_list.rs"]
 mod vault_list;
 
@@ -14,17 +16,19 @@ use clipboard::ClipboardState;
 pub use clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
 use conflicts::ConflictState;
 use item_editor::ItemEditorState;
+use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use vault_list::VaultListState;
 
 use gpui::{
-    Context, Entity, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render,
+    Context, Entity, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render,
     SharedString, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-    Disableable, WindowExt,
+    Disableable, Root, WindowExt,
     button::Button,
     input::{Input, InputState},
 };
+use gpui_rsx::rsx;
 use locker_core::{SecretBytes, Vault, VaultError};
 use std::{
     path::PathBuf,
@@ -79,6 +83,7 @@ pub struct Locker {
     pub(crate) conflicts: ConflictState,
     pub(crate) conflicts_open: bool,
     pub(crate) backup: BackupState,
+    pub(crate) window_controls: Entity<WindowControls>,
 }
 
 impl Locker {
@@ -98,6 +103,15 @@ impl Locker {
         let create_password = Self::new_input(window, cx, "Password");
         let create_confirm = Self::new_input(window, cx, "Confirm password");
         let unlock_password = Self::new_input(window, cx, "Password");
+        let locker = cx.weak_entity();
+        let window_controls = cx.new(|cx| {
+            WindowControls::new(window, cx).with_command_handler(move |command, window, app| {
+                let _ = locker.update(app, |locker, cx| {
+                    locker.run_window_command(command, window, cx);
+                });
+            })
+        });
+        cx.bind_keys([KeyBinding::new("ctrl-p", OpenCommandPalette, None)]);
         let locker = Self {
             state,
             vault_path,
@@ -118,6 +132,7 @@ impl Locker {
             conflicts: ConflictState::Closed,
             conflicts_open: false,
             backup: BackupState::new(),
+            window_controls,
         };
 
         match locker.state {
@@ -205,7 +220,7 @@ impl Locker {
                             this.conflicts_open = false;
                             this.create_state = FormState::Idle;
                             this.arm_inactivity_timer(window, cx);
-                            window.on_next_frame(|window, _| window.focus_next());
+                            window.on_next_frame(|window, cx| window.focus_next(cx));
                             cx.notify();
                         }
                         Err(VaultError::VaultAlreadyExists) => {
@@ -263,7 +278,7 @@ impl Locker {
                             this.conflicts_open = false;
                             this.unlock_state = FormState::Idle;
                             this.arm_inactivity_timer(window, cx);
-                            window.on_next_frame(|window, _| window.focus_next());
+                            window.on_next_frame(|window, cx| window.focus_next(cx));
                             cx.notify();
                         }
                         Err(error) => {
@@ -353,6 +368,19 @@ impl Locker {
         }
         Self::focus_input(&self.unlock_password, window, cx);
         cx.notify();
+    }
+
+    fn run_window_command(
+        &mut self,
+        command: WindowCommand,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        match command {
+            WindowCommand::Minimize => window.minimize_window(),
+            WindowCommand::ToggleMaximize => window.zoom_window(),
+            WindowCommand::Close => window.remove_window(),
+        }
     }
 
     fn render_no_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -516,11 +544,22 @@ impl Locker {
 
 impl Render for Locker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        match &self.state {
+        let body = match &self.state {
             AppState::NoVault => self.render_no_vault(window, cx).into_any_element(),
             AppState::Locked => self.render_locked(window, cx).into_any_element(),
             AppState::Unlocked(_) => self.render_unlocked(window, cx).into_any_element(),
-        }
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .on_action(cx.listener(|this, _: &OpenCommandPalette, window, cx| {
+                this.window_controls
+                    .update(cx, |controls, cx| controls.open_palette(window, cx));
+            }))
+            .child(self.window_controls.clone())
+            .child(div().flex_1().child(body))
+            .children(Root::render_dialog_layer(window, cx))
     }
 }
 
@@ -540,13 +579,11 @@ impl FatalStartupError {
 
 impl Render for FatalStartupError {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .p(px(32.))
-            .child(self.message.clone())
+        rsx! {
+            <div size_full flex items_center justify_center p={px(32.)}>
+                {self.message.clone()}
+            </div>
+        }
     }
 }
 
@@ -556,7 +593,7 @@ mod tests {
     use super::*;
     use super::{backup, conflicts};
     use gpui::{Focusable, TestAppContext, VisualTestContext};
-    use gpui_component::Root;
+    use gpui_component::{Root, WindowExt};
     use locker_core::{
         BackupError, ChangeId, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, SecretBytes,
     };
@@ -569,6 +606,11 @@ mod tests {
     };
 
     static NEXT_PATH: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn rsx_macro_builds_a_basic_element() {
+        let _ = gpui_rsx::rsx! { <div>{"Locker"}</div> };
+    }
 
     fn test_path(label: &str) -> PathBuf {
         let id = NEXT_PATH.fetch_add(1, Ordering::Relaxed);
@@ -617,6 +659,10 @@ mod tests {
 
     fn clipboard_text(cx: &mut VisualTestContext) -> Option<String> {
         cx.update(|_, app| app.read_from_clipboard().and_then(|item| item.text()))
+    }
+
+    fn clipboard_text_or_empty(cx: &mut VisualTestContext) -> String {
+        clipboard_text(cx).unwrap_or_default()
     }
 
     fn write_existing(path: &Path) {
@@ -916,6 +962,99 @@ mod tests {
             view.read_with(cx, |locker, _| locker.create_state.clone()),
             FormState::Error("Enter a password.".into())
         );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn ctrl_p_and_command_control_open_the_shared_palette_without_modifying_vault_list_search_state(
+        cx: &mut TestAppContext,
+    ) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "command-palette", &[]);
+        let list_search = view.read_with(cx, |locker, _| {
+            locker.vault_list.as_ref().unwrap().search_input.clone()
+        });
+        view.update_in(cx, |_, window, locker_cx| {
+            list_search.update(locker_cx, |input, input_cx| input.focus(window, input_cx));
+        });
+        let before = cx.update(|_, app| list_search.read(app).value());
+
+        let trigger_bounds = cx.debug_bounds("window-command-palette-trigger").unwrap();
+        cx.simulate_click(trigger_bounds.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert!(cx.update(|window, app| window.has_active_dialog(app)));
+        assert!(cx.debug_bounds("window-command-palette-dialog").is_some());
+        assert!(view.read_with(cx, |locker, app| {
+            locker.window_controls.read(app).palette_open
+        }));
+
+        cx.update(|window, app| window.close_dialog(app));
+        view.update(cx, |locker, cx| {
+            locker.window_controls.update(cx, |controls, cx| {
+                controls.palette_open = false;
+                controls.prior_focus = None;
+                cx.notify();
+            });
+        });
+        cx.simulate_keystrokes("ctrl-k");
+        assert!(!view.read_with(cx, |locker, app| {
+            locker.window_controls.read(app).palette_open
+        }));
+
+        cx.simulate_keystrokes("ctrl-p");
+        cx.run_until_parked();
+
+        assert!(cx.update(|window, app| window.has_active_dialog(app)));
+        assert!(cx.debug_bounds("window-command-palette-dialog").is_some());
+        assert!(view.read_with(cx, |locker, app| {
+            locker.window_controls.read(app).palette_open
+        }));
+        assert_eq!(cx.update(|_, app| list_search.read(app).value()), before);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn closing_the_palette_restores_prior_focus(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "command-palette-escape", &[]);
+        let list_search = view.read_with(cx, |locker, _| {
+            locker.vault_list.as_ref().unwrap().search_input.clone()
+        });
+        view.update_in(cx, |_, window, locker_cx| {
+            list_search.update(locker_cx, |input, input_cx| input.focus(window, input_cx));
+        });
+
+        cx.simulate_keystrokes("ctrl-p");
+        assert!(view.read_with(cx, |locker, app| {
+            locker.window_controls.read(app).palette_open
+        }));
+
+        cx.update(|window, app| window.close_dialog(app));
+        view.update(cx, |locker, cx| {
+            locker.window_controls.update(cx, |controls, cx| {
+                controls.palette_open = false;
+                controls.prior_focus = None;
+                cx.notify();
+            });
+        });
+        assert!(!view.read_with(cx, |locker, app| {
+            locker.window_controls.read(app).palette_open
+        }));
+        assert!(
+            cx.update(|window, app| { list_search.read(app).focus_handle(app).is_focused(window) })
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn close_window_command_removes_the_test_window(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("command-close");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.run_window_command(WindowCommand::Close, window, locker_cx);
+        });
+        assert!(cx.windows().is_empty());
         cleanup(&path);
     }
 
@@ -1253,7 +1392,7 @@ mod tests {
         assert_eq!(clipboard_text(cx), Some("clipboard-secret".into()));
         cx.executor().advance_clock(DEFAULT_CLIPBOARD_TIMEOUT);
         cx.run_until_parked();
-        assert_eq!(clipboard_text(cx), Some(String::new()));
+        assert_eq!(clipboard_text_or_empty(cx), String::new());
         assert!(view.read_with(cx, |locker, _| locker.clipboard.expected.is_none()));
 
         view.update_in(cx, |locker, window, locker_cx| {
@@ -1287,7 +1426,7 @@ mod tests {
         assert_eq!(clipboard_text(cx), Some("second".into()));
         cx.executor().advance_clock(timeout);
         cx.run_until_parked();
-        assert_eq!(clipboard_text(cx), Some(String::new()));
+        assert_eq!(clipboard_text_or_empty(cx), String::new());
         assert!(view.read_with(cx, |locker, _| locker.clipboard.expected.is_none()));
         cleanup(&path);
     }
@@ -1300,7 +1439,7 @@ mod tests {
             locker.copy_secret(SecretBytes::new(b"clipboard-secret"), window, locker_cx);
             locker.lock_vault(window, locker_cx);
         });
-        assert_eq!(clipboard_text(cx), Some(String::new()));
+        assert_eq!(clipboard_text_or_empty(cx), String::new());
         assert!(view.read_with(cx, |locker, _| {
             matches!(&locker.state, AppState::Locked) && locker.clipboard.expected.is_none()
         }));
@@ -1371,7 +1510,7 @@ mod tests {
         });
         cx.update(|window, _| window.blur());
         for _ in 0..6 {
-            cx.update(|window, _| window.focus_next());
+            cx.update(|window, app| window.focus_next(app));
         }
         cx.simulate_keystrokes("enter");
         assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
@@ -1394,7 +1533,7 @@ mod tests {
         });
         cx.update(|window, _| window.blur());
         for _ in 0..6 {
-            cx.update(|window, _| window.focus_next());
+            cx.update(|window, app| window.focus_next(app));
         }
         cx.simulate_keystrokes("a");
         assert!(view.read_with(cx, |locker, _| matches!(

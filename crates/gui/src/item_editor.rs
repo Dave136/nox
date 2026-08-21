@@ -4,7 +4,7 @@ use gpui_component::{
     Disableable, WindowExt,
     button::Button,
     checkbox::Checkbox,
-    input::{Input, InputState},
+    input::{Input, InputState, Textarea, TextareaState},
     popover::Popover,
     radio::{Radio, RadioGroup},
 };
@@ -35,8 +35,8 @@ pub(crate) struct ItemEditorState {
     pub(crate) title_input: Entity<InputState>,
     pub(crate) username_input: Entity<InputState>,
     pub(crate) password_input: Entity<InputState>,
-    pub(crate) uris_input: Entity<InputState>,
-    pub(crate) notes_input: Entity<InputState>,
+    pub(crate) uris_input: Entity<TextareaState>,
+    pub(crate) notes_input: Entity<TextareaState>,
     pub(crate) created_at: u64,
     pub(crate) save_error: Option<SharedString>,
     pub(crate) generator: GeneratorPopoverState,
@@ -54,18 +54,31 @@ fn input(
     cx: &mut Context<Locker>,
     placeholder: &'static str,
     masked: bool,
-    multiline: bool,
 ) -> Entity<InputState> {
     let value = value.into();
     let entity = cx.new(|cx| {
         let state = InputState::new(window, cx).placeholder(placeholder);
-        if masked {
-            state.masked(true)
-        } else if multiline {
-            state.multi_line(true).rows(4)
-        } else {
-            state
-        }
+        if masked { state.masked(true) } else { state }
+    });
+    if !value.is_empty() {
+        entity.update(cx, |state, input_cx| {
+            state.set_value(value, window, input_cx)
+        });
+    }
+    entity
+}
+
+fn textarea(
+    value: impl Into<SharedString>,
+    window: &mut Window,
+    cx: &mut Context<Locker>,
+    placeholder: &'static str,
+) -> Entity<TextareaState> {
+    let value = value.into();
+    let entity = cx.new(|cx| {
+        TextareaState::new(window, cx)
+            .placeholder(placeholder)
+            .rows(4)
     });
     if !value.is_empty() {
         entity.update(cx, |state, input_cx| {
@@ -77,12 +90,12 @@ fn input(
 
 impl ItemEditorState {
     pub(crate) fn for_create(window: &mut Window, cx: &mut Context<Locker>) -> Self {
-        let title_input = input("", window, cx, "Title", false, false);
-        let username_input = input("", window, cx, "Username", false, false);
-        let password_input = input("", window, cx, "Password", true, false);
-        let uris_input = input("", window, cx, "URIs (one per line)", false, true);
-        let notes_input = input("", window, cx, "Notes", false, true);
-        let length_input = input("20", window, cx, "Length", false, false);
+        let title_input = input("", window, cx, "Title", false);
+        let username_input = input("", window, cx, "Username", false);
+        let password_input = input("", window, cx, "Password", true);
+        let uris_input = textarea("", window, cx, "URIs (one per line)");
+        let notes_input = textarea("", window, cx, "Notes");
+        let length_input = input("20", window, cx, "Length", false);
         Self {
             mode: EditorMode::Create,
             item_type: ItemType::Login,
@@ -358,7 +371,7 @@ impl Locker {
                 || "this item".to_owned(),
                 |(_, payload)| payload.title.clone(),
             );
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        window.open_alert_dialog(cx, move |dialog, _window, _cx| {
             let locker_for_ok = locker.clone();
             dialog
                 .title("Delete item?")
@@ -551,9 +564,9 @@ impl Locker {
                 .child(Input::new(&username))
                 .child(Input::new(&password).mask_toggle())
                 .child(copy_buttons)
-                .child(Input::new(&uris));
+                .child(Textarea::new(&uris));
         }
-        content = content.child(Input::new(&notes));
+        content = content.child(Textarea::new(&notes));
         if let Some(error) = save_error {
             content = content.child(div().child(error));
         }

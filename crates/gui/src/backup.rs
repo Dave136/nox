@@ -142,7 +142,7 @@ impl Locker {
             confirmation: confirmation.clone(),
         });
         let locker = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        window.open_alert_dialog(cx, move |dialog, _window, _cx| {
             let ok_locker = locker.clone();
             let cancel_locker = locker.clone();
             dialog
@@ -346,7 +346,7 @@ impl Locker {
         });
         let destination = self.vault_path.clone();
         let locker = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        window.open_alert_dialog(cx, move |dialog, _window, _cx| {
             let ok_locker = locker.clone();
             let cancel_locker = locker.clone();
             dialog

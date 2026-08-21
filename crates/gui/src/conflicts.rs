@@ -185,7 +185,7 @@ impl Locker {
             conflicts.retain(|conflict| conflict.item_id != item_id);
             if conflicts.is_empty() {
                 self.conflicts_open = false;
-                window.on_next_frame(|window, _| window.focus_next());
+                window.on_next_frame(|window, cx| window.focus_next(cx));
             }
         }
         if let Some(list) = self.vault_list.as_mut() {

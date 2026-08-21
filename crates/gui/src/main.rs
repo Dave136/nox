@@ -1,10 +1,17 @@
 mod app;
+mod assets;
 
 use gpui::{AppContext, WindowOptions};
+use gpui_platform::application;
+// use gpui_component_assets::Assets;
 use gpui_component::{Root, init};
 
+use crate::assets::Assets;
+
 fn main() {
-    gpui::Application::new().run(|cx| {
+    let app = application().with_assets(Assets);
+
+    app.run(|cx| {
         init(cx);
         match locker_core::default_vault_path() {
             Ok(path) => {
