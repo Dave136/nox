@@ -1,13 +1,16 @@
 use super::{AppState, Locker};
 use gpui::{
-    AnyElement, Context, ElementId, Entity, KeyDownEvent, SharedString, Subscription,
-    UniformListScrollHandle, Window, div, prelude::*, uniform_list,
+    AnyElement, Context, ElementId, Entity, FontWeight, KeyDownEvent, SharedString, Subscription,
+    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
-    button::Button,
+    ActiveTheme, Sizable,
+    button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
 };
 use locker_core::{ItemId, ItemPayload, VaultError};
+
+use crate::assets::{IconName, icon};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ListLoadState {
@@ -203,8 +206,29 @@ impl Locker {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = cx.theme();
+        let sidebar_bg = theme.muted;
+        let border = theme.border;
+        let foreground = theme.foreground;
+        let muted_foreground = theme.muted_foreground;
+        let danger = theme.danger;
+        let selected_bg = theme.list_active;
+        let selected_border = theme.list_active_border;
+
         let Some(list) = self.vault_list.as_ref() else {
-            return div().child("No vault loaded").into_any_element();
+            return div()
+                .id("vault-list-panel")
+                .w(px(280.))
+                .h_full()
+                .flex_shrink_0()
+                .bg(sidebar_bg)
+                .border_r_1()
+                .border_color(border)
+                .p(px(16.))
+                .text_sm()
+                .text_color(muted_foreground)
+                .child("No vault loaded")
+                .into_any_element();
         };
         let search_input = list.search_input.clone();
         let load = list.load.clone();
@@ -221,19 +245,63 @@ impl Locker {
                     let list = row_locker.read(app).vault_list.as_ref()?;
                     let item_index = *list.filtered.get(index)?;
                     let (item_id, payload) = list.items.get(item_index)?;
-                    Some((*item_id, payload.title.clone(), payload.username.clone()))
+                    Some((
+                        *item_id,
+                        payload.title.clone(),
+                        payload.username.clone(),
+                        list.selected == Some(*item_id),
+                    ))
                 })
                 .collect::<Vec<_>>();
             data.into_iter()
-                .map(|(item_id, title, username)| {
+                .map(|(item_id, title, username, selected)| {
                     let row_id: ElementId =
                         SharedString::from(format!("vault-list-row-{item_id}")).into();
-                    let label = if username.is_empty() {
-                        title
+                    let title_text = if title.is_empty() {
+                        "Untitled".to_owned()
                     } else {
-                        format!("{title} — {username}")
+                        title
                     };
-                    Button::new(row_id).label(label).on_click({
+                    let mut button = Button::new(row_id)
+                        .ghost()
+                        .w_full()
+                        .h(px(52.))
+                        .justify_start()
+                        .px(px(10.))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .w_full()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(foreground)
+                                        .truncate()
+                                        .child(title_text),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted_foreground)
+                                        .truncate()
+                                        .child(if username.is_empty() {
+                                            "—".to_owned()
+                                        } else {
+                                            username
+                                        }),
+                                ),
+                        );
+                    if selected {
+                        button = button
+                            .bg(selected_bg)
+                            .border_1()
+                            .border_color(selected_border);
+                    }
+                    button.on_click({
                         let locker = row_locker.clone();
                         move |_, window, app| {
                             locker.update(app, |locker, cx| {
@@ -243,10 +311,16 @@ impl Locker {
                     })
                 })
                 .collect()
-        });
+        })
+        .size_full();
         let deleted = deleted_ids.into_iter().enumerate().map(|(index, item_id)| {
             let row_id: ElementId = SharedString::from(format!("deleted-item-{item_id}")).into();
             Button::new(row_id)
+                .ghost()
+                .small()
+                .w_full()
+                .justify_start()
+                .text_color(muted_foreground)
                 .label(format!("Preview & Restore — Deleted item {}", index + 1))
                 .on_click({
                     let locker = locker.clone();
@@ -259,15 +333,20 @@ impl Locker {
         });
         let error = match load {
             ListLoadState::Ready => div(),
-            ListLoadState::Failed(message) => div().child(message),
+            ListLoadState::Failed(message) => div().text_sm().text_color(danger).child(message),
         };
         div()
             .id("vault-list-panel")
             .flex()
             .flex_col()
-            .gap_2()
-            .p_2()
-            .w_1_3()
+            .gap(px(12.))
+            .w(px(280.))
+            .h_full()
+            .flex_shrink_0()
+            .bg(sidebar_bg)
+            .border_r_1()
+            .border_color(border)
+            .p(px(12.))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "up" => this.move_selection(-1, window, cx),
@@ -276,14 +355,21 @@ impl Locker {
                     _ => {}
                 }
             }))
-            .child(Input::new(&search_input))
-            .child(error)
             .child(
-                Button::new("new-item").label("New Item").on_click(
-                    cx.listener(|this, _, window, cx| this.open_create_editor(window, cx)),
-                ),
+                Input::new(&search_input)
+                    .prefix(icon(IconName::Search, Some(14.), Some(muted_foreground))),
             )
-            .child(rows)
+            .child(
+                Button::new("new-item")
+                    .primary()
+                    .w_full()
+                    .label("New Item")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_create_editor(window, cx)),
+                    ),
+            )
+            .child(error)
+            .child(div().flex_1().min_h(px(0.)).child(rows))
             .child(if !has_deleted {
                 div().into_any_element()
             } else {
@@ -291,9 +377,17 @@ impl Locker {
                     .id("deleted-items")
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap(px(2.))
+                    .pt(px(8.))
+                    .border_t_1()
+                    .border_color(border)
                     .child(
                         Button::new("deleted-section-toggle")
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .justify_start()
+                            .text_color(muted_foreground)
                             .label(format!("Deleted ({deleted_count})"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(list) = this.vault_list.as_mut() {

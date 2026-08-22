@@ -20,12 +20,11 @@ use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use vault_list::VaultListState;
 
 use gpui::{
-    Context, Entity, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render,
-    SharedString, Task, Window, div, prelude::*, px,
+    Context, Entity, FontWeight, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, SharedString, Task, Window, div, prelude::*, px, white,
 };
 use gpui_component::{
-    Disableable, Root, WindowExt,
-    button::Button,
+    ActiveTheme, Disableable, Root, Sizable, WindowExt,
+    button::{Button, ButtonVariants as _},
     input::{Input, InputState},
 };
 use gpui_rsx::rsx;
@@ -34,6 +33,8 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+
+use crate::assets::{IconName, icon};
 
 /// Default duration before an inactive unlocked vault is locked.
 pub const DEFAULT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(300);
@@ -386,99 +387,196 @@ impl Locker {
     fn render_no_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.create_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
+        let theme = cx.theme();
+        let page_bg = theme.background;
+        let card_bg = theme.secondary;
+        let border = theme.border;
+        let foreground = theme.foreground;
+        let muted_foreground = theme.muted_foreground;
+        let danger = theme.danger;
+        let icon_tint = theme.primary.opacity(0.08);
+        let icon_color = theme.primary;
+        let radius_lg = theme.radius_lg;
         let error = match &self.create_state {
-            FormState::Error(message) => div().child(message.clone()),
+            FormState::Error(message) => div()
+                .text_sm()
+                .text_color(danger)
+                .child(message.clone()),
             FormState::Idle | FormState::Pending => div(),
         };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .p_8()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "enter" {
-                    this.create_vault(window, cx);
-                }
-            }))
-            .child(CANNOT_RECOVER_PASSWORD_NOTICE)
-            .child(
-                div()
-                    .id("create-vault-password")
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child("Password")
-                    .child(Input::new(&self.create_password).mask_toggle()),
-            )
-            .child(
-                div()
-                    .id("create-vault-confirm")
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child("Confirm password")
-                    .child(Input::new(&self.create_confirm).mask_toggle()),
-            )
-            .child(error)
-            .child(
-                Button::new("create-vault-submit")
-                    .label(if pending {
-                        "Creating…"
-                    } else {
-                        "Create Vault"
-                    })
-                    .disabled(pending || backup_busy)
-                    .loading(pending)
-                    .on_click(cx.listener(|this, _, window, cx| {
+        rsx! {
+            <div
+                id="no-vault-view"
+                size_full
+                flex
+                items_center
+                justify_center
+                bg={white()}
+                p={px(32.)}
+                onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "enter" {
                         this.create_vault(window, cx);
-                    })),
-            )
-            .child(self.render_backup_actions(window, cx))
+                    }
+                })}
+            >
+                <div
+                    id="no-vault-card"
+                    flex
+                    flex_col
+                    gap={px(24.)}
+                    w={px(380.)}
+                    p={px(32.)}
+                    rounded={radius_lg}
+                    // border_1
+                    // borderColor={border}
+                    bg={white()}
+                    // shadow_sm
+                >
+                    <div flex flex_col items_center gap={px(12.)}>
+                        <div
+                            flex
+                            items_center
+                            justify_center
+                            w={px(56.)}
+                            h={px(56.)}
+                            rounded_full
+                            bg={icon_tint}
+                        >
+                            {icon(IconName::KeySquare, Some(26.), Some(icon_color))}
+                        </div>
+                        <div flex flex_col items_center gap={px(6.)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={foreground}>
+                                {"Create your vault"}
+                            </div>
+                            <div text_sm text_center textColor={muted_foreground}>
+                                {CANNOT_RECOVER_PASSWORD_NOTICE}
+                            </div>
+                        </div>
+                    </div>
+                    <div flex flex_col gap={px(16.)}>
+                        <div id="create-vault-password" flex flex_col gap={px(6.)}>
+                            <div text_sm fontWeight={FontWeight::MEDIUM} textColor={foreground}>
+                                {"Password"}
+                            </div>
+                            <Input base={Input::new(&self.create_password).mask_toggle()} />
+                        </div>
+                        <div id="create-vault-confirm" flex flex_col gap={px(6.)}>
+                            <div text_sm fontWeight={FontWeight::MEDIUM} textColor={foreground}>
+                                {"Confirm password"}
+                            </div>
+                            <Input base={Input::new(&self.create_confirm).mask_toggle()} />
+                        </div>
+                        {error}
+                        <Button
+                            base={Button::new("create-vault-submit")
+                                .primary()
+                                .w_full()
+                                .label(if pending { "Creating…" } else { "Create Vault" })
+                                .disabled(pending || backup_busy)
+                                .loading(pending)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.create_vault(window, cx);
+                                }))}
+                        />
+                    </div>
+                    <div flex flex_col gap={px(8.)} pt={px(8.)} border_t_1 borderColor={border}>
+                        {self.render_backup_actions(window, cx)}
+                    </div>
+                </div>
+            </div>
+        }
     }
 
     fn render_locked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.unlock_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
+        let theme = cx.theme();
+        let border = theme.border;
+        let foreground = theme.foreground;
+        let muted_foreground = theme.muted_foreground;
+        let danger = theme.danger;
+        let icon_tint = theme.primary.opacity(0.08);
+        let icon_color = theme.primary;
+        let radius_lg = theme.radius_lg;
         let error = match &self.unlock_state {
-            FormState::Error(message) => div().child(message.clone()),
+            FormState::Error(message) => div()
+                .text_sm()
+                .text_color(danger)
+                .child(message.clone()),
             FormState::Idle | FormState::Pending => div(),
         };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .p_8()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "enter" {
-                    this.unlock_vault(window, cx);
-                }
-            }))
-            .child(
-                div()
-                    .id("unlock-password")
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child("Password")
-                    .child(Input::new(&self.unlock_password).mask_toggle()),
-            )
-            .child(error)
-            .child(
-                Button::new("unlock-submit")
-                    .label(if pending { "Unlocking…" } else { "Unlock" })
-                    .disabled(pending || backup_busy)
-                    .loading(pending)
-                    .on_click(cx.listener(|this, _, window, cx| {
+        rsx! {
+            <div
+                id="locked-view"
+                size_full
+                flex
+                items_center
+                justify_center
+                bg={white()}
+                p={px(32.)}
+                onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "enter" {
                         this.unlock_vault(window, cx);
-                    })),
-            )
-            .child(self.render_backup_actions(window, cx))
+                    }
+                })}
+            >
+                <div
+                    id="locked-card"
+                    flex
+                    flex_col
+                    gap={px(24.)}
+                    w={px(380.)}
+                    p={px(32.)}
+                    rounded={radius_lg}
+                    bg={white()}
+                >
+                    <div flex flex_col items_center gap={px(12.)}>
+                        <div
+                            flex
+                            items_center
+                            justify_center
+                            w={px(56.)}
+                            h={px(56.)}
+                            rounded_full
+                            bg={icon_tint}
+                        >
+                            {icon(IconName::KeySquare, Some(26.), Some(icon_color))}
+                        </div>
+                        <div flex flex_col items_center gap={px(6.)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={foreground}>
+                                {"Unlock your vault"}
+                            </div>
+                            <div text_sm text_center textColor={muted_foreground}>
+                                {"Enter your master password to continue."}
+                            </div>
+                        </div>
+                    </div>
+                    <div flex flex_col gap={px(16.)}>
+                        <div id="unlock-password" flex flex_col gap={px(6.)}>
+                            <div text_sm fontWeight={FontWeight::MEDIUM} textColor={foreground}>
+                                {"Password"}
+                            </div>
+                            <Input base={Input::new(&self.unlock_password).mask_toggle()} />
+                        </div>
+                        {error}
+                        <Button
+                            base={Button::new("unlock-submit")
+                                .primary()
+                                .w_full()
+                                .label(if pending { "Unlocking…" } else { "Unlock" })
+                                .disabled(pending || backup_busy)
+                                .loading(pending)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.unlock_vault(window, cx);
+                                }))}
+                        />
+                    </div>
+                    <div flex flex_col gap={px(8.)} pt={px(8.)} border_t_1 borderColor={border}>
+                        {self.render_backup_actions(window, cx)}
+                    </div>
+                </div>
+            </div>
+        }
     }
 
     fn render_unlocked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -491,75 +589,109 @@ impl Locker {
             div().into_any_element()
         };
         let conflict_count = self.conflicts.count();
-        div()
-            .size_full()
-            .flex()
-            .gap_2()
-            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| {
-                this.note_activity(cx);
-            }))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+        let theme = cx.theme();
+        let border = theme.border;
+        let mut conflicts_button = Button::new("conflicts-button")
+            .small()
+            .label(format!("Conflicts ({conflict_count})"))
+            .on_click(cx.listener(|this, _, window, cx| this.open_conflicts(window, cx)));
+        conflicts_button = if conflict_count > 0 {
+            conflicts_button.warning()
+        } else {
+            conflicts_button.ghost()
+        };
+        rsx! {
+            <div
+                id="unlocked-view"
+                size_full
+                flex
+                bg={white()}
+                onMouseMove={cx.listener(|this, _: &MouseMoveEvent, _, cx| {
                     this.note_activity(cx);
-                }),
-            )
-            .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
-                this.note_activity(cx);
-            }))
-            .child(list)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .child(
-                        Button::new("conflicts-button")
-                            .label(format!("Conflicts ({conflict_count})"))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.open_conflicts(window, cx)),
-                            ),
-                    )
-                    .child(conflict_panel)
-                    .child(editor)
-                    .child(self.render_backup_actions(window, cx))
-                    .child(
-                        Button::new("lock-vault")
-                            .label("Lock")
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                if !event.keystroke.modifiers.modified()
-                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                {
-                                    window.prevent_default();
-                                    this.lock_vault(window, cx);
-                                }
-                            }))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.lock_vault(window, cx)),
-                            ),
-                    ),
-            )
+                })}
+                onMouseDown={(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.note_activity(cx);
+                }))}
+                onKeyDown={cx.listener(|this, _: &KeyDownEvent, _, cx| {
+                    this.note_activity(cx);
+                })}
+            >
+                {list}
+                <div flex flex_col flex_1 min_w={px(0.)} h_full>
+                    <div
+                        id="content-toolbar"
+                        flex
+                        items_center
+                        justify_between
+                        w_full
+                        h={px(52.)}
+                        px={px(20.)}
+                        flex_shrink_0
+                        border_b_1
+                        borderColor={border}
+                    >
+                        <Button base={conflicts_button} />
+                        <div flex items_center gap={px(8.)}>
+                            {self.render_backup_actions(window, cx)}
+                            <Button
+                                base={Button::new("lock-vault")
+                                    .outline()
+                                    .small()
+                                    .label("Lock")
+                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                        if !event.keystroke.modifiers.modified()
+                                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            window.prevent_default();
+                                            this.lock_vault(window, cx);
+                                        }
+                                    }))
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| this.lock_vault(window, cx)),
+                                    )}
+                            />
+                        </div>
+                    </div>
+                    <div flex flex_col flex_1 gap={px(16.)} p={px(20.)} overflow_y_scroll>
+                        {conflict_panel}
+                        {editor}
+                    </div>
+                </div>
+            </div>
+        }
     }
 }
 
 impl Render for Locker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let authenticated = matches!(&self.state, AppState::Unlocked(_));
+        self.window_controls.update(cx, |controls, cx| {
+            controls.set_authenticated(authenticated, cx)
+        });
         let body = match &self.state {
             AppState::NoVault => self.render_no_vault(window, cx).into_any_element(),
             AppState::Locked => self.render_locked(window, cx).into_any_element(),
             AppState::Unlocked(_) => self.render_unlocked(window, cx).into_any_element(),
         };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .on_action(cx.listener(|this, _: &OpenCommandPalette, window, cx| {
-                this.window_controls
-                    .update(cx, |controls, cx| controls.open_palette(window, cx));
-            }))
-            .child(self.window_controls.clone())
-            .child(div().flex_1().child(body))
-            .children(Root::render_dialog_layer(window, cx))
+        let dialog_layer = Root::render_dialog_layer(window, cx);
+        rsx! {
+            <div
+                size_full
+                flex
+                flex_col
+                onAction={cx.listener(|this, _: &OpenCommandPalette, window, cx| {
+                    // open_palette itself no-ops while unauthenticated.
+                    this.window_controls
+                        .update(cx, |controls, cx| controls.open_palette(window, cx));
+                })}
+            >
+                {self.window_controls.clone()}
+                <div flex_1>{body}</div>
+                {for dialog in dialog_layer {
+                    {dialog}
+                }}
+            </div>
+        }
     }
 }
 

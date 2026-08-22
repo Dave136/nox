@@ -1,11 +1,13 @@
 use super::{AppState, Locker};
-use gpui::{AnyElement, Context, SharedString, Window, div, prelude::*};
+use gpui::{AnyElement, Context, FontWeight, SharedString, Window, div, prelude::*, px};
 use gpui_component::{
-    Disableable,
-    button::Button,
+    ActiveTheme, Disableable, Sizable,
+    button::{Button, ButtonVariants as _},
     radio::{Radio, RadioGroup},
 };
 use locker_core::{ChangeId, ItemId, ItemPayload, ItemType, VaultError};
+
+use crate::assets::{IconName, icon};
 
 #[derive(Clone)]
 pub(crate) struct ConflictChoice {
@@ -117,6 +119,11 @@ impl Locker {
         cx.notify();
     }
 
+    pub(crate) fn close_conflicts(&mut self, cx: &mut Context<Self>) {
+        self.conflicts_open = false;
+        cx.notify();
+    }
+
     pub(crate) fn select_conflict_choice(
         &mut self,
         item_id: ItemId,
@@ -213,14 +220,55 @@ impl Locker {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = cx.theme();
+        let border = theme.border;
+        let foreground = theme.foreground;
+        let muted_foreground = theme.muted_foreground;
+        let danger = theme.danger;
+        let card_bg = theme.background;
+        let radius_lg = theme.radius_lg;
+
+        let close_button = Button::new("close-conflicts")
+            .ghost()
+            .xsmall()
+            .on_click(cx.listener(|this, _, _, cx| this.close_conflicts(cx)));
+        let close_button = close_button.child(icon(IconName::X, Some(12.), Some(muted_foreground)));
+
+        let header = |title: String| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(foreground)
+                        .child(title),
+                )
+                .child(close_button)
+        };
+
         if let ConflictState::Failed(message) = &self.conflicts {
-            return div().child(message.clone()).into_any_element();
+            return div()
+                .id("conflicts-panel")
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .p(px(16.))
+                .rounded(radius_lg)
+                .border_1()
+                .border_color(border)
+                .bg(card_bg)
+                .child(header("Conflicts".to_owned()))
+                .child(div().text_sm().text_color(danger).child(message.clone()))
+                .into_any_element();
         }
         let ConflictState::Ready(conflicts) = &self.conflicts else {
-            return div().child("No conflicts.").into_any_element();
+            return div().into_any_element();
         };
         if conflicts.is_empty() {
-            return div().child("No conflicts.").into_any_element();
+            return div().into_any_element();
         }
         let locker = cx.entity();
         let groups = conflicts.iter().map(|conflict| {
@@ -254,16 +302,27 @@ impl Locker {
                 .id(SharedString::from(format!("conflict-item-{item_id}")))
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(format!("Conflict for {item_id}"))
+                .gap(px(8.))
+                .p(px(12.))
+                .rounded(radius_lg)
+                .border_1()
+                .border_color(border)
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted_foreground)
+                        .child(format!("Conflict for {item_id}")),
+                )
                 .child(radio_group)
                 .child(
                     error
-                        .map(|message| div().child(message))
+                        .map(|message| div().text_sm().text_color(danger).child(message))
                         .unwrap_or_else(div),
                 )
                 .child(
                     Button::new(SharedString::from(format!("resolve-{item_id}")))
+                        .primary()
+                        .small()
                         .label("Resolve")
                         .disabled(selected.is_none())
                         .on_click(move |_, window, app| {
@@ -277,7 +336,13 @@ impl Locker {
             .id("conflicts-panel")
             .flex()
             .flex_col()
-            .gap_2()
+            .gap(px(12.))
+            .p(px(16.))
+            .rounded(radius_lg)
+            .border_1()
+            .border_color(border)
+            .bg(card_bg)
+            .child(header(format!("Conflicts ({})", conflicts.len())))
             .children(groups)
             .into_any_element()
     }

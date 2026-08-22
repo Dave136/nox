@@ -18,6 +18,7 @@ macro_rules! icons {
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 const ICONS: &[(&str, &[u8])] = icons![
+    "key-square",
     "window-maximize",
     "window-minimize",
     "window-restore",
@@ -27,6 +28,7 @@ const ICONS: &[(&str, &[u8])] = icons![
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IconName {
+    KeySquare,
     Search,
     WindowMaximize,
     WindowMinimize,
@@ -36,6 +38,7 @@ pub enum IconName {
 
 fn get_icon_name(name: &IconName) -> &'static str {
     match name {
+        IconName::KeySquare => "key-square.svg",
         IconName::Search => "search.svg",
         IconName::WindowMaximize => "window-maximize.svg",
         IconName::WindowMinimize => "window-minimize.svg",

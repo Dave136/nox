@@ -51,6 +51,10 @@ pub struct WindowControls {
     pub(crate) palette_open: bool,
     pub(crate) prior_focus: Option<FocusHandle>,
     command_handler: CommandHandler,
+    /// Whether the command search trigger is shown. It only makes sense once
+    /// there's a vault open to search within — kept hidden on the create/unlock
+    /// screens rather than shown-but-empty.
+    authenticated: bool,
 }
 
 impl WindowControls {
@@ -61,6 +65,17 @@ impl WindowControls {
             palette_open: false,
             prior_focus: None,
             command_handler: Rc::new(|_, _, _| {}),
+            authenticated: false,
+        }
+    }
+
+    /// Show or hide the command search trigger. Called on every render from
+    /// the owning `Locker` view so this always reflects `AppState`, with no
+    /// separate transition site to keep in sync.
+    pub fn set_authenticated(&mut self, authenticated: bool, cx: &mut Context<Self>) {
+        if self.authenticated != authenticated {
+            self.authenticated = authenticated;
+            cx.notify();
         }
     }
 
@@ -73,6 +88,9 @@ impl WindowControls {
     }
 
     pub fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.authenticated {
+            return;
+        }
         if self.palette_open && window.has_active_dialog(cx) {
             self.command_search.update(cx, |input, cx| {
                 input.set_query("", window, cx);
@@ -239,19 +257,8 @@ impl WindowControls {
         let drag_right = cx.listener(|_, _: &MouseDownEvent, window, _| {
             window.start_window_move();
         });
-
-        rsx! {
-            <div id="window-controls-shell" flex items_center justify_between w_full h={px(36.)} px={px(8.)} gap={px(4.)}>
-                <div flex items_center gap={px(4.)}>
-                    {self.render_file_menu(cx)}
-                    {self.render_help_menu(cx)}
-                </div>
-                <div
-                    flex_1
-                    h_full
-                    debugSelector={|| "window-titlebar-drag-left".to_owned()}
-                    onMouseDown={(MouseButton::Left, drag_left)}
-                />
+        let search_trigger = if self.authenticated {
+            rsx! {
                 <div items_center justify_center gap={px(8.)}>
                     <Button
                         base={Button::new("window-command-palette-trigger")
@@ -271,6 +278,25 @@ impl WindowControls {
                         </div>
                     </Button>
                 </div>
+            }
+            .into_any_element()
+        } else {
+            div().into_any_element()
+        };
+
+        rsx! {
+            <div id="window-controls-shell" flex items_center justify_between w_full h={px(36.)} px={px(8.)} gap={px(4.)}>
+                <div flex items_center gap={px(4.)}>
+                    {self.render_file_menu(cx)}
+                    {self.render_help_menu(cx)}
+                </div>
+                <div
+                    flex_1
+                    h_full
+                    debugSelector={|| "window-titlebar-drag-left".to_owned()}
+                    onMouseDown={(MouseButton::Left, drag_left)}
+                />
+                {search_trigger}
                 <div
                     flex_1
                     h_full

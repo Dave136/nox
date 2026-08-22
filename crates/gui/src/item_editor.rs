@@ -1,8 +1,8 @@
 use super::{AppState, Locker};
-use gpui::{AnyElement, Context, Entity, SharedString, Window, div, prelude::*};
+use gpui::{AnyElement, Context, Entity, FontWeight, SharedString, Window, div, prelude::*, px};
 use gpui_component::{
-    Disableable, WindowExt,
-    button::Button,
+    ActiveTheme, Disableable, Sizable, WindowExt,
+    button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     input::{Input, InputState, Textarea, TextareaState},
     popover::Popover,
@@ -392,10 +392,24 @@ impl Locker {
         &mut self,
         locker: Entity<Locker>,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = cx.theme();
+        let border = theme.border;
+        let foreground = theme.foreground;
+        let muted_foreground = theme.muted_foreground;
+        let danger = theme.danger;
+        let card_bg = theme.background;
+        let radius_lg = theme.radius_lg;
+
         let Some(editor) = self.item_editor.as_ref() else {
             return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .text_color(muted_foreground)
                 .child("Select an item or create a new one.")
                 .into_any_element();
         };
@@ -444,7 +458,7 @@ impl Locker {
                 })
         };
         let generator = Popover::new("password-generator")
-            .trigger(Button::new("generate-password").label("Generate password"))
+            .trigger(Button::new("generate-password").ghost().xsmall().label("Generate…"))
             .open(generator_open)
             .on_open_change(move |open, _, app| {
                 locker_for_open.update(app, |locker, cx| locker.set_generator_open(*open, cx));
@@ -452,61 +466,86 @@ impl Locker {
             .content(move |_popover, _window, _cx| {
                 let preview = generated.clone().unwrap_or_else(|| "Click Generate".into());
                 div()
-                    .p_2()
+                    .p(px(12.))
+                    .w(px(240.))
                     .flex()
                     .flex_col()
-                    .gap_2()
+                    .gap(px(10.))
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child("Password generator")
                     .child(Input::new(&length_input))
-                    .child(class_checkbox(
-                        "generator-lower",
-                        "Lowercase",
-                        CharClasses::LOWER,
-                    ))
-                    .child(class_checkbox(
-                        "generator-upper",
-                        "Uppercase",
-                        CharClasses::UPPER,
-                    ))
-                    .child(class_checkbox(
-                        "generator-digits",
-                        "Digits",
-                        CharClasses::DIGITS,
-                    ))
-                    .child(class_checkbox(
-                        "generator-symbols",
-                        "Symbols",
-                        CharClasses::SYMBOLS,
-                    ))
-                    .child(preview)
                     .child(
-                        Button::new("regenerate-password")
-                            .label("Generate")
-                            .disabled(classes.is_empty())
-                            .on_click({
-                                let locker = locker_for_generate.clone();
-                                move |_, _, app| {
-                                    locker.update(app, |locker, cx| {
-                                        locker.generate_editor_password(cx)
-                                    });
-                                }
-                            }),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .font_weight(FontWeight::NORMAL)
+                            .child(class_checkbox(
+                                "generator-lower",
+                                "Lowercase",
+                                CharClasses::LOWER,
+                            ))
+                            .child(class_checkbox(
+                                "generator-upper",
+                                "Uppercase",
+                                CharClasses::UPPER,
+                            ))
+                            .child(class_checkbox(
+                                "generator-digits",
+                                "Digits",
+                                CharClasses::DIGITS,
+                            ))
+                            .child(class_checkbox(
+                                "generator-symbols",
+                                "Symbols",
+                                CharClasses::SYMBOLS,
+                            )),
                     )
                     .child(
-                        Button::new("use-generated-password")
-                            .label("Use this password")
-                            .on_click({
-                                let locker = locker_for_use.clone();
-                                move |_, window, app| {
-                                    locker.update(app, |locker, cx| {
-                                        locker.use_generated_password(window, cx)
-                                    });
-                                }
-                            }),
+                        div()
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(muted_foreground)
+                            .truncate()
+                            .child(preview),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(
+                                Button::new("regenerate-password")
+                                    .outline()
+                                    .small()
+                                    .label("Generate")
+                                    .disabled(classes.is_empty())
+                                    .on_click({
+                                        let locker = locker_for_generate.clone();
+                                        move |_, _, app| {
+                                            locker.update(app, |locker, cx| {
+                                                locker.generate_editor_password(cx)
+                                            });
+                                        }
+                                    }),
+                            )
+                            .child(
+                                Button::new("use-generated-password")
+                                    .primary()
+                                    .small()
+                                    .label("Use this password")
+                                    .on_click({
+                                        let locker = locker_for_use.clone();
+                                        move |_, window, app| {
+                                            locker.update(app, |locker, cx| {
+                                                locker.use_generated_password(window, cx)
+                                            });
+                                        }
+                                    }),
+                            ),
                     )
                     .into_any_element()
             });
-        let type_group = RadioGroup::vertical("item-type")
+        let type_group = RadioGroup::horizontal("item-type")
             .children([
                 Radio::new("login-type").label("Login"),
                 Radio::new("note-type").label("Secure note"),
@@ -520,22 +559,74 @@ impl Locker {
                 };
                 locker_for_type.update(app, |locker, cx| locker.set_editor_type(item_type, cx));
             });
+
+        let field_label = move |text: &'static str| {
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(foreground)
+                .child(text)
+        };
+        let delete_button = if matches!(mode, EditorMode::Create) {
+            div().into_any_element()
+        } else {
+            Button::new("delete-item")
+                .danger()
+                .outline()
+                .small()
+                .label("Delete")
+                .on_click({
+                    let locker = locker.clone();
+                    move |_, window, app| {
+                        locker.update(app, |locker, cx| {
+                            if let Some(editor) = locker.item_editor.as_ref()
+                                && let EditorMode::Edit(item_id) | EditorMode::Restore(item_id) =
+                                    editor.mode
+                            {
+                                locker.open_delete_confirmation(item_id, window, cx);
+                            }
+                        });
+                    }
+                })
+                .into_any_element()
+        };
+
         let mut content = div()
             .id("item-editor")
             .flex()
             .flex_col()
-            .gap_2()
-            .p_3()
+            .gap(px(20.))
+            .p(px(20.))
+            .rounded(radius_lg)
+            .border_1()
+            .border_color(border)
+            .bg(card_bg)
             .flex_1()
-            .child(type_group)
-            .child(Input::new(&title));
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(type_group)
+                    .child(delete_button),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(field_label("Title"))
+                    .child(Input::new(&title)),
+            );
         if item_type == ItemType::Login {
             let copy_buttons = match mode {
                 EditorMode::Edit(item_id) | EditorMode::Restore(item_id) => div()
                     .flex()
-                    .gap_1()
+                    .gap(px(8.))
                     .child(
                         Button::new("copy-username")
+                            .ghost()
+                            .xsmall()
                             .label("Copy username")
                             .on_click({
                                 let locker = locker.clone();
@@ -548,6 +639,8 @@ impl Locker {
                     )
                     .child(
                         Button::new("copy-password")
+                            .ghost()
+                            .xsmall()
                             .label("Copy password")
                             .on_click({
                                 let locker = locker.clone();
@@ -561,42 +654,64 @@ impl Locker {
                 EditorMode::Create => div(),
             };
             content = content
-                .child(Input::new(&username))
-                .child(Input::new(&password).mask_toggle())
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(field_label("Username"))
+                        .child(Input::new(&username)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(field_label("Password"))
+                                .child(generator),
+                        )
+                        .child(Input::new(&password).mask_toggle()),
+                )
                 .child(copy_buttons)
-                .child(Textarea::new(&uris));
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(field_label("URIs"))
+                        .child(Textarea::new(&uris)),
+                );
         }
-        content = content.child(Textarea::new(&notes));
+        content = content.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(field_label("Notes"))
+                .child(Textarea::new(&notes)),
+        );
         if let Some(error) = save_error {
-            content = content.child(div().child(error));
+            content = content.child(div().text_sm().text_color(danger).child(error));
         }
         content
-            .child(generator)
             .child(
                 div()
                     .flex()
-                    .gap_2()
-                    .child(Button::new("save-item").label(save_label).on_click({
+                    .justify_end()
+                    .pt(px(4.))
+                    .border_t_1()
+                    .border_color(border)
+                    .child(Button::new("save-item").primary().label(save_label).on_click({
                         let locker = locker.clone();
                         move |_, window, app| {
                             locker.update(app, |locker, cx| locker.save_item(window, cx));
                         }
-                    }))
-                    .when(!matches!(mode, EditorMode::Create), |row| {
-                        row.child(Button::new("delete-item").label("Delete").on_click({
-                            let locker = locker.clone();
-                            move |_, window, app| {
-                                locker.update(app, |locker, cx| {
-                                    if let Some(editor) = locker.item_editor.as_ref()
-                                        && let EditorMode::Edit(item_id)
-                                        | EditorMode::Restore(item_id) = editor.mode
-                                    {
-                                        locker.open_delete_confirmation(item_id, window, cx);
-                                    }
-                                });
-                            }
-                        }))
-                    }),
+                    })),
             )
             .into_any_element()
     }

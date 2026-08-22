@@ -3,7 +3,7 @@ use gpui::{
     AnyElement, Context, Entity, PathPromptOptions, SharedString, Task, Window, div, prelude::*,
 };
 use gpui_component::{
-    Disableable, WindowExt,
+    ActiveTheme, Disableable, Sizable, WindowExt,
     button::Button,
     input::{Input, InputState},
 };
@@ -495,27 +495,41 @@ impl Locker {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let busy = !self.backup.is_idle();
+        let danger = cx.theme().danger;
+        let muted_foreground = cx.theme().muted_foreground;
         let restore = Button::new("restore-backup")
+            .small()
             .label("Restore backup")
             .disabled(busy)
             .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)));
-        let mut row = div().flex().gap_1().child(restore);
+        let mut row = div().flex().items_center().gap_2().child(restore);
         if matches!(self.state, AppState::Unlocked(_)) {
             row = row.child(
                 Button::new("export-backup")
+                    .small()
                     .label("Export backup")
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| this.begin_export(window, cx))),
             );
         }
-        if let BackupOperation::Succeeded(message) | BackupOperation::Failed(message) =
-            &self.backup.operation
-        {
-            row = row.child(message.clone());
+        if let BackupOperation::Failed(message) = &self.backup.operation {
+            row = row.child(div().text_sm().text_color(danger).child(message.clone()));
+        } else if let BackupOperation::Succeeded(message) = &self.backup.operation {
+            row = row.child(
+                div()
+                    .text_sm()
+                    .text_color(muted_foreground)
+                    .child(message.clone()),
+            );
         } else if let BackupOperation::AwaitingRestoreConfirmation { archive_path } =
             &self.backup.operation
         {
-            row = row.child(format!("Restore: {}", archive_path.display()));
+            row = row.child(
+                div()
+                    .text_sm()
+                    .text_color(muted_foreground)
+                    .child(format!("Restore: {}", archive_path.display())),
+            );
         }
         row.into_any_element()
     }
