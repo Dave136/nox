@@ -18,12 +18,50 @@ macro_rules! icons {
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 const ICONS: &[(&str, &[u8])] = icons![
+    "arrow-left-right",
+    "bell",
+    "bold",
+    "calendar-days",
+    "check",
+    "circle-user-around",
+    "clock-3",
+    "cloud-check",
+    "code",
+    "database",
+    "ellipsis",
+    "ellipsis-vertical",
+    "external-link",
+    "eye-off",
+    "file-lock",
+    "file-sliders",
+    "folder-closed",
+    "globe",
+    "house",
+    "italic",
+    "key-round",
     "key-square",
+    "lightbulb",
+    "list",
+    "lock-keyhole",
+    "lock-keyhole-open",
+    "notebook-pen",
+    "oalette",
+    "pencil",
+    "pencil-sparkles",
+    "plus",
+    "refresh-cw",
+    "scan-eye",
+    "search",
+    "settings",
+    "shield-check",
+    "star",
+    "tag",
+    "user-round",
+    "user-round-plus",
     "window-maximize",
     "window-minimize",
     "window-restore",
-    "x",
-    "search"
+    "x"
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,17 +103,22 @@ pub fn icon(name: IconName, size: Option<f32>, color: Option<Hsla>) -> Svg {
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        Ok(ICONS
-            .iter()
-            .find(|(name, _)| *name == path)
-            .map(|(_, bytes)| Cow::Borrowed(*bytes)))
+        if let Some((_, bytes)) = ICONS.iter().find(|(name, _)| *name == path) {
+            return Ok(Some(Cow::Borrowed(*bytes)));
+        }
+        // Fall back to gpui-component's bundled icon set (settings, copy,
+        // check, book-open, ...) so components like Sidebar/Sheet/Button
+        // that reference `gpui_component::IconName` resolve too.
+        gpui_component_assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        Ok(ICONS
+        let mut names: Vec<SharedString> = ICONS
             .iter()
             .filter(|(name, _)| name.starts_with(path))
             .map(|(name, _)| SharedString::from(*name))
-            .collect())
+            .collect();
+        names.extend(gpui_component_assets::Assets.list(path)?);
+        Ok(names)
     }
 }
