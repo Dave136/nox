@@ -1,6 +1,5 @@
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, Keystroke, MouseButton, MouseDownEvent, Window,
-    actions, div, prelude::*, px,
+    App, Context, Entity, FocusHandle, Focusable, Keystroke, MouseButton, MouseDownEvent, Window, actions, div, hsla, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt,
@@ -12,7 +11,12 @@ use gpui_component::{
 use gpui_rsx::rsx;
 use std::{cell::Cell, rc::Rc};
 
-use crate::assets::{IconName, icon};
+use crate::{app::{CIPHER_BACKGROUND, CIPHER_FOREGROUND_MUTED}, assets::{IconName, icon, logo}};
+
+const CIPHER_BORDER: u32 = 0x292D35;
+const CIPHER_FOREGROUND: u32 = 0xE5E8F0;
+const CIPHER_MUTED: u32 = 0x8F98A8;
+const CIPHER_DANGER: u32 = 0xA9787D;
 
 // use crate::assets::{IconName};
 
@@ -206,6 +210,7 @@ impl WindowControls {
                 base={Button::new("window-file-menu")}
                 label={"File"}
                 bg={cx.theme().transparent}
+                textColor={rgb(CIPHER_MUTED)}
                 border_0
                 // Keep title-bar controls out of the vault form's tab order; Ctrl+P
                 // provides the keyboard route to every native window command.
@@ -235,6 +240,7 @@ impl WindowControls {
                 base={Button::new("window-help-menu")}
                 label={"Help"}
                 bg={cx.theme().transparent}
+                textColor={rgb(CIPHER_MUTED)}
                 border_0
                 // Keep title-bar controls out of the vault form's tab order; Ctrl+P
                 // provides the keyboard route to every native window command.
@@ -265,12 +271,12 @@ impl WindowControls {
                             .debug_selector(|| "window-command-palette-trigger".to_owned())}
                         min_w={px(200.)}
                         onClick={open}
-                        bg={cx.theme().background}
+                        bg={rgb(CIPHER_BACKGROUND)}
                         border_color={cx.theme().input}
                         tab_stop={false}
                     >
                         <div flex items_center w_full gap={px(8.)}>
-                            {icon(IconName::Search, Some(14.), None)}
+                            {icon(IconName::Search, Some(14.), Some(rgb(CIPHER_FOREGROUND_MUTED).into()))}
                             <div flex_1 text_color={cx.theme().muted_foreground}>
                                 {"Search commands…"}
                             </div>
@@ -285,8 +291,23 @@ impl WindowControls {
         };
 
         rsx! {
-            <div id="window-controls-shell" flex items_center justify_between w_full h={px(36.)} px={px(8.)} gap={px(4.)}>
+            <div
+                id="window-controls-shell"
+                flex
+                items_center
+                justify_between
+                w_full
+                h={px(44.)}
+                px={px(12.)}
+                gap={px(4.)}
+                bg={rgb(CIPHER_BACKGROUND)}
+                border_b_1
+                borderColor={rgb(CIPHER_BORDER)}
+            >
                 <div flex items_center gap={px(4.)}>
+                    <div flex items_center gap={px(7.)} mr={px(8.)} textColor={rgb(CIPHER_FOREGROUND)}>
+                        {logo(18., rgb(CIPHER_FOREGROUND).into())}
+                    </div>
                     {self.render_file_menu(cx)}
                     {self.render_help_menu(cx)}
                 </div>
@@ -312,7 +333,7 @@ impl WindowControls {
                         bg={cx.theme().transparent}
                         border_0
                     >
-                        {icon(IconName::WindowMinimize, Some(12.), None)}
+                        {icon(IconName::WindowMinimize, Some(12.), Some(rgb(CIPHER_MUTED).into()))}
                     </Button>
                     <Button
                         base={Button::new("window-maximize")}
@@ -321,7 +342,7 @@ impl WindowControls {
                         border_0
                         onClick={self.command_callback(WindowCommand::ToggleMaximize, cx)}
                     >
-                        {icon(IconName::WindowMaximize, Some(12.), None)}
+                        {icon(IconName::WindowMaximize, Some(12.), Some(rgb(CIPHER_MUTED).into()))}
                     </Button>
                     <Button
                         base={Button::new("window-close")}
@@ -330,7 +351,7 @@ impl WindowControls {
                         border_0
                         onClick={self.command_callback(WindowCommand::Close, cx)}
                     >
-                        {icon(IconName::X, Some(12.), None)}
+                        {icon(IconName::X, Some(12.), Some(rgb(CIPHER_DANGER).into()))}
                     </Button>
                 </div>
             </div>

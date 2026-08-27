@@ -1,21 +1,113 @@
+//! The "All items" / "Logins" / "Secure notes" split view: a real-time
+//! filterable, searchable, sortable list of vault items on the left and the
+//! selected item's detail panel (`detail.rs`) on the right. Matches the
+//! Pencil "Nox — All Items · No Selection" frame.
+
+use super::nav::ActiveView;
 use super::{AppState, Locker};
 use gpui::{
     AnyElement, Context, ElementId, Entity, FontWeight, KeyDownEvent, SharedString, Subscription,
-    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
+    UniformListScrollHandle, Window, div, prelude::*, px, rgb, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Sizable,
-    button::{Button, ButtonVariants as _},
+    Disableable, Sizable,
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
 };
-use locker_core::{ItemId, ItemPayload, VaultError};
+use locker_core::{ItemId, ItemPayload, ItemType, VaultError};
+use std::collections::HashSet;
 
 use crate::assets::{IconName, icon};
+
+/// Colors from the Pencil "All Items Split Workspace" frame that don't
+/// already have a `super::CIPHER_*` equivalent.
+const LIST_HEADER_BG: u32 = 0x191C21;
+const ITEM_ICON_BG: u32 = 0x282D35;
+const TYPE_PILL_ACTIVE_BG: u32 = 0x2A2F38;
+const MUTED_COUNT: u32 = 0x697482;
+const COLUMN_HEADER: u32 = 0x6F7886;
+
+/// Column widths shared by the list header row and every item row, so the
+/// two stay aligned.
+const COL_TYPE_W: f32 = 110.;
+const COL_UPDATED_W: f32 = 120.;
+const COL_ACTIONS_W: f32 = 64.;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ListLoadState {
     Ready,
     Failed(SharedString),
+}
+
+/// How the item list is ordered. Both are real orderings over real fields —
+/// there's no fabricated "relevance" sort.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SortMode {
+    Updated,
+    Name,
+}
+
+impl SortMode {
+    fn label(self) -> &'static str {
+        match self {
+            SortMode::Updated => "Updated",
+            SortMode::Name => "Name",
+        }
+    }
+
+    fn toggled(self) -> Self {
+        match self {
+            SortMode::Updated => SortMode::Name,
+            SortMode::Name => SortMode::Updated,
+        }
+    }
+}
+
+/// A login's password health, computed live from the plaintext passwords
+/// already held in memory once the vault is unlocked — no new crypto or
+/// storage, just two real (if simple) heuristics. There's no "Personal"/
+/// "Work" equivalent in the Pencil "Login Smart Filters" row because there's
+/// no tagging concept in the data model to honestly back it with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LoginHealth {
+    Weak,
+    Reused,
+}
+
+/// Under 8 characters. A crude length-only heuristic, not a real entropy
+/// estimate — upgrade to something like zxcvbn if that's ever asked for.
+fn is_weak_password(password: &str) -> bool {
+    !password.is_empty() && password.chars().count() < 8
+}
+
+/// Every password (non-empty) shared by more than one login.
+pub(crate) fn duplicate_passwords(items: &[(ItemId, ItemPayload)]) -> HashSet<String> {
+    let mut seen = HashSet::new();
+    let mut dupes = HashSet::new();
+    for (_, payload) in items {
+        if payload.item_type != ItemType::Login || payload.password.is_empty() {
+            continue;
+        }
+        if !seen.insert(payload.password.clone()) {
+            dupes.insert(payload.password.clone());
+        }
+    }
+    dupes
+}
+
+/// `(label, color)` for a login's password health, or `("—", muted)` when it
+/// has no password set yet.
+pub(crate) fn login_health(payload: &ItemPayload, dupes: &HashSet<String>) -> (&'static str, u32) {
+    if payload.password.is_empty() {
+        return ("—", super::CIPHER_FOREGROUND_SUBTLE);
+    }
+    if dupes.contains(&payload.password) {
+        ("Reused", super::CIPHER_DANGER)
+    } else if is_weak_password(&payload.password) {
+        ("Weak", super::CIPHER_DANGER)
+    } else {
+        ("Strong", super::CIPHER_FOREGROUND_SECONDARY)
+    }
 }
 
 pub(crate) struct VaultListState {
@@ -28,6 +120,12 @@ pub(crate) struct VaultListState {
     pub(crate) selected: Option<ItemId>,
     pub(crate) deleted_expanded: bool,
     pub(crate) scroll_handle: UniformListScrollHandle,
+    /// Optional item type shown by the active sidebar view; `None` means all items.
+    pub(crate) type_filter: Option<ItemType>,
+    pub(crate) sort_mode: SortMode,
+    /// Only meaningful alongside `type_filter == Some(ItemType::Login)` — the
+    /// Logins view's "Weak"/"Reused" smart filters.
+    pub(crate) login_health_filter: Option<LoginHealth>,
     pub(crate) _search_subscription: Subscription,
 }
 
@@ -47,25 +145,74 @@ impl VaultListState {
                 Vec::new(),
             ),
         };
-        let filtered = (0..items.len()).collect();
         let _search_subscription =
             cx.subscribe(&search_input, |locker, _input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     locker.recompute_vault_list_filter(cx);
                 }
             });
-        Self {
+        let mut state = Self {
             load,
             items,
-            filtered,
+            filtered: Vec::new(),
             deleted_ids,
             search_input,
             search_query_lower: String::new(),
             selected: None,
             deleted_expanded: false,
             scroll_handle: UniformListScrollHandle::new(),
+            type_filter: None,
+            sort_mode: SortMode::Updated,
+            login_health_filter: None,
             _search_subscription,
+        };
+        state.rebuild_filter();
+        state
+    }
+
+    /// Switch which item type the list shows (or show all items),
+    /// clearing the current selection since it likely belongs to the other type.
+    pub(crate) fn set_type_filter(&mut self, item_type: Option<ItemType>) {
+        if self.type_filter == item_type && self.login_health_filter.is_none() {
+            return;
         }
+        self.type_filter = item_type;
+        self.login_health_filter = None;
+        self.selected = None;
+        self.rebuild_filter();
+    }
+
+    pub(crate) fn set_login_health_filter(&mut self, filter: Option<LoginHealth>) {
+        if self.login_health_filter == filter {
+            return;
+        }
+        self.login_health_filter = filter;
+        self.selected = None;
+        self.rebuild_filter();
+    }
+
+    pub(crate) fn toggle_sort_mode(&mut self) {
+        self.sort_mode = self.sort_mode.toggled();
+        self.rebuild_filter();
+    }
+
+    pub(crate) fn weak_login_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|(_, payload)| {
+                payload.item_type == ItemType::Login && is_weak_password(&payload.password)
+            })
+            .count()
+    }
+
+    pub(crate) fn reused_login_count(&self) -> usize {
+        let dupes = duplicate_passwords(&self.items);
+        self.items
+            .iter()
+            .filter(|(_, payload)| {
+                payload.item_type == ItemType::Login && dupes.contains(&payload.password)
+            })
+            .count()
     }
 
     pub(crate) fn recompute_filter(&mut self, query: String) {
@@ -77,22 +224,54 @@ impl VaultListState {
     }
 
     fn rebuild_filter(&mut self) {
-        self.filtered = self
+        let dupes = duplicate_passwords(&self.items);
+        let mut filtered: Vec<usize> = self
             .items
             .iter()
             .enumerate()
             .filter(|(_, (_, payload))| {
-                payload
-                    .title
-                    .to_lowercase()
-                    .contains(&self.search_query_lower)
-                    || payload
-                        .username
+                self.type_filter
+                    .is_none_or(|item_type| payload.item_type == item_type)
+                    && self.login_health_filter.is_none_or(|health| {
+                        payload.item_type == ItemType::Login
+                            && match health {
+                                LoginHealth::Weak => is_weak_password(&payload.password),
+                                LoginHealth::Reused => dupes.contains(&payload.password),
+                            }
+                    })
+                    && (payload
+                        .title
                         .to_lowercase()
                         .contains(&self.search_query_lower)
+                        || payload
+                            .username
+                            .to_lowercase()
+                            .contains(&self.search_query_lower)
+                        || (payload.item_type == ItemType::SecureNote
+                            && payload
+                                .notes
+                                .to_lowercase()
+                                .contains(&self.search_query_lower)))
             })
             .map(|(index, _)| index)
             .collect();
+        match self.sort_mode {
+            SortMode::Updated => {
+                filtered.sort_by(|&a, &b| {
+                    self.items[b].1.updated_at.cmp(&self.items[a].1.updated_at)
+                });
+            }
+            SortMode::Name => {
+                filtered.sort_by(|&a, &b| {
+                    self.items[a]
+                        .1
+                        .title
+                        .to_lowercase()
+                        .cmp(&self.items[b].1.title.to_lowercase())
+                });
+            }
+        }
+        self.filtered = filtered;
     }
 
     pub(crate) fn upsert(&mut self, item_id: ItemId, payload: ItemPayload) {
@@ -130,6 +309,248 @@ impl VaultListState {
                 .position(|index| self.items[*index].0 == selected)
         })
     }
+
+    fn type_count(&self, item_type: ItemType) -> usize {
+        self.items
+            .iter()
+            .filter(|(_, payload)| payload.item_type == item_type)
+            .count()
+    }
+}
+
+/// The login's site host if it has one, the secure note's first line, or a
+/// bare type name — all real fields, no placeholder text pretending to be data.
+fn login_website_host(payload: &ItemPayload) -> Option<String> {
+    let uri = payload.uris.first()?;
+    let host = uri
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .filter(|host| !host.is_empty())?;
+    Some(host.to_owned())
+}
+
+fn row_subtitle(payload: &ItemPayload) -> String {
+    match payload.item_type {
+        ItemType::Login => login_website_host(payload).unwrap_or_else(|| {
+            if payload.username.is_empty() {
+                "—".to_owned()
+            } else {
+                payload.username.clone()
+            }
+        }),
+        ItemType::SecureNote => payload
+            .notes
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .unwrap_or("No additional details")
+            .to_owned(),
+    }
+}
+
+/// The Logins view's row subtitle: "username · website" (Pencil "Login
+/// Subtitle" nodes), falling back gracefully when either half is missing.
+fn login_row_subtitle(payload: &ItemPayload) -> String {
+    let host = login_website_host(payload);
+    match (payload.username.is_empty(), host) {
+        (false, Some(host)) => format!("{} · {host}", payload.username),
+        (false, None) => payload.username.clone(),
+        (true, Some(host)) => host,
+        (true, None) => "—".to_owned(),
+    }
+}
+
+/// A type-filter pill in the "All Items Type Filters" row. `count` is always
+/// the real total for that type in the vault (unaffected by search), matching
+/// the design's counts. Cards/Identities pass `enabled: false` since those
+/// item types don't exist in this app's data model yet — shown at 0 rather
+/// than hidden, same as elsewhere in the app.
+fn type_filter_pill(
+    id: &'static str,
+    label: &'static str,
+    count: usize,
+    count_color: Option<u32>,
+    active: bool,
+    enabled: bool,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    cx: &mut Context<Locker>,
+) -> AnyElement {
+    let label_color = rgb(if active {
+        super::CIPHER_FOREGROUND
+    } else {
+        super::CIPHER_FOREGROUND_MUTED
+    });
+    let content = div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight(500.))
+                .text_color(label_color)
+                .child(label),
+        )
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(rgb(count_color.unwrap_or(MUTED_COUNT)))
+                .child(format!("{count}")),
+        );
+    let (bg, hover_bg) = if active {
+        (TYPE_PILL_ACTIVE_BG, TYPE_PILL_ACTIVE_BG)
+    } else {
+        (super::CIPHER_SURFACE, super::CIPHER_SURFACE_RAISED)
+    };
+    let variant = ButtonCustomVariant::new(cx)
+        .color(rgb(bg).into())
+        .hover(rgb(hover_bg).into());
+    Button::new(id)
+        .disabled(!enabled)
+        .custom(variant)
+        .h(px(28.))
+        .px(px(9.))
+        .rounded(px(6.))
+        .on_click(on_click)
+        .child(content)
+        .into_any_element()
+}
+
+/// One item row's inner content: icon, title/subtitle, type, updated time,
+/// and a decorative "more" glyph (Edit/Delete already live one click away in
+/// the detail panel once selected, so this isn't wired to a second menu).
+///
+/// `w_full()` neutralizes `Button`'s own hardcoded `justify_center` on
+/// whichever button wraps this — see `nav.rs::sidebar_link` for the full
+/// explanation of that trick.
+#[allow(clippy::too_many_arguments)]
+fn item_row_content(
+    icon_path: &'static str,
+    title: String,
+    subtitle: String,
+    third_column: (String, u32),
+    updated: String,
+    selected: bool,
+) -> AnyElement {
+    let (third_label, third_color) = third_column;
+    // Matches the Pencil frame's selected-row treatment: the icon box
+    // brightens along with the row itself, not just the row background.
+    let icon_bg = if selected { 0x414854 } else { ITEM_ICON_BG };
+    div()
+        .flex()
+        .items_center()
+        .w_full()
+        .gap(px(14.))
+        .child(
+            div()
+                .size(px(32.))
+                .flex_shrink_0()
+                .rounded(px(8.))
+                .bg(rgb(icon_bg))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    gpui_component::Icon::empty()
+                        .path(icon_path)
+                        .size(px(15.))
+                        .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY)),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w(px(0.))
+                .gap(px(2.))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(super::CIPHER_FOREGROUND))
+                        .truncate()
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                        .truncate()
+                        .child(subtitle),
+                ),
+        )
+        .child(
+            div()
+                .w(px(COL_TYPE_W))
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(rgb(third_color))
+                .child(third_label),
+        )
+        .child(
+            div()
+                .w(px(COL_UPDATED_W))
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                .child(updated),
+        )
+        .child(
+            div()
+                .w(px(COL_ACTIONS_W))
+                .flex_shrink_0()
+                .flex()
+                .justify_end()
+                .child(
+                    gpui_component::Icon::empty()
+                        .path("icons/ellipsis.svg")
+                        .size(px(14.))
+                        .text_color(rgb(MUTED_COUNT)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// The list header row's column labels — same widths as `item_row_content`
+/// so header and rows stay aligned. Logins swaps "ITEM"/"TYPE" for
+/// "ACCOUNT"/"HEALTH", matching the Pencil "Logins List Header" frame.
+fn list_header_row(first_column: &'static str, third_column: &'static str) -> AnyElement {
+    let label = |text: &'static str| {
+        div()
+            .text_size(px(10.))
+            .font_weight(FontWeight(600.))
+            .text_color(rgb(COLUMN_HEADER))
+            .child(text)
+    };
+    div()
+        .flex()
+        .items_center()
+        .w_full()
+        .h(px(34.))
+        .px(px(14.))
+        .gap(px(14.))
+        .flex_shrink_0()
+        .bg(rgb(LIST_HEADER_BG))
+        .child(div().flex_1().min_w(px(0.)).child(label(first_column)))
+        .child(
+            div()
+                .w(px(COL_TYPE_W))
+                .flex_shrink_0()
+                .child(label(third_column)),
+        )
+        .child(
+            div()
+                .w(px(COL_UPDATED_W))
+                .flex_shrink_0()
+                .child(label("UPDATED")),
+        )
+        .child(div().w(px(COL_ACTIONS_W)).flex_shrink_0())
+        .into_any_element()
 }
 
 impl Locker {
@@ -146,8 +567,14 @@ impl Locker {
     }
 
     pub(crate) fn open_create_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.item_editor = Some(super::item_editor::ItemEditorState::for_create(window, cx));
-        cx.notify();
+        let mut editor = super::item_editor::ItemEditorState::for_create(window, cx);
+        editor.item_type = self.active_view.item_type().unwrap_or(ItemType::Login);
+        self.item_editor = Some(editor);
+        if self.uses_secure_note_workspace() || self.uses_login_workspace() {
+            cx.notify();
+        } else {
+            self.open_item_editor_sheet(window, cx);
+        }
     }
 
     pub(crate) fn open_editor_for_item(
@@ -171,6 +598,7 @@ impl Locker {
                     list.selected = Some(item_id);
                 }
                 self.item_editor = Some(editor);
+                self.open_item_editor_sheet(window, cx);
             }
             Err(error) => {
                 if let Some(list) = self.vault_list.as_mut() {
@@ -192,127 +620,465 @@ impl Locker {
         let current = list.selected_index().unwrap_or(0) as isize;
         let next = (current + delta).clamp(0, list.filtered.len() as isize - 1) as usize;
         let item_id = list.items[list.filtered[next]].0;
-        list.selected = Some(item_id);
         list.scroll_handle
             .scroll_to_item(next, gpui::ScrollStrategy::Center);
-        if delta == 0 {
-            self.open_editor_for_item(item_id, false, window, cx);
+        self.select_item(item_id, cx);
+        let _ = window;
+    }
+
+    /// Select an item to show its read-only detail panel, resetting any
+    /// transient per-item UI state (password reveal, copy feedback).
+    pub(crate) fn select_item(&mut self, item_id: ItemId, cx: &mut Context<Self>) {
+        if let Some(list) = self.vault_list.as_mut() {
+            list.selected = Some(item_id);
         }
+        self.reveal_password = false;
         cx.notify();
     }
 
+    /// The search/filter/sort bar above the split view — full width, sitting
+    /// above both the list and detail panes (Pencil "All Items Split Toolbar").
+    pub(crate) fn render_vault_list_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(list) = self.vault_list.as_ref() else {
+            return div().into_any_element();
+        };
+        let search_input = list.search_input.clone();
+        let sort_label = list.sort_mode.label();
+        let locker = cx.entity();
+
+        let search = Input::new(&search_input)
+            .prefix(icon(
+                IconName::Search,
+                Some(15.),
+                Some(rgb(super::CIPHER_FOREGROUND_SUBTLE).into()),
+            ))
+            .h(px(38.))
+            .w(px(360.))
+            .bg(rgb(super::CIPHER_SURFACE))
+            .border_color(rgb(0x353C47))
+            .rounded(px(8.));
+
+        let toolbar_button_content = |icon_path: &'static str, label: SharedString| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    gpui_component::Icon::empty()
+                        .path(icon_path)
+                        .size(px(14.))
+                        .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY)),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight(500.))
+                        .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY))
+                        .child(label),
+                )
+        };
+
+        // ponytail: visual-only — there's no secondary filter facet (favorites,
+        // custom tags, ...) to narrow by yet beyond the type pills below.
+        let filter_button = Button::new("vault-list-filter")
+            .ghost()
+            .disabled(true)
+            .h(px(36.))
+            .px(px(11.))
+            .rounded(px(7.))
+            .bg(rgb(super::CIPHER_SURFACE))
+            .border_1()
+            .border_color(rgb(0x353C47))
+            .child(toolbar_button_content("icons/list-filter.svg", "Filter".into()));
+
+        let sort_button = Button::new("vault-list-sort")
+            .ghost()
+            .h(px(36.))
+            .px(px(11.))
+            .rounded(px(7.))
+            .bg(rgb(super::CIPHER_SURFACE))
+            .border_1()
+            .border_color(rgb(0x353C47))
+            .on_click(move |_, _window, app| {
+                locker.update(app, |locker, cx| {
+                    if let Some(list) = locker.vault_list.as_mut() {
+                        list.toggle_sort_mode();
+                    }
+                    cx.notify();
+                });
+            })
+            .child(toolbar_button_content(
+                "icons/arrow-up-down.svg",
+                sort_label.into(),
+            ));
+
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .h(px(40.))
+            .flex_shrink_0()
+            .child(search)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(filter_button)
+                    .child(sort_button),
+            )
+            .into_any_element()
+    }
+
+    /// The list pane itself: type filters, column header, and the scrollable
+    /// item rows. A self-contained card sitting next to the detail pane.
     pub(crate) fn render_vault_list(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = cx.theme();
-        let sidebar_bg = theme.muted;
-        let border = theme.border;
-        let foreground = theme.foreground;
-        let muted_foreground = theme.muted_foreground;
-        let danger = theme.danger;
-        let selected_bg = theme.list_active;
-        let selected_border = theme.list_active_border;
+        let card = |content: AnyElement| {
+            div()
+                .id("vault-list-panel")
+                .flex()
+                .flex_col()
+                .w(px(716.))
+                .flex_shrink_0()
+                .h_full()
+                .rounded(px(9.))
+                .bg(rgb(super::CIPHER_SURFACE))
+                .border_1()
+                .border_color(rgb(super::CIPHER_BORDER))
+                .overflow_hidden()
+                .child(content)
+        };
 
         let Some(list) = self.vault_list.as_ref() else {
-            return div()
-                .id("vault-list-panel")
-                .w(px(280.))
-                .h_full()
-                .flex_shrink_0()
-                .bg(sidebar_bg)
-                .border_r_1()
-                .border_color(border)
-                .p(px(16.))
-                .text_sm()
-                .text_color(muted_foreground)
-                .child("No vault loaded")
-                .into_any_element();
+            return card(
+                div()
+                    .p(px(16.))
+                    .text_sm()
+                    .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
+                    .child("No vault loaded")
+                    .into_any_element(),
+            )
+            .into_any_element();
         };
-        let search_input = list.search_input.clone();
+
         let load = list.load.clone();
         let item_count = list.filtered.len();
         let deleted_ids = list.deleted_ids.clone();
         let has_deleted = !deleted_ids.is_empty();
         let deleted_count = deleted_ids.len();
         let deleted_expanded = list.deleted_expanded;
+        let active_type = list.type_filter;
+        let health_filter = list.login_health_filter;
+        let all_count = list.items.len();
+        let logins_count = list.type_count(ItemType::Login);
+        let notes_count = list.type_count(ItemType::SecureNote);
+        let weak_count = list.weak_login_count();
+        let reused_count = list.reused_login_count();
+        let dupes_for_rows = duplicate_passwords(&list.items);
+        let is_logins_view = self.active_view == ActiveView::Logins;
+        let is_secure_notes_view = self.active_view == ActiveView::SecureNotes;
+        let (scope_total, scope_noun) = match active_type {
+            None => (all_count, "items"),
+            Some(ItemType::Login) => (logins_count, "logins"),
+            Some(ItemType::SecureNote) => (notes_count, "secure notes"),
+        };
         let locker = cx.entity();
-        let row_locker = locker.clone();
+
+        // The Logins view swaps the generic type-filter pills for its own
+        // "smart filters": real per-login password health, not a fabricated
+        // "Personal"/"Work" tag the data model has no concept of — see
+        // `LoginHealth`.
+        let filters_row = if is_logins_view {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .w_full()
+                .h(px(44.))
+                .px(px(12.))
+                .flex_shrink_0()
+                .child(type_filter_pill(
+                    "login-filter-all",
+                    "All logins",
+                    logins_count,
+                    None,
+                    health_filter.is_none(),
+                    true,
+                    {
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(list) = locker.vault_list.as_mut() {
+                                    list.set_login_health_filter(None);
+                                }
+                                cx.notify();
+                            });
+                        }
+                    },
+                    cx,
+                ))
+                .child(type_filter_pill(
+                    "login-filter-weak",
+                    "Weak",
+                    weak_count,
+                    Some(super::CIPHER_DANGER),
+                    health_filter == Some(LoginHealth::Weak),
+                    true,
+                    {
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(list) = locker.vault_list.as_mut() {
+                                    list.set_login_health_filter(Some(LoginHealth::Weak));
+                                }
+                                cx.notify();
+                            });
+                        }
+                    },
+                    cx,
+                ))
+                .child(type_filter_pill(
+                    "login-filter-reused",
+                    "Reused",
+                    reused_count,
+                    Some(super::CIPHER_DANGER),
+                    health_filter == Some(LoginHealth::Reused),
+                    true,
+                    {
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(list) = locker.vault_list.as_mut() {
+                                    list.set_login_health_filter(Some(LoginHealth::Reused));
+                                }
+                                cx.notify();
+                            });
+                        }
+                    },
+                    cx,
+                ))
+                .into_any_element()
+        } else if is_secure_notes_view {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .w_full()
+                .h(px(44.))
+                .px(px(12.))
+                .flex_shrink_0()
+                .child(type_filter_pill(
+                    "secure-note-filter-all",
+                    "All notes",
+                    notes_count,
+                    None,
+                    true,
+                    true,
+                    |_, _, _| {},
+                    cx,
+                ))
+                .child(type_filter_pill(
+                    "secure-note-filter-personal",
+                    "Personal",
+                    0,
+                    None,
+                    false,
+                    false,
+                    |_, _, _| {},
+                    cx,
+                ))
+                .child(type_filter_pill(
+                    "secure-note-filter-work",
+                    "Work",
+                    0,
+                    None,
+                    false,
+                    false,
+                    |_, _, _| {},
+                    cx,
+                ))
+                .child(type_filter_pill(
+                    "secure-note-filter-recovery",
+                    "Recovery",
+                    0,
+                    None,
+                    false,
+                    false,
+                    |_, _, _| {},
+                    cx,
+                ))
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .w_full()
+                .h(px(44.))
+                .px(px(12.))
+                .flex_shrink_0()
+                .child(type_filter_pill(
+                    "type-filter-all",
+                    "All",
+                    all_count,
+                    None,
+                    active_type.is_none(),
+                    true,
+                    {
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(list) = locker.vault_list.as_mut() {
+                                    list.set_type_filter(None);
+                                }
+                                cx.notify();
+                            });
+                        }
+                    },
+                    cx,
+                ))
+                .child(type_filter_pill(
+                    "type-filter-logins",
+                    "Logins",
+                    logins_count,
+                    None,
+                    active_type == Some(ItemType::Login),
+                    true,
+                    {
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(list) = locker.vault_list.as_mut() {
+                                    list.set_type_filter(Some(ItemType::Login));
+                                }
+                                cx.notify();
+                            });
+                        }
+                    },
+                    cx,
+                ))
+                // ponytail: Cards/IDs have no backing item type yet — shown at
+                // a real 0 rather than hidden, same convention as the sidebar.
+                .child(type_filter_pill(
+                    "type-filter-cards",
+                    "Cards",
+                    0,
+                    None,
+                    false,
+                    false,
+                    |_, _, _| {},
+                    cx,
+                ))
+                .child(type_filter_pill(
+                    "type-filter-notes",
+                    "Notes",
+                    notes_count,
+                    None,
+                    active_type == Some(ItemType::SecureNote),
+                    true,
+                    {
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(list) = locker.vault_list.as_mut() {
+                                    list.set_type_filter(Some(ItemType::SecureNote));
+                                }
+                                cx.notify();
+                            });
+                        }
+                    },
+                    cx,
+                ))
+                .child(type_filter_pill(
+                    "type-filter-ids",
+                    "IDs",
+                    0,
+                    None,
+                    false,
+                    false,
+                    |_, _, _| {},
+                    cx,
+                ))
+                .into_any_element()
+        };
+
+        let row_locker = cx.entity();
         let rows = uniform_list("vault-list-rows", item_count, move |range, _window, app| {
             let data = range
                 .filter_map(|index| {
                     let list = row_locker.read(app).vault_list.as_ref()?;
                     let item_index = *list.filtered.get(index)?;
                     let (item_id, payload) = list.items.get(item_index)?;
-                    Some((
-                        *item_id,
-                        payload.title.clone(),
-                        payload.username.clone(),
-                        list.selected == Some(*item_id),
-                    ))
+                    Some((*item_id, payload.clone(), list.selected == Some(*item_id)))
                 })
                 .collect::<Vec<_>>();
             data.into_iter()
-                .map(|(item_id, title, username, selected)| {
+                .map(|(item_id, payload, selected)| {
                     let row_id: ElementId =
                         SharedString::from(format!("vault-list-row-{item_id}")).into();
-                    let title_text = if title.is_empty() {
+                    let title = if payload.title.is_empty() {
                         "Untitled".to_owned()
                     } else {
-                        title
+                        payload.title.clone()
                     };
-                    let mut button = Button::new(row_id)
-                        .ghost()
+                    let icon_path = match payload.item_type {
+                        ItemType::Login => "icons/key-square.svg",
+                        ItemType::SecureNote => "icons/file-lock.svg",
+                    };
+                    let updated = super::relative_time(payload.updated_at);
+                    let (subtitle, third_column) = if is_logins_view {
+                        let (label, color) = login_health(&payload, &dupes_for_rows);
+                        (login_row_subtitle(&payload), (label.to_owned(), color))
+                    } else {
+                        let label = match payload.item_type {
+                            ItemType::Login => "Login",
+                            ItemType::SecureNote => "Secure note",
+                        };
+                        (
+                            row_subtitle(&payload),
+                            (label.to_owned(), super::CIPHER_FOREGROUND_SECONDARY),
+                        )
+                    };
+                    let content = item_row_content(
+                        icon_path,
+                        title,
+                        subtitle,
+                        third_column,
+                        updated,
+                        selected,
+                    );
+                    let (bg, hover_bg) = if selected {
+                        (super::CIPHER_SURFACE_RAISED, super::CIPHER_SURFACE_RAISED)
+                    } else {
+                        (super::CIPHER_SURFACE, 0x20242A)
+                    };
+                    let variant = ButtonCustomVariant::new(app)
+                        .color(rgb(bg).into())
+                        .hover(rgb(hover_bg).into());
+                    Button::new(row_id)
+                        .custom(variant)
                         .w_full()
-                        .h(px(52.))
-                        .justify_start()
-                        .px(px(10.))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.))
-                                .w_full()
-                                .overflow_hidden()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(foreground)
-                                        .truncate()
-                                        .child(title_text),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted_foreground)
-                                        .truncate()
-                                        .child(if username.is_empty() {
-                                            "—".to_owned()
-                                        } else {
-                                            username
-                                        }),
-                                ),
-                        );
-                    if selected {
-                        button = button
-                            .bg(selected_bg)
-                            .border_1()
-                            .border_color(selected_border);
-                    }
-                    button.on_click({
-                        let locker = row_locker.clone();
-                        move |_, window, app| {
-                            locker.update(app, |locker, cx| {
-                                locker.open_editor_for_item(item_id, false, window, cx)
-                            });
-                        }
-                    })
+                        .h(px(64.))
+                        .px(px(14.))
+                        .on_click({
+                            let locker = row_locker.clone();
+                            move |_, _window, app| {
+                                locker.update(app, |locker, cx| {
+                                    locker.select_item(item_id, cx)
+                                });
+                            }
+                        })
+                        .child(content)
                 })
                 .collect()
         })
         .size_full();
+
         let deleted = deleted_ids.into_iter().enumerate().map(|(index, item_id)| {
             let row_id: ElementId = SharedString::from(format!("deleted-item-{item_id}")).into();
             Button::new(row_id)
@@ -320,7 +1086,7 @@ impl Locker {
                 .small()
                 .w_full()
                 .justify_start()
-                .text_color(muted_foreground)
+                .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
                 .label(format!("Preview & Restore — Deleted item {}", index + 1))
                 .on_click({
                     let locker = locker.clone();
@@ -333,20 +1099,55 @@ impl Locker {
         });
         let error = match load {
             ListLoadState::Ready => div(),
-            ListLoadState::Failed(message) => div().text_sm().text_color(danger).child(message),
+            ListLoadState::Failed(message) => div()
+                .p(px(12.))
+                .text_sm()
+                .text_color(rgb(super::CIPHER_DANGER))
+                .child(message),
         };
-        div()
-            .id("vault-list-panel")
+
+        let (first_column, third_column) = if is_logins_view {
+            ("ACCOUNT", "HEALTH")
+        } else if is_secure_notes_view {
+            ("NOTE", "CATEGORY")
+        } else {
+            ("ITEM", "TYPE")
+        };
+
+        // Pencil "Logins List Footer" — real counts (shown vs. total in scope,
+        // plus the same weak/reused health this view's smart filters use).
+        let footer = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .h(px(40.))
+            .px(px(14.))
+            .flex_shrink_0()
+            .bg(rgb(LIST_HEADER_BG))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                    .child(format!("{item_count} of {scope_total} {scope_noun} shown")),
+            )
+            .child(if is_logins_view {
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(super::CIPHER_DANGER))
+                    .child(format!(
+                        "{weak_count} weak · {reused_count} reused passwords"
+                    ))
+                    .into_any_element()
+            } else {
+                div().into_any_element()
+            });
+
+        let body = div()
             .flex()
             .flex_col()
-            .gap(px(12.))
-            .w(px(280.))
-            .h_full()
-            .flex_shrink_0()
-            .bg(sidebar_bg)
-            .border_r_1()
-            .border_color(border)
-            .p(px(12.))
+            .flex_1()
+            .min_h(px(0.))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "up" => this.move_selection(-1, window, cx),
@@ -355,21 +1156,24 @@ impl Locker {
                     _ => {}
                 }
             }))
-            .child(
-                Input::new(&search_input)
-                    .prefix(icon(IconName::Search, Some(14.), Some(muted_foreground))),
-            )
-            .child(
-                Button::new("new-item")
-                    .primary()
-                    .w_full()
-                    .label("New Item")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_create_editor(window, cx)),
-                    ),
-            )
+            .child(filters_row)
+            .child(list_header_row(first_column, third_column))
             .child(error)
-            .child(div().flex_1().min_h(px(0.)).child(rows))
+            .child(
+                if item_count == 0 {
+                    div()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_sm()
+                        .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
+                        .child("No items match this view")
+                        .into_any_element()
+                } else {
+                    div().flex_1().min_h(px(0.)).child(rows).into_any_element()
+                },
+            )
             .child(if !has_deleted {
                 div().into_any_element()
             } else {
@@ -378,16 +1182,16 @@ impl Locker {
                     .flex()
                     .flex_col()
                     .gap(px(2.))
-                    .pt(px(8.))
+                    .p(px(8.))
                     .border_t_1()
-                    .border_color(border)
+                    .border_color(rgb(super::CIPHER_BORDER))
                     .child(
                         Button::new("deleted-section-toggle")
                             .ghost()
                             .small()
                             .w_full()
                             .justify_start()
-                            .text_color(muted_foreground)
+                            .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
                             .label(format!("Deleted ({deleted_count})"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(list) = this.vault_list.as_mut() {
@@ -399,6 +1203,67 @@ impl Locker {
                     .when(deleted_expanded, |section| section.children(deleted))
                     .into_any_element()
             })
-            .into_any_element()
+            .child(footer)
+            .into_any_element();
+
+        card(body).into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn login(password: &str) -> ItemPayload {
+        ItemPayload {
+            schema_version: locker_core::ITEM_SCHEMA_VERSION,
+            item_type: ItemType::Login,
+            title: "Example".into(),
+            username: "alex".into(),
+            password: password.into(),
+            uris: vec![],
+            notes: String::new(),
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn short_passwords_are_weak_empty_ones_are_not() {
+        assert!(is_weak_password("short1"));
+        assert!(!is_weak_password("longenoughpassword"));
+        // Empty means "not set", not "weak" — there's nothing to judge yet.
+        assert!(!is_weak_password(""));
+    }
+
+    #[test]
+    fn duplicate_passwords_ignores_empty_and_non_login_items() {
+        let items = vec![
+            (ItemId::new(), login("shared-secret")),
+            (ItemId::new(), login("shared-secret")),
+            (ItemId::new(), login("unique-one")),
+            (ItemId::new(), login("")),
+            (ItemId::new(), login("")),
+            (ItemId::new(), {
+                let mut note = login("shared-secret");
+                note.item_type = ItemType::SecureNote;
+                note
+            }),
+        ];
+        let dupes = duplicate_passwords(&items);
+        assert!(dupes.contains("shared-secret"));
+        assert!(!dupes.contains("unique-one"));
+        assert!(!dupes.contains(""));
+    }
+
+    #[test]
+    fn login_health_prioritizes_reused_over_weak() {
+        let dupes = HashSet::from(["short".to_owned()]);
+        // Short *and* reused — reused should win, since it's determined first.
+        assert_eq!(login_health(&login("short"), &dupes).0, "Reused");
+        assert_eq!(login_health(&login("longenoughpassword"), &dupes).0, "Strong");
+        assert_eq!(login_health(&login("nodupe12"), &HashSet::new()).0, "Strong");
+        assert_eq!(login_health(&login("short2"), &HashSet::new()).0, "Weak");
+        assert_eq!(login_health(&login(""), &HashSet::new()).0, "—");
     }
 }

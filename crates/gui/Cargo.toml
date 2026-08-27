@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 gpui.workspace = true
 gpui-platform.workspace = true
 gpui-component.workspace = true

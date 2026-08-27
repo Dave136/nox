@@ -19,6 +19,7 @@ const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 const ICONS: &[(&str, &[u8])] = icons![
     "arrow-left-right",
+    "arrow-up-down",
     "bell",
     "bold",
     "calendar-days",
@@ -27,6 +28,9 @@ const ICONS: &[(&str, &[u8])] = icons![
     "clock-3",
     "cloud-check",
     "code",
+    "contact",
+    "copy-plus",
+    "credit-card",
     "database",
     "ellipsis",
     "ellipsis-vertical",
@@ -40,11 +44,16 @@ const ICONS: &[(&str, &[u8])] = icons![
     "italic",
     "key-round",
     "key-square",
+    "keyboard",
+    "layout-grid",
     "lightbulb",
     "list",
+    "list-filter",
     "lock-keyhole",
     "lock-keyhole-open",
+    "mouse-pointer-2",
     "notebook-pen",
+    "nox-logo",
     "oalette",
     "pencil",
     "pencil-sparkles",
@@ -53,11 +62,15 @@ const ICONS: &[(&str, &[u8])] = icons![
     "scan-eye",
     "search",
     "settings",
+    "shield-alert",
     "shield-check",
+    "shield-plus",
     "star",
     "tag",
+    "trash-2",
     "user-round",
     "user-round-plus",
+    "wand-sparkles",
     "window-maximize",
     "window-minimize",
     "window-restore",
@@ -70,7 +83,6 @@ pub enum IconName {
     Search,
     WindowMaximize,
     WindowMinimize,
-    WindowRestore,
     X,
 }
 
@@ -80,7 +92,6 @@ fn get_icon_name(name: &IconName) -> &'static str {
         IconName::Search => "search.svg",
         IconName::WindowMaximize => "window-maximize.svg",
         IconName::WindowMinimize => "window-minimize.svg",
-        IconName::WindowRestore => "window-restore.svg",
         IconName::X => "x.svg",
     }
 }
@@ -98,7 +109,14 @@ pub fn icon(name: IconName, size: Option<f32>, color: Option<Hsla>) -> Svg {
         .h(size
             .map(|s| rems(s / DEFAULT_FONT_SIZE))
             .unwrap_or(rems(16.0 / DEFAULT_FONT_SIZE)))
-        .text_color(color.unwrap_or(hsla(0., 0., 0., 1.)))
+        .text_color(color.map_or(hsla(0., 0., 0., 1.), |c| c.into()))
+}
+
+pub fn logo(size: f32, color: Hsla) -> Svg {
+    svg()
+        .path("icons/nox-logo.svg")
+        .size(rems(size / DEFAULT_FONT_SIZE))
+        .text_color(color)
 }
 
 impl AssetSource for Assets {

@@ -1,16 +1,30 @@
-use super::{AppState, Locker};
+use super::{
+    AppState, CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_BORDER_STRONG, CIPHER_DANGER,
+    CIPHER_DISABLED, CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED, CIPHER_FOREGROUND_SECONDARY,
+    CIPHER_FOREGROUND_SOFT, CIPHER_FOREGROUND_SUBTLE, CIPHER_PRIMARY, CIPHER_SURFACE,
+    CIPHER_SURFACE_RAISED, Locker, animated_auth_button,
+};
 use gpui::{
-    AnyElement, Context, Entity, PathPromptOptions, SharedString, Task, Window, div, prelude::*,
+    Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent,
+    PathPromptOptions, SharedString, Task, Window, div, ease_out_quint, prelude::*, px, rgb,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable, WindowExt,
+    Disableable, Theme, ThemeMode, WindowExt,
     button::Button,
     input::{Input, InputState},
 };
+use gpui_rsx::rsx;
 use locker_core::{
     BackupError, MAX_BACKUP_PASSWORD_BYTES, RestoreResult, SecretBytes, restore_from_path,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use crate::assets::logo;
+
+const RESTORE_TRANSITION_DURATION: Duration = Duration::from_millis(180);
 
 pub(crate) enum BackupOperation {
     Idle,
@@ -42,6 +56,11 @@ pub(crate) struct BackupState {
     pub(crate) dialog: Option<BackupDialogState>,
     pub(crate) epoch: u64,
     pub(crate) task: Task<()>,
+    pub(crate) restore_error: Option<SharedString>,
+    pub(crate) restore_exiting: bool,
+    pub(crate) transition_task: Task<()>,
+    pub(crate) restore_prior_focus: Option<FocusHandle>,
+    pub(crate) restore_reopen_picker: bool,
 }
 
 impl BackupState {
@@ -51,6 +70,11 @@ impl BackupState {
             dialog: None,
             epoch: 0,
             task: Task::ready(()),
+            restore_error: None,
+            restore_exiting: false,
+            transition_task: Task::ready(()),
+            restore_prior_focus: None,
+            restore_reopen_picker: false,
         }
     }
 
@@ -75,6 +99,64 @@ fn masked_input(
 }
 
 impl Locker {
+    pub(crate) fn leave_restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(
+            self.backup.operation,
+            BackupOperation::AwaitingRestoreConfirmation { .. }
+        ) || self.backup.restore_exiting
+        {
+            return;
+        }
+        if cx.reduce_motion() {
+            self.finish_restore_exit(window, cx);
+            return;
+        }
+        self.backup.restore_exiting = true;
+        let epoch = self.backup.epoch;
+        self.backup.transition_task = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(RESTORE_TRANSITION_DURATION)
+                .await;
+            if let Some(this) = this.upgrade() {
+                let _ = cx.update(|window, app| {
+                    this.update(app, |this, cx| {
+                        if this.backup.epoch == epoch && this.backup.restore_exiting {
+                            this.finish_restore_exit(window, cx);
+                        }
+                    });
+                });
+            }
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn choose_different_restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.backup.restore_reopen_picker = true;
+        self.leave_restore(window, cx);
+    }
+
+    fn finish_restore_exit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let reopen_picker = self.backup.restore_reopen_picker;
+        self.backup.epoch = self.backup.epoch.wrapping_add(1);
+        self.backup.operation = BackupOperation::Idle;
+        self.backup.dialog = None;
+        self.backup.restore_error = None;
+        self.backup.restore_exiting = false;
+        self.backup.restore_reopen_picker = false;
+        let mode = match self.state {
+            AppState::NoVault | AppState::Locked => ThemeMode::Dark,
+            AppState::Unlocked(_) => ThemeMode::Light,
+        };
+        Theme::change(mode, Some(window), cx);
+        if let Some(focus) = self.backup.restore_prior_focus.take() {
+            focus.focus(window, cx);
+        }
+        cx.notify();
+        if reopen_picker {
+            self.begin_restore(window, cx);
+        }
+    }
+
     pub(crate) fn begin_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(self.state, AppState::Unlocked(_)) || !self.backup.is_idle() {
             return;
@@ -332,49 +414,32 @@ impl Locker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let backup_password = masked_input(window, cx, "Backup password");
-        let new_master_password = masked_input(window, cx, "New master password");
-        let new_master_confirmation = masked_input(window, cx, "Confirm new master password");
+        let backup_password = masked_input(window, cx, "Enter the backup password");
+        let new_master_password = masked_input(window, cx, "Create a new master password");
+        let new_master_confirmation = masked_input(window, cx, "Re-enter the new master password");
         self.backup.operation = BackupOperation::AwaitingRestoreConfirmation {
             archive_path: archive_path.clone(),
         };
+        self.backup.restore_error = None;
+        self.backup.restore_exiting = false;
+        self.backup.restore_reopen_picker = false;
+        self.backup.restore_prior_focus = window.focused(cx);
+        self.backup.transition_task = Task::ready(());
         self.backup.dialog = Some(BackupDialogState::Restore {
             backup_password: backup_password.clone(),
             new_master_password: new_master_password.clone(),
             new_master_confirmation: new_master_confirmation.clone(),
             archive_path: archive_path.clone(),
         });
-        let destination = self.vault_path.clone();
-        let locker = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |dialog, _window, _cx| {
-            let ok_locker = locker.clone();
-            let cancel_locker = locker.clone();
-            dialog
-                .title("Restore backup")
-                .child(format!("Archive: {}", archive_path.display()))
-                .child(format!("This will replace: {}", destination.display()))
-                .child(
-                    "The restored vault stays locked. The new master password cannot be recovered.",
-                )
-                .child(Input::new(&backup_password).mask_toggle())
-                .child(Input::new(&new_master_password).mask_toggle())
-                .child(Input::new(&new_master_confirmation).mask_toggle())
-                .confirm()
-                .on_ok(move |_, window, app| {
-                    let mut accepted = false;
-                    let _ = ok_locker.update(app, |locker, cx| {
-                        accepted = locker.confirm_restore(window, cx);
-                    });
-                    accepted
-                })
-                .on_cancel(move |_, _, app| {
-                    let _ = cancel_locker.update(app, |locker, cx| locker.cancel_backup_dialog(cx));
-                    true
-                })
-        });
+        Theme::change(ThemeMode::Dark, Some(window), cx);
+        Self::focus_input(&backup_password, window, cx);
+        cx.notify();
     }
 
     pub(crate) fn confirm_restore(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.backup.restore_exiting {
+            return false;
+        }
         let Some(BackupDialogState::Restore {
             backup_password: backup_password_input,
             new_master_password: master_password_input,
@@ -387,12 +452,19 @@ impl Locker {
         let backup = SecretBytes::new(backup_password_input.read(cx).value().as_bytes());
         let master = SecretBytes::new(master_password_input.read(cx).value().as_bytes());
         let confirmation = SecretBytes::new(master_confirmation_input.read(cx).value().as_bytes());
-        if backup.is_empty()
-            || master.is_empty()
-            || master.as_bytes() != confirmation.as_bytes()
-            || backup.len() > MAX_BACKUP_PASSWORD_BYTES
+        let error = if backup.is_empty() || master.is_empty() || confirmation.is_empty() {
+            Some("Enter all three passwords.")
+        } else if master.as_bytes() != confirmation.as_bytes() {
+            Some("New master passwords do not match.")
+        } else if backup.len() > MAX_BACKUP_PASSWORD_BYTES
             || master.len() > MAX_BACKUP_PASSWORD_BYTES
         {
+            Some("Password is too long.")
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            self.backup.restore_error = Some(error.into());
             self.backup.dialog = Some(BackupDialogState::Restore {
                 backup_password: backup_password_input,
                 new_master_password: master_password_input,
@@ -401,6 +473,10 @@ impl Locker {
             });
             return false;
         }
+        self.backup.restore_error = None;
+        self.backup.restore_prior_focus = None;
+        self.backup.restore_exiting = false;
+        self.backup.transition_task = Task::ready(());
         let was_no_vault = matches!(self.state, AppState::NoVault);
         window.close_all_dialogs(cx);
         self.discard_clipboard_state(cx);
@@ -485,53 +561,277 @@ impl Locker {
                     BackupOperation::Failed(backup_error_message("restore", &error));
             }
         }
+        let mode = match self.state {
+            AppState::NoVault | AppState::Locked => ThemeMode::Dark,
+            AppState::Unlocked(_) => ThemeMode::Light,
+        };
+        Theme::change(mode, Some(window), cx);
         self.backup.task = Task::ready(());
         cx.notify();
     }
 
-    pub(crate) fn render_backup_actions(
+    pub(crate) fn render_restore_backup(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let busy = !self.backup.is_idle();
-        let danger = cx.theme().danger;
-        let muted_foreground = cx.theme().muted_foreground;
-        let restore = Button::new("restore-backup")
-            .small()
-            .label("Restore backup")
-            .disabled(busy)
-            .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)));
-        let mut row = div().flex().items_center().gap_2().child(restore);
-        if matches!(self.state, AppState::Unlocked(_)) {
-            row = row.child(
-                Button::new("export-backup")
-                    .small()
-                    .label("Export backup")
-                    .disabled(busy)
-                    .on_click(cx.listener(|this, _, window, cx| this.begin_export(window, cx))),
-            );
-        }
-        if let BackupOperation::Failed(message) = &self.backup.operation {
-            row = row.child(div().text_sm().text_color(danger).child(message.clone()));
-        } else if let BackupOperation::Succeeded(message) = &self.backup.operation {
-            row = row.child(
+        let Some(BackupDialogState::Restore {
+            backup_password,
+            new_master_password,
+            new_master_confirmation,
+            archive_path,
+        }) = &self.backup.dialog
+        else {
+            return div().into_any_element();
+        };
+        let backup_password = backup_password.clone();
+        let new_master_password = new_master_password.clone();
+        let new_master_confirmation = new_master_confirmation.clone();
+        let archive_path = archive_path.clone();
+        let archive_name = archive_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Selected backup")
+            .to_owned();
+        let archive_display = archive_path.display().to_string();
+        let exiting = self.backup.restore_exiting;
+        let error = self
+            .backup
+            .restore_error
+            .clone()
+            .map(|message| {
                 div()
                     .text_sm()
-                    .text_color(muted_foreground)
-                    .child(message.clone()),
-            );
-        } else if let BackupOperation::AwaitingRestoreConfirmation { archive_path } =
-            &self.backup.operation
-        {
-            row = row.child(
+                    .text_center()
+                    .text_color(rgb(CIPHER_DANGER))
+                    .child(message)
+            })
+            .unwrap_or_else(div);
+        let restore_button = Button::new("restore-backup-submit")
+            .w_full()
+            .h(px(44.))
+            .rounded(px(7.))
+            .disabled(exiting)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.confirm_restore(window, cx);
+            }))
+            .child(
                 div()
-                    .text_sm()
-                    .text_color(muted_foreground)
-                    .child(format!("Restore: {}", archive_path.display())),
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .font_weight(FontWeight::BOLD)
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/refresh-cw.svg")
+                            .size(px(15.)),
+                    )
+                    .child("Restore backup"),
             );
-        }
-        row.into_any_element()
+        let restore_button = animated_auth_button(
+            "restore-backup-submit",
+            restore_button,
+            self.auth_hovered.get("restore-backup-submit").copied(),
+            (CIPHER_PRIMARY, 0xF0F2F6, 0xCDD2DC, CIPHER_BACKGROUND),
+            cx,
+        );
+        let back = Button::new("restore-back")
+            .h(px(32.))
+            .disabled(exiting)
+            .on_click(cx.listener(|this, _, window, cx| this.leave_restore(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/arrow-left.svg")
+                            .size(px(15.)),
+                    )
+                    .child("Back"),
+            );
+        let back = animated_auth_button(
+            "restore-back",
+            back,
+            self.auth_hovered.get("restore-back").copied(),
+            (
+                CIPHER_BACKGROUND,
+                CIPHER_SURFACE_RAISED,
+                CIPHER_BORDER,
+                CIPHER_FOREGROUND_SECONDARY,
+            ),
+            cx,
+        );
+        let choose_different = Button::new("restore-choose-different")
+            .h(px(32.))
+            .disabled(exiting)
+            .on_click(cx.listener(|this, _, window, cx| this.choose_different_restore(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/refresh-cw.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                    )
+                    .child("Choose a different backup"),
+            );
+        let choose_different = animated_auth_button(
+            "restore-choose-different",
+            choose_different,
+            self.auth_hovered.get("restore-choose-different").copied(),
+            (
+                CIPHER_BACKGROUND,
+                CIPHER_SURFACE_RAISED,
+                CIPHER_BORDER,
+                CIPHER_FOREGROUND_SECONDARY,
+            ),
+            cx,
+        );
+        let page = rsx! {
+            <div
+                id="restore-backup-view"
+                relative
+                size_full
+                flex
+                items_center
+                justify_center
+                bg={rgb(CIPHER_BACKGROUND)}
+                p={px(36.)}
+                onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "enter" => {
+                            window.prevent_default();
+                            this.confirm_restore(window, cx);
+                        }
+                        "escape" => {
+                            window.prevent_default();
+                            this.leave_restore(window, cx);
+                        }
+                        _ => {}
+                    }
+                })}
+            >
+                <div absolute top={px(20.)} left={px(24.)}>
+                    {back}
+                </div>
+                <div flex flex_col gap={px(13.)} w={px(416.)}>
+                    <div flex flex_col items_center gap={px(8.)}>
+                        {logo(52., rgb(CIPHER_FOREGROUND).into())}
+                        <div flex flex_col items_center gap={px(4.)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>
+                                {"Restore your vault"}
+                            </div>
+                            <div text_xs text_center textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                                {"Import an encrypted backup and choose a new master password"}
+                            </div>
+                        </div>
+                    </div>
+                    <div
+                        id="restore-archive-summary"
+                        flex
+                        items_center
+                        gap={px(10.)}
+                        h={px(48.)}
+                        px={px(12.)}
+                        rounded={px(8.)}
+                        bg={rgb(CIPHER_SURFACE)}
+                    >
+                        <div size={px(28.)} flex items_center justify_center rounded_full bg={rgb(CIPHER_SURFACE_RAISED)}>
+                            {logo(14., rgb(CIPHER_FOREGROUND).into())}
+                        </div>
+                        <div flex flex_col flex_1 min_w={px(0.)} gap={px(2.)}>
+                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND_SOFT)}>
+                                {archive_name}
+                            </div>
+                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_SUBTLE)} overflow_hidden>
+                                {archive_display}
+                            </div>
+                        </div>
+                        {gpui_component::Icon::empty()
+                            .path("icons/file-lock.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))}
+                    </div>
+                    <div flex flex_col gap={px(7.)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                            {"BACKUP PASSWORD"}
+                        </div>
+                        <Input
+                            base={Input::new(&backup_password)
+                                .mask_toggle()
+                                .aria_label("Backup password")
+                                .disabled(exiting)}
+                            h={px(44.)}
+                            bg={rgb(CIPHER_SURFACE)}
+                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            rounded={px(8.)}
+                        />
+                    </div>
+                    <div flex flex_col gap={px(7.)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                            {"NEW MASTER PASSWORD"}
+                        </div>
+                        <Input
+                            base={Input::new(&new_master_password)
+                                .mask_toggle()
+                                .aria_label("New master password")
+                                .disabled(exiting)}
+                            h={px(44.)}
+                            bg={rgb(CIPHER_SURFACE)}
+                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            rounded={px(8.)}
+                        />
+                    </div>
+                    <div flex flex_col gap={px(7.)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                            {"CONFIRM NEW MASTER PASSWORD"}
+                        </div>
+                        <Input
+                            base={Input::new(&new_master_confirmation)
+                                .mask_toggle()
+                                .aria_label("Confirm new master password")
+                                .disabled(exiting)}
+                            h={px(44.)}
+                            bg={rgb(CIPHER_SURFACE)}
+                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            rounded={px(8.)}
+                        />
+                    </div>
+                    {error}
+                    {restore_button}
+                    <div flex flex_col gap={px(8.)}>
+                        <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        {choose_different}
+                        <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
+                            {"Enter to restore · Esc to go back"}
+                        </div>
+                    </div>
+                    <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(13.))}
+                        <div text_xs>{"The restored vault remains locked until verified"}</div>
+                    </div>
+                </div>
+            </div>
+        };
+        page.occlude()
+            .with_animation(
+                if exiting {
+                    "restore-backup-exit"
+                } else {
+                    "restore-backup-enter"
+                },
+                Animation::new(RESTORE_TRANSITION_DURATION).with_easing(ease_out_quint()),
+                move |page, delta| {
+                    let progress = if exiting { 1. - delta } else { delta };
+                    page.opacity(progress).left(px((1. - progress) * 24.))
+                },
+            )
+            .into_any_element()
     }
 }
 

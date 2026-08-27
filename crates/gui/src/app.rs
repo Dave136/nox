@@ -4,8 +4,12 @@ mod backup;
 mod clipboard;
 #[path = "conflicts.rs"]
 mod conflicts;
+#[path = "detail.rs"]
+mod detail;
 #[path = "item_editor.rs"]
 mod item_editor;
+#[path = "nav.rs"]
+mod nav;
 #[path = "ui/mod.rs"]
 pub mod ui;
 #[path = "vault_list.rs"]
@@ -16,32 +20,338 @@ use clipboard::ClipboardState;
 pub use clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
 use conflicts::ConflictState;
 use item_editor::ItemEditorState;
+use nav::ActiveView;
 use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use vault_list::VaultListState;
 
 use gpui::{
-    Context, Entity, FontWeight, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, SharedString, Task, Window, div, prelude::*, px, white,
+    Animation, AnimationExt, AnyElement, Context, Entity, FontWeight, KeyBinding, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString, Task, Window, div,
+    ease_out_quint, prelude::*, px, rgb,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Root, Sizable, WindowExt,
-    button::{Button, ButtonVariants as _},
+    Disableable, Root, Theme, ThemeMode, WindowExt,
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputState},
 };
 use gpui_rsx::rsx;
 use locker_core::{SecretBytes, Vault, VaultError};
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     path::PathBuf,
+    rc::Rc,
     time::{Duration, Instant},
 };
 
-use crate::assets::{IconName, icon};
+use crate::assets::{IconName, icon, logo};
 
 /// Default duration before an inactive unlocked vault is locked.
 pub const DEFAULT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(300);
 
 const UNLOCK_ERROR_MESSAGE: &str = "Incorrect password or corrupted vault.";
-const CANNOT_RECOVER_PASSWORD_NOTICE: &str =
-    "Locker cannot recover a forgotten master password. Store it somewhere safe.";
+const AUTH_HOVER_DURATION: Duration = Duration::from_millis(140);
+pub(crate) const CIPHER_BACKGROUND: u32 = 0x1A1D22;
+const CIPHER_SURFACE: u32 = 0x1E2126;
+pub(crate) const CIPHER_SURFACE_RAISED: u32 = 0x252A33;
+pub(crate) const CIPHER_BORDER: u32 = 0x2B3039;
+const CIPHER_BORDER_STRONG: u32 = 0x525B69;
+const CIPHER_FOREGROUND: u32 = 0xE5E8F0;
+const CIPHER_FOREGROUND_SOFT: u32 = 0xD9DEE7;
+pub(crate) const CIPHER_FOREGROUND_SECONDARY: u32 = 0xAEB7C5;
+pub(crate) const CIPHER_FOREGROUND_MUTED: u32 = 0x8F98A8;
+const CIPHER_FOREGROUND_SUBTLE: u32 = 0x7F8998;
+const CIPHER_DISABLED: u32 = 0x626B78;
+const CIPHER_PRIMARY: u32 = 0xE3E6ED;
+const CIPHER_DANGER: u32 = 0xA9787D;
+
+fn auth_hover_color(from: u32, to: u32, amount: f32) -> Rgba {
+    let from = rgb(from);
+    let to = rgb(to);
+    Rgba {
+        r: from.r + (to.r - from.r) * amount,
+        g: from.g + (to.g - from.g) * amount,
+        b: from.b + (to.b - from.b) * amount,
+        a: 1.,
+    }
+}
+
+pub(crate) fn animated_auth_button(
+    id: &'static str,
+    button: Button,
+    hovered: Option<bool>,
+    colors: (u32, u32, u32, u32),
+    cx: &mut Context<Locker>,
+) -> AnyElement {
+    let (base, hover, active, foreground) = colors;
+    let variant = ButtonCustomVariant::new(cx)
+        .foreground(rgb(foreground).into())
+        .active(rgb(active).into());
+    let button = button.on_hover(cx.listener(move |this, is_hovered, _, cx| {
+        this.auth_hovered.insert(id, *is_hovered);
+        cx.notify();
+    }));
+    let Some(hovered) = hovered else {
+        return button
+            .custom(variant.color(rgb(base).into()).hover(rgb(base).into()))
+            .into_any_element();
+    };
+    button
+        .with_animation(
+            (id, u32::from(hovered)),
+            Animation::new(AUTH_HOVER_DURATION).with_easing(ease_out_quint()),
+            move |button, delta| {
+                let amount = if hovered { delta } else { 1. - delta };
+                let color = auth_hover_color(base, hover, amount);
+                button
+                    .custom(variant.color(color.into()).hover(color.into()))
+                    .opacity(0.96 + amount * 0.04)
+            },
+        )
+        .into_any_element()
+}
+
+// ponytail: static display only — no sync status is wired from the `sync`
+// crate into the GUI yet, so this always reads "Synced" regardless of the
+// vault's real sync/pairing state. Add real wiring if that's ever needed.
+fn sync_status_pill() -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(7.))
+        .px(px(12.))
+        .py(px(9.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(rgb(CIPHER_BORDER))
+        .child(
+            gpui_component::Icon::empty()
+                .path("icons/cloud-check.svg")
+                .size(px(16.))
+                .text_color(rgb(CIPHER_FOREGROUND_MUTED)),
+        )
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight(500.))
+                .text_color(rgb(CIPHER_FOREGROUND))
+                .child("Synced"),
+        )
+        .into_any_element()
+}
+
+impl Locker {
+    /// The primary "+ Add item" header button, shared by every workspace
+    /// header (Home, All items, Logins, Secure notes): matches the Pencil
+    /// "Add Item Button" node exactly (`#E3E6ED` fill, dark icon/label) and
+    /// reuses the auth screens' animated hover.
+    fn render_add_item_button(&mut self, id: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        let button = Button::new(id)
+            .h(px(38.))
+            .px(px(16.))
+            .rounded(px(8.))
+            .on_click(cx.listener(|this, _, window, cx| this.open_create_editor(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/plus.svg")
+                            .size(px(16.))
+                            .text_color(rgb(CIPHER_BACKGROUND)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight(500.))
+                            .text_color(rgb(CIPHER_BACKGROUND))
+                            .child(if self.active_view == ActiveView::SecureNotes {
+                                "Add note"
+                            } else {
+                                "Add item"
+                            }),
+                    ),
+            );
+        animated_auth_button(
+            id,
+            button,
+            self.auth_hovered.get(id).copied(),
+            (CIPHER_PRIMARY, 0xF0F2F6, 0xCDD2DC, CIPHER_BACKGROUND),
+            cx,
+        )
+    }
+}
+
+/// Best-effort display label for a recent item's secondary line: the login's
+/// site host if it has one, or "Secure note" / a bare "Login" fallback.
+fn recent_item_subtitle(payload: &locker_core::ItemPayload) -> String {
+    if payload.item_type == locker_core::ItemType::SecureNote {
+        return "Secure note".to_owned();
+    }
+    match payload.uris.first() {
+        Some(uri) => uri
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .filter(|host| !host.is_empty())
+            .unwrap_or("Login")
+            .to_owned(),
+        None => "Login".to_owned(),
+    }
+}
+
+// ponytail: coarse relative-time buckets, no calendar-aware "Yesterday"/weekday
+// labels; add if that granularity is ever requested.
+fn relative_time(updated_at_ms: u64) -> String {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(updated_at_ms);
+    let elapsed_secs = now_ms.saturating_sub(updated_at_ms) / 1000;
+    match elapsed_secs {
+        0..=59 => "Just now".to_owned(),
+        60..=3599 => format!("{}m ago", elapsed_secs / 60),
+        3600..=86_399 => format!("{}h ago", elapsed_secs / 3600),
+        86_400..=604_799 => format!("{}d ago", elapsed_secs / 86_400),
+        _ => format!("{}w ago", elapsed_secs / 604_800),
+    }
+}
+
+fn home_stat_tile(label: &'static str, value: usize) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .gap(px(4.))
+        .w(px(112.))
+        .h(px(82.))
+        .px(px(14.))
+        .rounded(px(8.))
+        .bg(rgb(0x20242A))
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                .child(label),
+        )
+        .child(
+            div()
+                .text_xl()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(CIPHER_FOREGROUND_SECONDARY))
+                .child(format!("{value}")),
+        )
+        .into_any_element()
+}
+
+/// A "Quick actions" tile. Matches the Pencil "Quick Actions Row" frame,
+/// where every tile (including the not-yet-supported ones) shares the same
+/// bright icon/label colors — unsupported tiles are marked with a "Soon"
+/// badge rather than dimmed, per the same convention used in the sidebar.
+///
+/// On hover (of the two clickable tiles) the whole tile animates to the
+/// raised surface color, same as the auth screens' submit buttons — see
+/// `animated_auth_button`. The icon box swaps to the tile's *resting* color
+/// as that happens, so the two backgrounds trade places; that swap is an
+/// instant `group_hover`, not part of the animation, matching what was
+/// actually asked for (a transition on the tile color, not the icon box).
+fn home_quick_action(
+    id: &'static str,
+    icon_path: &'static str,
+    label: &'static str,
+    enabled: bool,
+    hovered: Option<bool>,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    cx: &mut Context<Locker>,
+) -> AnyElement {
+    let mut icon_box = div()
+        .size(px(32.))
+        .rounded(px(8.))
+        .bg(rgb(0x20242A))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            gpui_component::Icon::empty()
+                .path(icon_path)
+                .size(px(16.))
+                .text_color(rgb(CIPHER_FOREGROUND_SECONDARY)),
+        );
+    if enabled {
+        icon_box = icon_box.group_hover(id, |style| style.bg(rgb(CIPHER_SURFACE)));
+    }
+    // Neutralizes Button's own hardcoded `justify_center` on its content
+    // wrapper (see `sidebar_link` in nav.rs for the full explanation): a
+    // `w_full()` child makes that centering a no-op, so this div's own
+    // `justify_between` is what actually places things.
+    let mut content = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .w_full()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(11.))
+                .child(icon_box)
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(CIPHER_FOREGROUND))
+                        .child(label),
+                ),
+        );
+    if !enabled {
+        content = content.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(10.))
+                .font_weight(FontWeight::from(600.))
+                .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                .bg(rgb(CIPHER_SURFACE_RAISED))
+                .rounded(px(4.))
+                .px(px(6.))
+                .py(px(2.))
+                .child("Soon"),
+        );
+    }
+    let button = Button::new(id)
+        .disabled(!enabled)
+        .group(id)
+        .flex_1()
+        .h(px(62.))
+        .px(px(14.))
+        .rounded(px(8.))
+        .on_click(on_click)
+        .child(content);
+
+    if !enabled {
+        return button
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(rgb(CIPHER_SURFACE).into())
+                    .foreground(rgb(CIPHER_FOREGROUND).into()),
+            )
+            .into_any_element();
+    }
+    animated_auth_button(
+        id,
+        button,
+        hovered,
+        (
+            CIPHER_SURFACE,
+            CIPHER_SURFACE_RAISED,
+            CIPHER_SURFACE_RAISED,
+            CIPHER_FOREGROUND,
+        ),
+        cx,
+    )
+}
 
 /// The top-level vault lifecycle state.
 #[allow(clippy::large_enum_variant)]
@@ -80,11 +390,19 @@ pub struct Locker {
 
     pub(crate) vault_list: Option<VaultListState>,
     pub(crate) item_editor: Option<ItemEditorState>,
+    /// Freshly rendered (title, body) for the open item-editor Sheet, refreshed
+    /// every `render_unlocked` pass. See `open_item_editor_sheet` for why this
+    /// indirection exists instead of the Sheet reading `Locker` directly.
+    item_editor_sheet_cell: Rc<RefCell<Option<(SharedString, AnyElement)>>>,
+    active_view: ActiveView,
+    /// Whether the selected item's password is shown in plaintext in the detail panel.
+    pub(crate) reveal_password: bool,
     pub(crate) clipboard: ClipboardState,
     pub(crate) conflicts: ConflictState,
     pub(crate) conflicts_open: bool,
     pub(crate) backup: BackupState,
     pub(crate) window_controls: Entity<WindowControls>,
+    auth_hovered: HashMap<&'static str, bool>,
 }
 
 impl Locker {
@@ -101,8 +419,12 @@ impl Locker {
         } else {
             AppState::NoVault
         };
-        let create_password = Self::new_input(window, cx, "Password");
-        let create_confirm = Self::new_input(window, cx, "Confirm password");
+        // Every app state — auth screens and the unlocked workspace alike —
+        // uses the dark Nox theme; there is no light mode in this app.
+        let theme_mode = ThemeMode::Dark;
+        Theme::change(theme_mode, Some(window), cx);
+        let create_password = Self::new_input(window, cx, "Create a strong password");
+        let create_confirm = Self::new_input(window, cx, "Re-enter your master password");
         let unlock_password = Self::new_input(window, cx, "Password");
         let locker = cx.weak_entity();
         let window_controls = cx.new(|cx| {
@@ -129,11 +451,15 @@ impl Locker {
             _inactivity_task: Task::ready(()),
             vault_list: None,
             item_editor: None,
+            item_editor_sheet_cell: Rc::new(RefCell::new(None)),
+            active_view: ActiveView::AllItems,
+            reveal_password: false,
             clipboard: ClipboardState::new(clipboard_timeout),
             conflicts: ConflictState::Closed,
             conflicts_open: false,
             backup: BackupState::new(),
             window_controls,
+            auth_hovered: HashMap::new(),
         };
 
         match locker.state {
@@ -161,8 +487,8 @@ impl Locker {
     }
 
     fn reset_create_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.create_password = Self::new_input(window, cx, "Password");
-        self.create_confirm = Self::new_input(window, cx, "Confirm password");
+        self.create_password = Self::new_input(window, cx, "Create a strong password");
+        self.create_confirm = Self::new_input(window, cx, "Re-enter your master password");
     }
 
     fn reset_unlock_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -213,10 +539,13 @@ impl Locker {
                     this.update(app, |this, cx| match result {
                         Ok((vault, items, deleted, conflicts)) => {
                             this.state = AppState::Unlocked(vault);
+                            Theme::change(ThemeMode::Dark, Some(window), cx);
                             this.vault_list = Some(VaultListState::from_initial_load(
                                 items, deleted, window, cx,
                             ));
                             this.item_editor = None;
+                            this.active_view = ActiveView::Home;
+                            this.reveal_password = false;
                             this.conflicts = ConflictState::from_initial_load(conflicts);
                             this.conflicts_open = false;
                             this.create_state = FormState::Idle;
@@ -271,10 +600,13 @@ impl Locker {
                     this.update(app, |this, cx| match result {
                         Ok((vault, items, deleted, conflicts)) => {
                             this.state = AppState::Unlocked(vault);
+                            Theme::change(ThemeMode::Dark, Some(window), cx);
                             this.vault_list = Some(VaultListState::from_initial_load(
                                 items, deleted, window, cx,
                             ));
                             this.item_editor = None;
+                            this.active_view = ActiveView::Home;
+                            this.reveal_password = false;
                             this.conflicts = ConflictState::from_initial_load(conflicts);
                             this.conflicts_open = false;
                             this.unlock_state = FormState::Idle;
@@ -345,11 +677,14 @@ impl Locker {
             return;
         }
         window.close_all_dialogs(cx);
+        window.close_sheet(cx);
         self.discard_clipboard_state(cx);
         self.inactivity_epoch += 1;
         self._inactivity_task = Task::ready(());
         self.vault_list = None;
         self.item_editor = None;
+        self.active_view = ActiveView::AllItems;
+        self.reveal_password = false;
         self.conflicts = ConflictState::Closed;
         self.conflicts_open = false;
         if matches!(
@@ -367,6 +702,7 @@ impl Locker {
         if let AppState::Unlocked(vault) = std::mem::replace(&mut self.state, AppState::Locked) {
             vault.lock();
         }
+        Theme::change(ThemeMode::Dark, Some(window), cx);
         Self::focus_input(&self.unlock_password, window, cx);
         cx.notify();
     }
@@ -384,26 +720,89 @@ impl Locker {
         }
     }
 
-    fn render_no_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_no_vault(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let pending = self.create_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
-        let theme = cx.theme();
-        let page_bg = theme.background;
-        let card_bg = theme.secondary;
-        let border = theme.border;
-        let foreground = theme.foreground;
-        let muted_foreground = theme.muted_foreground;
-        let danger = theme.danger;
-        let icon_tint = theme.primary.opacity(0.08);
-        let icon_color = theme.primary;
-        let radius_lg = theme.radius_lg;
         let error = match &self.create_state {
             FormState::Error(message) => div()
                 .text_sm()
-                .text_color(danger)
+                .text_center()
+                .text_color(rgb(CIPHER_DANGER))
                 .child(message.clone()),
             FormState::Idle | FormState::Pending => div(),
         };
+        let backup_status = match &self.backup.operation {
+            backup::BackupOperation::Failed(message) => div()
+                .text_sm()
+                .text_center()
+                .text_color(rgb(CIPHER_DANGER))
+                .child(message.clone()),
+            _ => div(),
+        };
+        let create_button = Button::new("create-vault-submit")
+            .w_full()
+            .h(px(44.))
+            .rounded(px(7.))
+            .disabled(pending || backup_busy)
+            .loading(pending)
+            .on_click(cx.listener(|this, _, window, cx| this.create_vault(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .font_weight(FontWeight::BOLD)
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/shield-plus.svg")
+                            .size(px(15.)),
+                    )
+                    .child(if pending {
+                        "Creating…"
+                    } else {
+                        "Create vault"
+                    }),
+            );
+        let create_button = animated_auth_button(
+            "create-vault-submit",
+            create_button,
+            self.auth_hovered.get("create-vault-submit").copied(),
+            (CIPHER_PRIMARY, 0xF0F2F6, 0xCDD2DC, CIPHER_BACKGROUND),
+            cx,
+        );
+        let restore_button = Button::new("create-restore-backup")
+            .h(px(32.))
+            .disabled(backup_busy)
+            .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/refresh-cw.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                    )
+                    .child("Restore a backup instead"),
+            );
+        let restore_button = animated_auth_button(
+            "create-restore-backup",
+            restore_button,
+            self.auth_hovered.get("create-restore-backup").copied(),
+            (
+                CIPHER_BACKGROUND,
+                CIPHER_SURFACE_RAISED,
+                CIPHER_BORDER,
+                CIPHER_FOREGROUND_SECONDARY,
+            ),
+            cx,
+        );
         rsx! {
             <div
                 id="no-vault-view"
@@ -411,11 +810,13 @@ impl Locker {
                 flex
                 items_center
                 justify_center
-                bg={white()}
-                p={px(32.)}
+                bg={rgb(CIPHER_BACKGROUND)}
+                p={px(36.)}
                 onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "enter" {
-                        this.create_vault(window, cx);
+                    match event.keystroke.key.as_str() {
+                        "enter" => this.create_vault(window, cx),
+                        "escape" => window.remove_window(),
+                        _ => {}
                     }
                 })}
             >
@@ -423,88 +824,189 @@ impl Locker {
                     id="no-vault-card"
                     flex
                     flex_col
-                    gap={px(24.)}
-                    w={px(380.)}
-                    p={px(32.)}
-                    rounded={radius_lg}
-                    // border_1
-                    // borderColor={border}
-                    bg={white()}
-                    // shadow_sm
+                    gap={px(15.)}
+                    w={px(416.)}
                 >
-                    <div flex flex_col items_center gap={px(12.)}>
-                        <div
-                            flex
-                            items_center
-                            justify_center
-                            w={px(56.)}
-                            h={px(56.)}
-                            rounded_full
-                            bg={icon_tint}
-                        >
-                            {icon(IconName::KeySquare, Some(26.), Some(icon_color))}
-                        </div>
-                        <div flex flex_col items_center gap={px(6.)}>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={foreground}>
+                    <div flex flex_col items_center gap={px(8.)}>
+                        {logo(52., rgb(CIPHER_FOREGROUND).into())}
+                        <div flex flex_col items_center gap={px(4.)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>
                                 {"Create your vault"}
                             </div>
-                            <div text_sm text_center textColor={muted_foreground}>
-                                {CANNOT_RECOVER_PASSWORD_NOTICE}
+                            <div text_xs text_center textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                                {"Choose a master password to secure your data"}
                             </div>
                         </div>
                     </div>
-                    <div flex flex_col gap={px(16.)}>
-                        <div id="create-vault-password" flex flex_col gap={px(6.)}>
-                            <div text_sm fontWeight={FontWeight::MEDIUM} textColor={foreground}>
-                                {"Password"}
-                            </div>
-                            <Input base={Input::new(&self.create_password).mask_toggle()} />
+                    <div
+                        id="create-recovery-warning"
+                        flex
+                        items_center
+                        gap={px(10.)}
+                        h={px(48.)}
+                        px={px(12.)}
+                        rounded={px(8.)}
+                        bg={rgb(CIPHER_SURFACE)}
+                        border_1
+                        borderColor={rgb(CIPHER_BORDER)}
+                    >
+                        <div size={px(28.)} flex items_center justify_center rounded_full bg={rgb(CIPHER_SURFACE_RAISED)}>
+                            <div text_sm fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"!"}</div>
                         </div>
-                        <div id="create-vault-confirm" flex flex_col gap={px(6.)}>
-                            <div text_sm fontWeight={FontWeight::MEDIUM} textColor={foreground}>
-                                {"Confirm password"}
+                        <div flex flex_col flex_1 gap={px(2.)}>
+                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND_SOFT)}>
+                                {"No password recovery"}
                             </div>
-                            <Input base={Input::new(&self.create_confirm).mask_toggle()} />
+                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                                {"Store your master password somewhere safe"}
+                            </div>
                         </div>
-                        {error}
-                        <Button
-                            base={Button::new("create-vault-submit")
-                                .primary()
-                                .w_full()
-                                .label(if pending { "Creating…" } else { "Create Vault" })
-                                .disabled(pending || backup_busy)
-                                .loading(pending)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.create_vault(window, cx);
-                                }))}
+                        {gpui_component::Icon::empty()
+                            .path("icons/shield-alert.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))}
+                    </div>
+                    <div id="create-vault-password" flex flex_col gap={px(7.)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                            {"MASTER PASSWORD"}
+                        </div>
+                        <Input
+                            base={Input::new(&self.create_password)
+                                .mask_toggle()
+                                .aria_label("Master password")}
+                            h={px(44.)}
+                            bg={rgb(CIPHER_SURFACE)}
+                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            rounded={px(8.)}
                         />
                     </div>
-                    <div flex flex_col gap={px(8.)} pt={px(8.)} border_t_1 borderColor={border}>
-                        {self.render_backup_actions(window, cx)}
+                    <div id="create-vault-confirm" flex flex_col gap={px(7.)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                            {"CONFIRM MASTER PASSWORD"}
+                        </div>
+                        <Input
+                            base={Input::new(&self.create_confirm)
+                                .mask_toggle()
+                                .aria_label("Confirm master password")}
+                            h={px(44.)}
+                            bg={rgb(CIPHER_SURFACE)}
+                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            rounded={px(8.)}
+                        />
+                    </div>
+                    {error}
+                    {create_button}
+                    <div flex flex_col gap={px(8.)}>
+                        <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        {restore_button}
+                        {backup_status}
+                        <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
+                            {"Enter to create · Esc to close"}
+                        </div>
+                    </div>
+                    <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(13.))}
+                        <div text_xs>{"Encrypted locally · You hold the keys"}</div>
                     </div>
                 </div>
             </div>
         }
     }
 
-    fn render_locked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_locked(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.unlock_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
-        let theme = cx.theme();
-        let border = theme.border;
-        let foreground = theme.foreground;
-        let muted_foreground = theme.muted_foreground;
-        let danger = theme.danger;
-        let icon_tint = theme.primary.opacity(0.08);
-        let icon_color = theme.primary;
-        let radius_lg = theme.radius_lg;
+        let vault_name = self
+            .vault_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Local vault")
+            .to_owned();
         let error = match &self.unlock_state {
             FormState::Error(message) => div()
                 .text_sm()
-                .text_color(danger)
+                .text_color(rgb(CIPHER_DANGER))
                 .child(message.clone()),
             FormState::Idle | FormState::Pending => div(),
         };
+        let backup_status = match &self.backup.operation {
+            backup::BackupOperation::Failed(message) => div()
+                .text_sm()
+                .text_center()
+                .text_color(rgb(CIPHER_DANGER))
+                .child(message.clone()),
+            backup::BackupOperation::Succeeded(message) => div()
+                .text_sm()
+                .text_center()
+                .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))
+                .child(message.clone()),
+            backup::BackupOperation::AwaitingRestoreConfirmation { archive_path } => div()
+                .text_sm()
+                .text_center()
+                .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))
+                .child(format!("Restore: {}", archive_path.display())),
+            _ => div(),
+        };
+        let unlock_button = Button::new("unlock-submit")
+            .w_full()
+            .h(px(44.))
+            .rounded(px(7.))
+            .disabled(pending || backup_busy)
+            .loading(pending)
+            .on_click(cx.listener(|this, _, window, cx| this.unlock_vault(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .font_weight(FontWeight::BOLD)
+                    .child(icon(
+                        IconName::KeySquare,
+                        Some(15.),
+                        Some(rgb(CIPHER_BACKGROUND).into()),
+                    ))
+                    .child(if pending {
+                        "Unlocking…"
+                    } else {
+                        "Unlock vault"
+                    }),
+            );
+        let unlock_button = animated_auth_button(
+            "unlock-submit",
+            unlock_button,
+            self.auth_hovered.get("unlock-submit").copied(),
+            (CIPHER_PRIMARY, 0xF0F2F6, 0xCDD2DC, CIPHER_BACKGROUND),
+            cx,
+        );
+        let restore_button = Button::new("restore-backup")
+            .h(px(32.))
+            .disabled(backup_busy)
+            .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/refresh-cw.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                    )
+                    .child("Restore a backup instead"),
+            );
+        let restore_button = animated_auth_button(
+            "restore-backup",
+            restore_button,
+            self.auth_hovered.get("restore-backup").copied(),
+            (
+                CIPHER_BACKGROUND,
+                CIPHER_SURFACE_RAISED,
+                CIPHER_BORDER,
+                CIPHER_FOREGROUND_SECONDARY,
+            ),
+            cx,
+        );
         rsx! {
             <div
                 id="locked-view"
@@ -512,8 +1014,8 @@ impl Locker {
                 flex
                 items_center
                 justify_center
-                bg={white()}
-                p={px(32.)}
+                bg={rgb(CIPHER_BACKGROUND)}
+                p={px(36.)}
                 onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.key == "enter" {
                         this.unlock_vault(window, cx);
@@ -524,55 +1026,74 @@ impl Locker {
                     id="locked-card"
                     flex
                     flex_col
-                    gap={px(24.)}
-                    w={px(380.)}
-                    p={px(32.)}
-                    rounded={radius_lg}
-                    bg={white()}
+                    gap={px(18.)}
+                    w={px(416.)}
                 >
-                    <div flex flex_col items_center gap={px(12.)}>
-                        <div
-                            flex
-                            items_center
-                            justify_center
-                            w={px(56.)}
-                            h={px(56.)}
-                            rounded_full
-                            bg={icon_tint}
-                        >
-                            {icon(IconName::KeySquare, Some(26.), Some(icon_color))}
-                        </div>
-                        <div flex flex_col items_center gap={px(6.)}>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={foreground}>
+                    <div flex flex_col items_center gap={px(8.)}>
+                        {logo(52., rgb(CIPHER_FOREGROUND).into())}
+                        <div flex flex_col items_center gap={px(4.)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>
                                 {"Unlock your vault"}
                             </div>
-                            <div text_sm text_center textColor={muted_foreground}>
-                                {"Enter your master password to continue."}
+                            <div text_xs text_center textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                                {"Enter your master password to continue"}
                             </div>
                         </div>
                     </div>
-                    <div flex flex_col gap={px(16.)}>
-                        <div id="unlock-password" flex flex_col gap={px(6.)}>
-                            <div text_sm fontWeight={FontWeight::MEDIUM} textColor={foreground}>
-                                {"Password"}
-                            </div>
-                            <Input base={Input::new(&self.unlock_password).mask_toggle()} />
+                    <div
+                        id="locked-vault-summary"
+                        flex
+                        items_center
+                        gap={px(10.)}
+                        h={px(48.)}
+                        px={px(12.)}
+                        rounded={px(8.)}
+                        bg={rgb(CIPHER_SURFACE)}
+                        border_1
+                        borderColor={rgb(CIPHER_BORDER)}
+                    >
+                        <div size={px(28.)} flex items_center justify_center rounded_full bg={rgb(CIPHER_SURFACE_RAISED)}>
+                            {logo(14., rgb(CIPHER_FOREGROUND).into())}
                         </div>
-                        {error}
-                        <Button
-                            base={Button::new("unlock-submit")
-                                .primary()
-                                .w_full()
-                                .label(if pending { "Unlocking…" } else { "Unlock" })
-                                .disabled(pending || backup_busy)
-                                .loading(pending)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.unlock_vault(window, cx);
-                                }))}
+                        <div flex flex_col flex_1 gap={px(2.)}>
+                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND_SOFT)}>
+                                {"Local vault"}
+                            </div>
+                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                                {format!("{vault_name} · Local")}
+                            </div>
+                        </div>
+                        {icon(IconName::KeySquare, Some(14.), Some(rgb(CIPHER_FOREGROUND_SUBTLE).into()))}
+                    </div>
+                    <div id="unlock-password" flex flex_col gap={px(7.)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                            {"MASTER PASSWORD"}
+                        </div>
+                        <Input
+                            base={Input::new(&self.unlock_password)
+                                .mask_toggle()
+                                .aria_label("Master password")}
+                            h={px(44.)}
+                            bg={rgb(CIPHER_SURFACE)}
+                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            rounded={px(8.)}
                         />
                     </div>
-                    <div flex flex_col gap={px(8.)} pt={px(8.)} border_t_1 borderColor={border}>
-                        {self.render_backup_actions(window, cx)}
+                    {error}
+                    {unlock_button}
+                    <div flex flex_col gap={px(8.)}>
+                        <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        {restore_button}
+                        {backup_status}
+                        <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
+                            {"Enter to unlock"}
+                        </div>
+                    </div>
+                    <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        {gpui_component::Icon::empty()
+                            .path("icons/shield-check.svg")
+                            .size(px(13.))}
+                        <div text_xs>{"Encrypted locally · Works offline"}</div>
                     </div>
                 </div>
             </div>
@@ -580,32 +1101,75 @@ impl Locker {
     }
 
     fn render_unlocked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let locker = cx.entity();
+        if self.active_view == ActiveView::Home {
+            let nav = self.render_sidebar_nav(cx);
+            let home = self.render_home(window, cx);
+            return rsx! { <div id="home-shell" size_full flex bg={rgb(CIPHER_BACKGROUND)}>{nav}{home}</div> };
+        }
+        if self.uses_secure_note_workspace() {
+            let nav = self.render_sidebar_nav(cx);
+            let workspace = self.render_secure_note_workspace(window, cx);
+            return rsx! {
+                <div id="secure-note-workspace-shell" size_full flex bg={rgb(0xF7F8FA)}>
+                    {nav}
+                    {workspace}
+                </div>
+            };
+        }
+        if self.uses_login_workspace() {
+            let nav = self.render_sidebar_nav(cx);
+            let workspace = self.render_login_workspace(window, cx);
+            return rsx! {
+                <div id="login-workspace-shell" size_full flex bg={rgb(CIPHER_BACKGROUND)}>
+                    {nav}
+                    {workspace}
+                </div>
+            };
+        }
+        if self.item_editor.is_some() {
+            let locker = cx.entity();
+            let content = self.render_item_editor(locker, window, cx);
+            *self.item_editor_sheet_cell.borrow_mut() = Some(content);
+        }
+        let nav = self.render_sidebar_nav(cx);
+        let add = self.render_add_item_button("header-add-item", cx);
+        let list_toolbar = self.render_vault_list_toolbar(cx);
         let list = self.render_vault_list(window, cx);
-        let editor = self.render_item_editor(locker, window, cx);
+        let detail = self.render_item_detail(window, cx);
         let conflict_panel = if self.conflicts_open {
-            self.render_conflicts(window, cx)
+            div()
+                .p(px(20.))
+                .pb(px(0.))
+                .child(self.render_conflicts(window, cx))
+                .into_any_element()
         } else {
             div().into_any_element()
         };
-        let conflict_count = self.conflicts.count();
-        let theme = cx.theme();
-        let border = theme.border;
-        let mut conflicts_button = Button::new("conflicts-button")
-            .small()
-            .label(format!("Conflicts ({conflict_count})"))
-            .on_click(cx.listener(|this, _, window, cx| this.open_conflicts(window, cx)));
-        conflicts_button = if conflict_count > 0 {
-            conflicts_button.warning()
-        } else {
-            conflicts_button.ghost()
+        let (total, logins, notes) = self.vault_list.as_ref().map_or((0, 0, 0), |list| {
+            let logins = list
+                .items
+                .iter()
+                .filter(|(_, item)| item.item_type == locker_core::ItemType::Login)
+                .count();
+            let notes = list
+                .items
+                .iter()
+                .filter(|(_, item)| item.item_type == locker_core::ItemType::SecureNote)
+                .count();
+            (list.items.len(), logins, notes)
+        });
+        let (page_title, item_count, item_noun) = match self.active_view {
+            ActiveView::Home => ("Home", total, "items"),
+            ActiveView::AllItems => ("All items", total, "items"),
+            ActiveView::Logins => ("Logins", logins, "logins"),
+            ActiveView::SecureNotes => ("Secure Notes", notes, "encrypted notes"),
         };
         rsx! {
             <div
                 id="unlocked-view"
                 size_full
                 flex
-                bg={white()}
+                bg={rgb(CIPHER_BACKGROUND)}
                 onMouseMove={cx.listener(|this, _: &MouseMoveEvent, _, cx| {
                     this.note_activity(cx);
                 })}
@@ -616,7 +1180,7 @@ impl Locker {
                     this.note_activity(cx);
                 })}
             >
-                {list}
+                {nav}
                 <div flex flex_col flex_1 min_w={px(0.)} h_full>
                     <div
                         id="content-toolbar"
@@ -624,20 +1188,28 @@ impl Locker {
                         items_center
                         justify_between
                         w_full
-                        h={px(52.)}
-                        px={px(20.)}
+                        h={px(88.)}
+                        px={px(32.)}
                         flex_shrink_0
                         border_b_1
-                        borderColor={border}
+                        borderColor={rgb(CIPHER_BORDER)}
                     >
-                        <Button base={conflicts_button} />
-                        <div flex items_center gap={px(8.)}>
-                            {self.render_backup_actions(window, cx)}
+                        <div flex flex_col gap={px(3.)}>
+                            <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{page_title}</div>
+                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                                {if self.active_view == ActiveView::SecureNotes {
+                                    format!("{item_count} {item_noun}")
+                                } else {
+                                    format!("{item_count} {item_noun} in your vault")
+                                }}
+                            </div>
+                        </div>
+                        <div flex items_center gap={px(10.)}>
                             <Button
                                 base={Button::new("lock-vault")
-                                    .outline()
-                                    .small()
-                                    .label("Lock")
+                                    .ghost()
+                                    .icon(gpui_component::Icon::empty().path("icons/lock-keyhole-open.svg").text_color(rgb(CIPHER_FOREGROUND_MUTED)))
+                                    .tooltip("Lock vault")
                                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                                         if !event.keystroke.modifiers.modified()
                                             && matches!(event.keystroke.key.as_str(), "enter" | "space")
@@ -650,15 +1222,299 @@ impl Locker {
                                         cx.listener(|this, _, window, cx| this.lock_vault(window, cx)),
                                     )}
                             />
+                            {sync_status_pill()}
+                            {add}
                         </div>
                     </div>
-                    <div flex flex_col flex_1 gap={px(16.)} p={px(20.)} overflow_y_scroll>
-                        {conflict_panel}
-                        {editor}
+                    {conflict_panel}
+                    <div flex flex_col flex_1 min_h={px(0.)} p={px(28.)} pt={px(20.)} gap={px(16.)} bg={rgb(CIPHER_BACKGROUND)}>
+                        {list_toolbar}
+                        <div flex flex_1 min_h={px(0.)} gap={px(16.)}>
+                            {list}
+                            {detail}
+                        </div>
                     </div>
                 </div>
             </div>
         }
+    }
+
+    fn render_home(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let (total, logins, notes, recent) =
+            self.vault_list
+                .as_ref()
+                .map_or((0, 0, 0, Vec::new()), |list| {
+                    let logins = list
+                        .items
+                        .iter()
+                        .filter(|(_, item)| item.item_type == locker_core::ItemType::Login)
+                        .count();
+                    let notes = list
+                        .items
+                        .iter()
+                        .filter(|(_, item)| item.item_type == locker_core::ItemType::SecureNote)
+                        .count();
+                    let recent = list
+                        .items
+                        .iter()
+                        .rev()
+                        .take(5)
+                        .map(|(id, item)| (*id, item.clone()))
+                        .collect::<Vec<_>>();
+                    (list.items.len(), logins, notes, recent)
+                });
+        let locker = cx.entity();
+        let add = self.render_add_item_button("home-add-item", cx);
+        let view_all = Button::new("home-view-all")
+            .ghost()
+            .h(px(26.))
+            .label("View all ›")
+            .text_color(rgb(CIPHER_FOREGROUND_SECONDARY))
+            .on_click({
+                let locker = locker.clone();
+                move |_, _window, cx| {
+                    locker.update(cx, |locker, cx| {
+                        locker.set_active_view(ActiveView::AllItems, cx)
+                    });
+                }
+            });
+        let recent_rows: Vec<AnyElement> = recent
+            .into_iter()
+            .map(|(item_id, item)| {
+                let is_login = item.item_type == locker_core::ItemType::Login;
+                let icon_path = if is_login {
+                    "icons/key-square.svg"
+                } else {
+                    "icons/file-lock.svg"
+                };
+                let title = if item.title.is_empty() {
+                    "Untitled".to_owned()
+                } else {
+                    item.title.clone()
+                };
+                let subtitle = recent_item_subtitle(&item);
+                let time = relative_time(item.updated_at);
+                let row_locker = locker.clone();
+                Button::new(SharedString::from(format!("home-recent-{item_id}")))
+                    .ghost()
+                    .w_full()
+                    .h(px(64.))
+                    .justify_start()
+                    .px(px(18.))
+                    .border_b_1()
+                    .border_color(rgb(CIPHER_BORDER))
+                    .on_click(move |_, window, cx| {
+                        row_locker.update(cx, |locker, cx| {
+                            locker.open_editor_for_item(item_id, false, window, cx)
+                        });
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(14.))
+                                    .child(
+                                        div()
+                                            .size(px(34.))
+                                            .rounded(px(8.))
+                                            .bg(rgb(CIPHER_SURFACE_RAISED))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                gpui_component::Icon::empty()
+                                                    .path(icon_path)
+                                                    .size(px(15.))
+                                                    .text_color(rgb(CIPHER_FOREGROUND_SECONDARY)),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(2.))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(CIPHER_FOREGROUND))
+                                                    .child(title),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                                                    .child(subtitle),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(16.))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                                            .child(time),
+                                    )
+                                    .child(
+                                        gpui_component::Icon::empty()
+                                            .path("icons/ellipsis-vertical.svg")
+                                            .size(px(14.))
+                                            .text_color(rgb(CIPHER_FOREGROUND_MUTED)),
+                                    ),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let recent_body = if recent_rows.is_empty() {
+            div()
+                .py(px(40.))
+                .text_sm()
+                .text_center()
+                .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                .child("No items yet")
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .children(recent_rows)
+                .into_any_element()
+        };
+        let new_login = home_quick_action(
+            "home-new-login",
+            "icons/key-square.svg",
+            "New login",
+            true,
+            self.auth_hovered.get("home-new-login").copied(),
+            {
+                let locker = locker.clone();
+                move |_, window, cx| {
+                    locker.update(cx, |l, cx| {
+                        l.active_view = ActiveView::Logins;
+                        l.open_create_editor(window, cx);
+                    });
+                }
+            },
+            cx,
+        );
+        let new_note = home_quick_action(
+            "home-secure-note",
+            "icons/file-lock.svg",
+            "Secure note",
+            true,
+            self.auth_hovered.get("home-secure-note").copied(),
+            {
+                let locker = locker.clone();
+                move |_, window, cx| {
+                    locker.update(cx, |l, cx| {
+                        l.active_view = ActiveView::SecureNotes;
+                        l.open_create_editor(window, cx);
+                    });
+                }
+            },
+            cx,
+        );
+        let new_card = home_quick_action(
+            "home-payment-card",
+            "icons/credit-card.svg",
+            "Payment card",
+            false,
+            None,
+            |_, _, _| {},
+            cx,
+        );
+        let new_identity = home_quick_action(
+            "home-identity",
+            "icons/user.svg",
+            "Identity",
+            false,
+            None,
+            |_, _, _| {},
+            cx,
+        );
+        rsx! {
+            <div id="home-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={rgb(CIPHER_BACKGROUND)}>
+                <div id="home-header" flex items_center justify_between h={px(88.)} px={px(32.)} flex_shrink_0 border_b_1 borderColor={rgb(CIPHER_BORDER)}>
+                    <div flex flex_col gap={px(3.)}>
+                        <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Home"}</div>
+                        <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Your vault at a glance"}</div>
+                    </div>
+                    <div flex items_center gap={px(10.)}>
+                        {sync_status_pill()}
+                        {add}
+                    </div>
+                </div>
+                <div id="home-dashboard" flex flex_col gap={px(20.)} p={px(32.)} overflow_y_scroll>
+                    <div id="home-hero" flex items_start justify_between p={px(24.)} rounded={px(10.)} bg={rgb(CIPHER_SURFACE_RAISED)}>
+                        <div flex flex_col gap={px(8.)} w={px(360.)}>
+                            <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"WELCOME BACK"}</div>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Your vault is secure"}</div>
+                            <div text_sm textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                                {format!(
+                                    "Stored locally and encrypted. {total} item{} in your vault.",
+                                    if total == 1 { "" } else { "s" },
+                                )}
+                            </div>
+                        </div>
+                        <div flex gap={px(12.)}>
+                            {home_stat_tile("VAULT ITEMS", total)}
+                            {home_stat_tile("LOGINS", logins)}
+                            {home_stat_tile("SECURE NOTES", notes)}
+                        </div>
+                    </div>
+                    <div id="home-quick-actions" flex flex_col gap={px(12.)}>
+                        <div flex items_center justify_between>
+                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Quick actions"}</div>
+                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Ctrl+P to search or create"}</div>
+                        </div>
+                        <div flex gap={px(12.)}>
+                            {new_login}
+                            {new_note}
+                            {new_card}
+                            {new_identity}
+                        </div>
+                    </div>
+                    <div flex gap={px(20.)} items_start>
+                        <div id="home-recent-items" flex flex_col flex_1 min_w={px(0.)} rounded={px(10.)} bg={rgb(CIPHER_SURFACE)}>
+                            <div flex items_center justify_between h={px(58.)} px={px(18.)} border_b_1 borderColor={rgb(CIPHER_BORDER)}>
+                                <div flex flex_col gap={px(2.)}>
+                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Recent items"}</div>
+                                    <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Newest first"}</div>
+                                </div>
+                                {view_all}
+                            </div>
+                            {recent_body}
+                        </div>
+                        <div flex flex_col gap={px(16.)} w={px(330.)} flex_shrink_0>
+                            <div flex flex_col gap={px(10.)} p={px(18.)} rounded={px(10.)} bg={rgb(CIPHER_SURFACE)}>
+                                <div flex items_center gap={px(8.)}>
+                                    {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(15.)).text_color(rgb(CIPHER_FOREGROUND_SECONDARY))}
+                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Security health"}</div>
+                                </div>
+                                <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Password health scoring isn't available yet."}</div>
+                            </div>
+                            <div flex flex_col gap={px(10.)} p={px(18.)} rounded={px(10.)} bg={rgb(CIPHER_SURFACE)}>
+                                <div flex items_center gap={px(8.)}>
+                                    {gpui_component::Icon::empty().path("icons/star.svg").size(px(15.)).text_color(rgb(CIPHER_FOREGROUND_SECONDARY))}
+                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Favorites"}</div>
+                                </div>
+                                <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Favoriting items isn't available yet."}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }.into_any_element()
     }
 }
 
@@ -668,17 +1524,26 @@ impl Render for Locker {
         self.window_controls.update(cx, |controls, cx| {
             controls.set_authenticated(authenticated, cx)
         });
-        let body = match &self.state {
-            AppState::NoVault => self.render_no_vault(window, cx).into_any_element(),
-            AppState::Locked => self.render_locked(window, cx).into_any_element(),
-            AppState::Unlocked(_) => self.render_unlocked(window, cx).into_any_element(),
+        let body = if matches!(
+            self.backup.dialog,
+            Some(backup::BackupDialogState::Restore { .. })
+        ) {
+            self.render_restore_backup(window, cx)
+        } else {
+            match &self.state {
+                AppState::NoVault => self.render_no_vault(window, cx).into_any_element(),
+                AppState::Locked => self.render_locked(window, cx).into_any_element(),
+                AppState::Unlocked(_) => self.render_unlocked(window, cx).into_any_element(),
+            }
         };
         let dialog_layer = Root::render_dialog_layer(window, cx);
+        let sheet_layer = Root::render_sheet_layer(window, cx);
         rsx! {
             <div
                 size_full
                 flex
                 flex_col
+                bg={rgb(CIPHER_BACKGROUND)}
                 onAction={cx.listener(|this, _: &OpenCommandPalette, window, cx| {
                     // open_palette itself no-ops while unauthenticated.
                     this.window_controls
@@ -686,9 +1551,12 @@ impl Render for Locker {
                 })}
             >
                 {self.window_controls.clone()}
-                <div flex_1>{body}</div>
+                <div flex_1 bg={rgb(CIPHER_BACKGROUND)}>{body}</div>
                 {for dialog in dialog_layer {
                     {dialog}
+                }}
+                {for sheet in sheet_layer {
+                    {sheet}
                 }}
             </div>
         }
@@ -725,7 +1593,7 @@ mod tests {
     use super::*;
     use super::{backup, conflicts};
     use gpui::{Focusable, TestAppContext, VisualTestContext};
-    use gpui_component::{Root, WindowExt};
+    use gpui_component::{ActiveTheme, Root, Theme, ThemeMode, WindowExt};
     use locker_core::{
         BackupError, ChangeId, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, SecretBytes,
     };
@@ -908,6 +1776,7 @@ mod tests {
             FormState::Pending
         );
         cx.run_until_parked();
+        assert_eq!(cx.update(|_, app| app.theme().mode), ThemeMode::Dark);
         assert!(view.read_with(cx, |locker, _| matches!(
             &locker.state,
             AppState::Unlocked(_)
@@ -970,6 +1839,50 @@ mod tests {
         assert!(view.read_with(cx, |locker, _| {
             matches!(&locker.state, AppState::Unlocked(vault) if vault.vault_id() == vault_id)
         }));
+        assert_eq!(cx.update(|_, app| app.theme().mode), ThemeMode::Dark);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn locked_view_uses_dark_component_theme(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("locked-theme");
+        Vault::create(b"correct", &path).unwrap().lock();
+        let (_view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        assert_eq!(cx.update(|_, app| app.theme().mode), ThemeMode::Dark);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn create_view_uses_dark_component_theme(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("create-theme");
+        let (_view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        assert_eq!(cx.update(|_, app| app.theme().mode), ThemeMode::Dark);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn auth_hover_color_interpolates_between_state_colors() {
+        assert_eq!(auth_hover_color(0x000000, 0xFFFFFF, 0.), rgb(0x000000));
+        assert_eq!(auth_hover_color(0x000000, 0xFFFFFF, 1.), rgb(0xFFFFFF));
+    }
+
+    #[gpui::test]
+    fn locking_restores_dark_component_theme(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("lock-theme");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        cx.update(|_, app| Theme::change(ThemeMode::Light, None, app));
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.state = AppState::Unlocked(vault);
+            locker.lock_vault(window, locker_cx);
+        });
+
+        assert_eq!(cx.update(|_, app| app.theme().mode), ThemeMode::Dark);
         cleanup(&path);
     }
 
@@ -1093,6 +2006,31 @@ mod tests {
         assert_eq!(
             view.read_with(cx, |locker, _| locker.create_state.clone()),
             FormState::Error("Enter a password.".into())
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn create_page_escape_closes_the_window(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("create-escape");
+        let (_view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        cx.simulate_keystrokes("escape");
+        assert!(cx.windows().is_empty());
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn home_view_can_be_selected_for_unlocked_vault(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "home-view", &[]);
+        view.update_in(cx, |locker, _window, locker_cx| {
+            locker.set_active_view(ActiveView::Home, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.active_view),
+            ActiveView::Home
         );
         cleanup(&path);
     }
@@ -1366,6 +2304,40 @@ mod tests {
     }
 
     #[gpui::test]
+    fn secure_note_search_matches_note_contents(cx: &mut TestAppContext) {
+        init(cx);
+        let payloads = [ItemPayload {
+            schema_version: ITEM_SCHEMA_VERSION,
+            item_type: ItemType::SecureNote,
+            title: "Recovery codes".into(),
+            username: String::new(),
+            password: String::new(),
+            uris: Vec::new(),
+            notes: "Use the vault phrase amber-galaxy to recover access.".into(),
+            created_at: 1,
+            updated_at: 1,
+        }];
+        let (view, cx, path, _) = unlocked_view(cx, "secure-note-content-search", &payloads);
+        view.update_in(cx, |locker, _window, locker_cx| {
+            locker.active_view = ActiveView::SecureNotes;
+            locker.recompute_vault_list_filter(locker_cx);
+        });
+        view.update_in(cx, |locker, _window, locker_cx| {
+            locker
+                .vault_list
+                .as_mut()
+                .unwrap()
+                .recompute_filter("amber-galaxy".into());
+            locker_cx.notify();
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.vault_list.as_ref().unwrap().filtered.len()),
+            1
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn create_save_updates_cache_and_persists(cx: &mut TestAppContext) {
         init(cx);
         let (view, cx, path, _) = unlocked_view(cx, "create-item", &[]);
@@ -1390,6 +2362,143 @@ mod tests {
             Some(id)
         );
         assert_eq!(persisted.unwrap().title, "New");
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn secure_note_creation_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "secure-note-workspace", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.uses_secure_note_workspace()));
+        assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn secure_note_requires_a_title_before_saving(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "secure-note-title-required", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+            locker.save_item(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .item_editor
+                .as_ref()
+                .and_then(|editor| editor.save_error.as_ref())
+                .map(ToString::to_string)),
+            Some("Enter a title.".to_owned())
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn secure_note_requires_content_before_saving(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "secure-note-content-required", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+            let title = locker.item_editor.as_ref().unwrap().title_input.clone();
+            title.update(locker_cx, |input, input_cx| {
+                input.set_value("Recovery codes", window, input_cx)
+            });
+            locker.save_item(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .item_editor
+                .as_ref()
+                .and_then(|editor| editor.save_error.as_ref())
+                .map(ToString::to_string)),
+            Some("Enter note content.".to_owned())
+        );
+        cleanup(&path);
+    }
+
+    /// Mirrors `secure_note_creation_uses_the_dedicated_workspace`: creating a
+    /// login from the Logins view uses the full-page "Create login" workspace
+    /// instead of the generic Sheet, and actually renders it (real password
+    /// strength/reuse checks included) without panicking.
+    #[gpui::test]
+    fn login_creation_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(
+            cx,
+            "login-workspace",
+            &[login_payload("Existing", "alex")],
+        );
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::Logins, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.uses_login_workspace()));
+        assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+
+        // Type the vault's one existing password into the draft and confirm
+        // the real reuse check flags it, then cancel via Escape.
+        view.update_in(cx, |locker, window, locker_cx| {
+            let editor = locker.item_editor.as_ref().unwrap();
+            let password_input = editor.password_input.clone();
+            password_input.update(locker_cx, |state, input_cx| {
+                state.set_value("secret".to_owned(), window, input_cx);
+            });
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |locker, _| locker.item_editor.is_some()));
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.cancel_item_editor(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.item_editor.is_none()));
+        cleanup(&path);
+    }
+
+    /// Renders the real Logins split view (not just the pure health-check
+    /// functions) with two logins sharing the same short "secret" password —
+    /// weak *and* reused — end to end: view switch, health-filter pills,
+    /// selecting a row, and the health-filter toggle all run without panicking.
+    #[gpui::test]
+    fn logins_view_renders_with_real_weak_and_reused_passwords(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, ids) = unlocked_view(
+            cx,
+            "logins-health",
+            &[login_payload("GitHub", "alex"), login_payload("AWS", "alex")],
+        );
+        view.update_in(cx, |locker, _window, locker_cx| {
+            locker.set_active_view(ActiveView::Logins, locker_cx);
+        });
+        cx.run_until_parked();
+        let (weak, reused) = view.read_with(cx, |locker, _| {
+            let list = locker.vault_list.as_ref().unwrap();
+            (list.weak_login_count(), list.reused_login_count())
+        });
+        assert_eq!((weak, reused), (2, 2));
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.select_item(ids[0], locker_cx);
+            if let Some(list) = locker.vault_list.as_mut() {
+                list.set_login_health_filter(Some(vault_list::LoginHealth::Reused));
+            }
+            let _ = window;
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .vault_list
+                .as_ref()
+                .unwrap()
+                .filtered
+                .len()),
+            2
+        );
         cleanup(&path);
     }
 
@@ -1452,6 +2561,40 @@ mod tests {
                 && list.deleted_ids == [item_id]
                 && locker.item_editor.is_none()
         }));
+        cleanup(&path);
+    }
+
+    /// The detail pane's "Duplicate" footer button: a real second item, not a
+    /// UI-only copy — persisted via the same `Vault::create_item` path a
+    /// normal save uses, titled "<original> (copy)", and selected afterward.
+    #[gpui::test]
+    fn duplicate_item_persists_a_titled_copy_and_selects_it(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, ids) =
+            unlocked_view(cx, "duplicate-item", &[login_payload("Original", "alice")]);
+        let original_id = ids[0];
+        view.update_in(cx, |locker, _window, locker_cx| {
+            locker.duplicate_item(original_id, locker_cx);
+        });
+        let (item_count, titles, selected_is_new, persisted_count) = view.read_with(cx, |locker, _| {
+            let list = locker.vault_list.as_ref().unwrap();
+            let titles: Vec<_> = list.items.iter().map(|(_, p)| p.title.clone()).collect();
+            let persisted_count = match &locker.state {
+                AppState::Unlocked(vault) => vault.list_items().unwrap().len(),
+                _ => 0,
+            };
+            (
+                list.items.len(),
+                titles,
+                list.selected.is_some_and(|id| id != original_id),
+                persisted_count,
+            )
+        });
+        assert_eq!(item_count, 2);
+        assert_eq!(persisted_count, 2);
+        assert!(titles.contains(&"Original".to_owned()));
+        assert!(titles.contains(&"Original (copy)".to_owned()));
+        assert!(selected_is_new);
         cleanup(&path);
     }
 
@@ -1757,6 +2900,154 @@ mod tests {
     }
 
     #[gpui::test]
+    fn restore_confirmation_uses_the_inline_page_instead_of_a_dialog(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("inline-restore");
+        let archive = path.with_extension("lockbak");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.request_restore_confirmation(archive.clone(), window, locker_cx);
+            assert!(!window.has_active_dialog(locker_cx));
+        });
+        assert!(view.read_with(cx, |locker, _| {
+            matches!(
+                &locker.backup.dialog,
+                Some(backup::BackupDialogState::Restore { archive_path, .. }) if archive_path == &archive
+            )
+        }));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn restore_form_reports_missing_passwords_inline(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("restore-validation");
+        let archive = path.with_extension("lockbak");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.request_restore_confirmation(archive, window, locker_cx);
+            assert!(!locker.confirm_restore(window, locker_cx));
+            assert_eq!(
+                locker.backup.restore_error.as_deref(),
+                Some("Enter all three passwords.")
+            );
+        });
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn restore_back_waits_for_the_exit_transition(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("restore-exit");
+        let archive = path.with_extension("lockbak");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.request_restore_confirmation(archive, window, locker_cx);
+            locker.leave_restore(window, locker_cx);
+            assert!(locker.backup.restore_exiting);
+            assert!(locker.backup.dialog.is_some());
+        });
+
+        cx.executor().advance_clock(Duration::from_millis(180));
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |locker, _| {
+            !locker.backup.restore_exiting
+                && locker.backup.dialog.is_none()
+                && matches!(locker.backup.operation, backup::BackupOperation::Idle)
+        }));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn reduced_motion_restore_back_is_immediate(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("restore-reduced-motion");
+        let archive = path.with_extension("lockbak");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        cx.update(|_, app| app.set_reduce_motion(true));
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.request_restore_confirmation(archive, window, locker_cx);
+            locker.leave_restore(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| {
+            locker.backup.dialog.is_none()
+                && matches!(locker.backup.operation, backup::BackupOperation::Idle)
+        }));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn restore_page_enter_submits_the_form(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("restore-enter");
+        let archive = path.with_extension("lockbak");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.request_restore_confirmation(archive, window, locker_cx);
+        });
+
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.backup.restore_error.clone()),
+            Some("Enter all three passwords.".into())
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn restore_page_escape_starts_the_back_transition(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("restore-escape");
+        let archive = path.with_extension("lockbak");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.request_restore_confirmation(archive, window, locker_cx);
+        });
+
+        cx.simulate_keystrokes("escape");
+        assert!(view.read_with(cx, |locker, _| locker.backup.restore_exiting));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn restore_submit_is_ignored_during_the_exit_transition(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("restore-submit-during-exit");
+        let archive = path.with_extension("lockbak");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.request_restore_confirmation(archive, window, locker_cx);
+            locker.leave_restore(window, locker_cx);
+            assert!(!locker.confirm_restore(window, locker_cx));
+            assert_eq!(locker.backup.restore_error, None);
+        });
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn choosing_a_different_restore_reopens_the_picker_after_exit(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("restore-repick");
+        let archive = path.with_extension("lockbak");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.request_restore_confirmation(archive, window, locker_cx);
+            locker.choose_different_restore(window, locker_cx);
+        });
+
+        cx.executor().advance_clock(Duration::from_millis(180));
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |locker, _| matches!(
+            locker.backup.operation,
+            backup::BackupOperation::ChoosingRestorePath
+        )));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn cancelled_backup_pickers_and_failed_fresh_restore_reset_safely(cx: &mut TestAppContext) {
         init(cx);
         let path = test_path("backup-cancel-focus");
@@ -1780,6 +3071,7 @@ mod tests {
 
             locker.backup.operation = backup::BackupOperation::Restoring;
             locker.backup.epoch = 3;
+            Theme::change(ThemeMode::Dark, Some(window), locker_cx);
             locker.finish_restore(
                 3,
                 Err(BackupError::AuthenticationFailed),
@@ -1790,6 +3082,7 @@ mod tests {
         });
         let input = view.read_with(cx, |locker, _| locker.create_password.clone());
         assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::NoVault)));
+        assert_eq!(cx.update(|_, app| app.theme().mode), ThemeMode::Dark);
         assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
         cleanup(&path);
     }
