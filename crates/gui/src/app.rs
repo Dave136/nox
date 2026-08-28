@@ -32,14 +32,15 @@ use vault_list::VaultListState;
 
 use gpui::{
     Animation, AnimationExt, AnyElement, ClickEvent, Context, Entity, FontWeight, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString, Task,
-    Window, div, ease_out_quint, prelude::*, px, rgb,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString,
+    Subscription, Task, Window, div, ease_out_quint, prelude::*, px, rgb,
 };
 use gpui_component::{
-    Disableable, Root, Theme, ThemeMode, WindowExt,
+    Disableable, IndexPath, Root, Theme, ThemeMode, WindowExt,
     button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _},
     dialog::DialogButtonProps,
     input::{Input, InputState},
+    select::{Select, SelectEvent, SelectItem, SelectState},
 };
 use gpui_rsx::rsx;
 use nox_core::{SecretBytes, Vault, VaultError};
@@ -52,7 +53,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::assets::{IconName, icon, logo};
+use crate::assets::logo;
 
 /// Default duration before an inactive unlocked vault is locked.
 pub const DEFAULT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(300);
@@ -108,6 +109,119 @@ fn relative_opened_label(last_opened_ms: Option<u64>) -> SharedString {
         format!("{}h ago", elapsed / 3_600_000).into()
     } else {
         format!("{}d ago", elapsed / 86_400_000).into()
+    }
+}
+
+fn vault_initials(name: &str) -> String {
+    name.split_whitespace()
+        .filter_map(|part| part.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase()
+}
+
+/// Shared avatar + name + status row content for the vault Select — used
+/// both as the trigger's `display_title` (no trailing icon; the Select adds
+/// its own caret) and as each dropdown option's `render` (with one).
+fn vault_row_content(vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyElement {
+    let missing = !vault.path.is_file();
+    let secondary = if missing {
+        "File not found".to_owned()
+    } else {
+        format!("Local · {}", relative_opened_label(vault.last_opened_ms))
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .w_full()
+        .child(
+            div()
+                .size(px(28.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(CIPHER_SURFACE_RAISED))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(if missing {
+                            CIPHER_DISABLED
+                        } else {
+                            CIPHER_FOREGROUND
+                        }))
+                        .child(vault_initials(&vault.name)),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(if missing {
+                            CIPHER_DISABLED
+                        } else {
+                            CIPHER_FOREGROUND_SOFT
+                        }))
+                        .child(vault.name.clone()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(if missing {
+                            CIPHER_DISABLED
+                        } else {
+                            CIPHER_FOREGROUND_SUBTLE
+                        }))
+                        .child(secondary),
+                ),
+        )
+        .when_some(trailing, |row, trailing| row.child(trailing))
+        .into_any_element()
+}
+
+impl SelectItem for VaultEntry {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.name.clone().into()
+    }
+
+    fn display_title(&self) -> Option<AnyElement> {
+        Some(vault_row_content(self, None))
+    }
+
+    fn render(&self, _window: &mut Window, _cx: &mut gpui::App) -> impl IntoElement {
+        let missing = !self.path.is_file();
+        let trailing = gpui_component::Icon::empty()
+            .path(if missing {
+                "icons/circle-x.svg"
+            } else {
+                "icons/chevron-right.svg"
+            })
+            .size(px(14.))
+            .text_color(rgb(if missing {
+                CIPHER_DISABLED
+            } else {
+                CIPHER_ICON_MUTED
+            }))
+            .into_any_element();
+        vault_row_content(self, Some(trailing))
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+
+    fn disabled(&self) -> bool {
+        !self.path.is_file()
     }
 }
 
@@ -411,7 +525,6 @@ fn home_quick_action(
 pub enum AppState {
     NoVault,
     RegistryError,
-    Selecting,
     Locked,
     Unlocked(Vault),
 }
@@ -429,10 +542,9 @@ pub struct Nox {
     pub(crate) data_dir: PathBuf,
     pub(crate) vaults: VaultRegistry,
     pub(crate) active_vault: Option<VaultEntry>,
-    /// Index into `vaults.vaults` for the picker's highlighted row. Distinct
-    /// from `active_vault`: it moves freely as the cursor, including onto
-    /// missing entries; `select_vault` refuses to land it there.
-    pub(crate) selected_vault: Option<usize>,
+    /// Vault picker shown inline on the Locked screen's account row.
+    pub(crate) vault_select: Entity<SelectState<Vec<VaultEntry>>>,
+    _vault_select_subscription: Subscription,
 
     create_name: Entity<InputState>,
     create_password: Entity<InputState>,
@@ -491,25 +603,50 @@ impl Nox {
         } else {
             match vaults.vaults.len() {
                 0 => AppState::NoVault,
-                1 => AppState::Locked,
-                _ => AppState::Selecting,
+                _ => AppState::Locked,
             }
         };
-        // A single registered vault opens straight to Locked, so it becomes the
-        // active vault immediately. With several, nothing is active until the
-        // picker's selection is opened — `selected_vault` drives the picker instead.
+        // With one vault it's the only choice; with several, the inline picker
+        // on the Locked screen preselects the last-opened one, falling back to
+        // the first registered entry.
         let active_vault = match vaults.vaults.as_slice() {
+            [] => None,
             [vault] => Some(vault.clone()),
-            _ => None,
-        };
-        let selected_vault = match vaults.vaults.len() {
-            0 | 1 => None,
             _ => vaults
                 .last_opened
                 .as_ref()
-                .and_then(|id| vaults.vaults.iter().position(|vault| &vault.id == id))
-                .or(Some(0)),
+                .and_then(|id| vaults.vaults.iter().find(|vault| &vault.id == id).cloned())
+                .or_else(|| vaults.vaults.first().cloned()),
         };
+        let active_index = active_vault
+            .as_ref()
+            .and_then(|active| vaults.vaults.iter().position(|vault| vault.id == active.id));
+        let vault_select = cx.new(|cx| {
+            SelectState::new(
+                vaults.vaults.clone(),
+                active_index.map(IndexPath::new),
+                window,
+                cx,
+            )
+        });
+        let _vault_select_subscription = cx.subscribe_in(
+            &vault_select,
+            window,
+            |this: &mut Self, _select, event: &SelectEvent<Vec<VaultEntry>>, window, cx| {
+                let SelectEvent::Confirm(value) = event;
+                this.active_vault = value.as_ref().and_then(|id| {
+                    this.vaults
+                        .vaults
+                        .iter()
+                        .find(|vault| &vault.id == id)
+                        .cloned()
+                });
+                this.unlock_state = FormState::Idle;
+                this.reset_unlock_input(window, cx);
+                Self::focus_input(&this.unlock_password, window, cx);
+                cx.notify();
+            },
+        );
         Theme::change(ThemeMode::Dark, Some(window), cx);
         let create_name = Self::new_input(window, cx, "Personal vault", false);
         let create_password = Self::new_input(window, cx, "Create a strong password", true);
@@ -530,7 +667,8 @@ impl Nox {
             data_dir,
             vaults,
             active_vault,
-            selected_vault,
+            vault_select,
+            _vault_select_subscription,
             create_name,
             create_password,
             create_confirm,
@@ -562,7 +700,7 @@ impl Nox {
         match locker.state {
             AppState::NoVault => Self::focus_input(&locker.create_name, window, cx),
             AppState::Locked => Self::focus_input(&locker.unlock_password, window, cx),
-            AppState::RegistryError | AppState::Selecting | AppState::Unlocked(_) => {}
+            AppState::RegistryError | AppState::Unlocked(_) => {}
         }
         locker
     }
@@ -622,60 +760,13 @@ impl Nox {
         self.vaults.last_opened = Some(entry.id.clone());
     }
 
-    /// Move the picker's highlighted row by `offset`, wrapping. Free to land on
-    /// a missing entry — only `select_vault` refuses those.
-    fn move_vault_selection(
-        &mut self,
-        offset: isize,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let len = self.vaults.vaults.len();
-        if len == 0 {
-            return;
-        }
-        let current = self.selected_vault.unwrap_or(0) as isize;
-        self.selected_vault = Some((current + offset).rem_euclid(len as isize) as usize);
-        cx.notify();
-    }
-
-    /// Select a picker row by index. No-ops when that vault's file is missing.
-    fn select_vault(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self
-            .vaults
-            .vaults
-            .get(index)
-            .is_some_and(|vault| vault.path.is_file())
-        {
-            return;
-        }
-        self.selected_vault = Some(index);
-        cx.notify();
-    }
-
-    fn open_selected_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(vault) = self
-            .selected_vault
-            .and_then(|index| self.vaults.vaults.get(index))
-            .filter(|vault| vault.path.is_file())
-            .cloned()
-        else {
-            return;
-        };
-        self.active_vault = Some(vault);
-        self.unlock_state = FormState::Idle;
-        self.reset_unlock_input(window, cx);
-        self.state = AppState::Locked;
-        Self::focus_input(&self.unlock_password, window, cx);
-        cx.notify();
-    }
-
-    fn switch_to_vault_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Returns to the Locked screen's inline vault picker — used by the File
+    /// menu's "Open Vault" command. Locks first if a vault is unlocked; the
+    /// vault Select keeps its own last selection, so no index bookkeeping
+    /// is needed here.
+    fn return_to_unlock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.lock_vault(window, cx);
-        self.state = AppState::Selecting;
-        let active_id = self.active_vault.take().map(|vault| vault.id);
-        self.selected_vault =
-            active_id.and_then(|id| self.vaults.vaults.iter().position(|vault| vault.id == id));
+        self.state = AppState::Locked;
         self.reset_unlock_input(window, cx);
         cx.notify();
     }
@@ -1002,14 +1093,7 @@ impl Nox {
                 }
                 self.begin_create_from_picker(window, cx);
             }
-            WindowCommand::OpenVault => {
-                if matches!(&self.state, AppState::Unlocked(_)) {
-                    self.lock_vault(window, cx);
-                }
-                self.state = AppState::Selecting;
-                self.reset_unlock_input(window, cx);
-                cx.notify();
-            }
+            WindowCommand::OpenVault => self.return_to_unlock(window, cx),
             WindowCommand::LockVault => self.lock_vault(window, cx),
             WindowCommand::Close => window.remove_window(),
         }
@@ -1211,16 +1295,15 @@ impl Nox {
                         } else {
                             Button::new("create-back-to-vault-list")
                                 .h(px(32.))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.state = AppState::Selecting;
-                                    cx.notify();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.return_to_unlock(window, cx);
                                 }))
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap(px(7.))
-                                        .child("Back to vault list"),
+                                        .child("Back"),
                                 )
                                 .into_any_element()
                         }}
@@ -1242,14 +1325,15 @@ impl Nox {
     fn render_locked(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.unlock_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
-        let vault = self.active_vault.as_ref();
-        let vault_name = vault
-            .map(|vault| vault.name.as_str())
-            .unwrap_or("Local vault")
-            .to_owned();
-        let vault_opened = vault
-            .map(|vault| relative_opened_label(vault.last_opened_ms))
-            .unwrap_or_else(|| "never opened".into());
+        let vault_select = Select::new(&self.vault_select)
+            .appearance(false)
+            .w_full()
+            .h(px(48.))
+            .px(px(12.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(rgb(CIPHER_BORDER))
+            .bg(rgb(CIPHER_SURFACE));
         let error = match &self.unlock_state {
             FormState::Error(message) => div()
                 .text_sm()
@@ -1288,11 +1372,12 @@ impl Nox {
                     .items_center()
                     .gap(px(8.))
                     .font_weight(FontWeight::BOLD)
-                    .child(icon(
-                        IconName::KeySquare,
-                        Some(15.),
-                        Some(rgb(CIPHER_BACKGROUND).into()),
-                    ))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/lock-keyhole-open.svg")
+                            .size(px(15.))
+                            .text_color(rgb(CIPHER_PRIMARY_FOREGROUND)),
+                    )
                     .child(if pending {
                         "Unlocking…"
                     } else {
@@ -1303,7 +1388,40 @@ impl Nox {
             "unlock-submit",
             unlock_button,
             self.auth_hovered.get("unlock-submit").copied(),
-            (CIPHER_PRIMARY, 0xF0F2F6, 0xCDD2DC, CIPHER_BACKGROUND),
+            (
+                CIPHER_PRIMARY,
+                0xF0F2F6,
+                0xCDD2DC,
+                CIPHER_PRIMARY_FOREGROUND,
+            ),
+            cx,
+        );
+        let create_button = Button::new("locked-create-vault")
+            .h(px(32.))
+            .on_click(cx.listener(|this, _, window, cx| this.begin_create_from_picker(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/plus.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                    )
+                    .child("Create a new vault"),
+            );
+        let create_button = animated_auth_button(
+            "locked-create-vault",
+            create_button,
+            self.auth_hovered.get("locked-create-vault").copied(),
+            (
+                CIPHER_BACKGROUND,
+                CIPHER_SURFACE_RAISED,
+                CIPHER_BORDER,
+                CIPHER_FOREGROUND_SECONDARY,
+            ),
             cx,
         );
         let restore_button = Button::new("restore-backup")
@@ -1362,8 +1480,10 @@ impl Nox {
                 bg={rgb(CIPHER_BACKGROUND)}
                 p={px(36.)}
                 onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "enter" {
-                        this.unlock_vault(window, cx);
+                    match event.keystroke.key.as_str() {
+                        "enter" => this.unlock_vault(window, cx),
+                        "escape" => window.remove_window(),
+                        _ => {}
                     }
                 })}
             >
@@ -1385,30 +1505,8 @@ impl Nox {
                             </div>
                         </div>
                     </div>
-                    <div
-                        id="locked-vault-summary"
-                        flex
-                        items_center
-                        gap={px(10.)}
-                        h={px(48.)}
-                        px={px(12.)}
-                        rounded={px(8.)}
-                        bg={rgb(CIPHER_SURFACE)}
-                        border_1
-                        borderColor={rgb(CIPHER_BORDER)}
-                    >
-                        <div size={px(28.)} flex items_center justify_center rounded_full bg={rgb(CIPHER_SURFACE_RAISED)}>
-                            {logo(14., rgb(CIPHER_FOREGROUND).into())}
-                        </div>
-                        <div flex flex_col flex_1 gap={px(2.)}>
-                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND_SOFT)}>
-                                {vault_name.clone()}
-                            </div>
-                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
-                                {format!("Local · {vault_opened}")}
-                            </div>
-                        </div>
-                        {icon(IconName::KeySquare, Some(14.), Some(rgb(CIPHER_FOREGROUND_SUBTLE).into()))}
+                    <div id="locked-vault-summary">
+                        {vault_select}
                     </div>
                     <div id="unlock-password" flex flex_col gap={px(7.)}>
                         <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
@@ -1428,320 +1526,13 @@ impl Nox {
                     {unlock_button}
                     <div flex flex_col gap={px(8.)}>
                         <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
-                        {if self.vaults.vaults.len() > 1 {
-                            Button::new("switch-vault")
-                                .h(px(32.))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.switch_to_vault_list(window, cx);
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(7.))
-                                        .child("Switch vault"),
-                                )
-                                .into_any_element()
-                        } else {
-                            div().into_any_element()
-                        }}
+                        {create_button}
                         {restore_button}
                         {backup_status}
                         <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
-                            {"Enter to unlock"}
+                            {"Enter to unlock · Esc to close"}
                         </div>
                         {erase_button}
-                    </div>
-                    <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
-                        {gpui_component::Icon::empty()
-                            .path("icons/shield-check.svg")
-                            .size(px(13.))}
-                        <div text_xs>{"Encrypted locally · Works offline"}</div>
-                    </div>
-                </div>
-            </div>
-        }
-    }
-
-    fn render_select_vault(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let pending = self.unlock_state == FormState::Pending;
-        let backup_busy = !self.backup.is_idle();
-        let selectable = self
-            .selected_vault
-            .and_then(|index| self.vaults.vaults.get(index))
-            .is_some_and(|vault| vault.path.is_file());
-        let selected_index = self.selected_vault;
-        let mut order: Vec<usize> = (0..self.vaults.vaults.len()).collect();
-        order.sort_by(|&a, &b| {
-            let a_v = &self.vaults.vaults[a];
-            let b_v = &self.vaults.vaults[b];
-            b_v.last_opened_ms
-                .cmp(&a_v.last_opened_ms)
-                .then_with(|| a_v.name.to_lowercase().cmp(&b_v.name.to_lowercase()))
-        });
-
-        let rows: Vec<_> = order
-            .into_iter()
-            .map(|index| {
-                let vault = self.vaults.vaults[index].clone();
-                let selected = selected_index == Some(index);
-                let missing = !vault.path.is_file();
-                let secondary = if missing {
-                    "File not found".to_owned()
-                } else {
-                    format!("Local · {}", relative_opened_label(vault.last_opened_ms))
-                };
-                let initials: String = vault
-                    .name
-                    .split_whitespace()
-                    .filter_map(|part| part.chars().next())
-                    .take(2)
-                    .collect::<String>()
-                    .to_uppercase();
-                let button_id = SharedString::from(format!("vault-picker-row-{index}"));
-                let row = Button::new(button_id)
-                    .w_full()
-                    .h(px(48.))
-                    .rounded(px(8.))
-                    .disabled(missing)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_vault(index, window, cx);
-                    }))
-                    .border_1()
-                    .border_color(rgb(if selected {
-                        CIPHER_BORDER_STRONG
-                    } else {
-                        CIPHER_BORDER
-                    }))
-                    .custom(
-                        ButtonCustomVariant::new(cx)
-                            .color(
-                                rgb(if selected {
-                                    CIPHER_SURFACE_RAISED
-                                } else {
-                                    CIPHER_SURFACE
-                                })
-                                .into(),
-                            )
-                            .hover(rgb(CIPHER_SURFACE_RAISED).into())
-                            .active(rgb(CIPHER_SURFACE_RAISED).into())
-                            .foreground(
-                                rgb(if missing {
-                                    CIPHER_DISABLED
-                                } else if selected {
-                                    CIPHER_FOREGROUND_SOFT
-                                } else {
-                                    CIPHER_FOREGROUND
-                                })
-                                .into(),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .w_full()
-                            .px(px(12.))
-                            .child(
-                                div()
-                                    .size(px(28.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .bg(rgb(CIPHER_SURFACE_RAISED))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(rgb(if missing {
-                                                CIPHER_DISABLED
-                                            } else {
-                                                CIPHER_FOREGROUND
-                                            }))
-                                            .child(initials),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .gap(px(2.))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(rgb(if missing {
-                                                CIPHER_DISABLED
-                                            } else {
-                                                CIPHER_FOREGROUND_SOFT
-                                            }))
-                                            .child(vault.name.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(if missing {
-                                                CIPHER_DISABLED
-                                            } else {
-                                                CIPHER_FOREGROUND_SUBTLE
-                                            }))
-                                            .child(secondary),
-                                    ),
-                            )
-                            .child(
-                                gpui_component::Icon::empty()
-                                    .path(if missing {
-                                        "icons/circle-x.svg"
-                                    } else {
-                                        "icons/chevron-right.svg"
-                                    })
-                                    .size(px(14.))
-                                    .text_color(rgb(if missing {
-                                        CIPHER_DISABLED
-                                    } else {
-                                        CIPHER_ICON_MUTED
-                                    })),
-                            ),
-                    );
-                row.into_any_element()
-            })
-            .collect();
-
-        let unlock_button = Button::new("select-vault-unlock")
-            .w_full()
-            .h(px(44.))
-            .rounded(px(7.))
-            .disabled(pending || backup_busy || !selectable)
-            .loading(pending)
-            .on_click(cx.listener(|this, _, window, cx| this.open_selected_vault(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .font_weight(FontWeight::BOLD)
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/lock-keyhole-open.svg")
-                            .size(px(15.))
-                            .text_color(rgb(CIPHER_PRIMARY_FOREGROUND)),
-                    )
-                    .child(if pending {
-                        "Unlocking…"
-                    } else {
-                        "Unlock vault"
-                    }),
-            );
-        let unlock_button = animated_auth_button(
-            "select-vault-unlock",
-            unlock_button,
-            self.auth_hovered.get("select-vault-unlock").copied(),
-            (
-                CIPHER_PRIMARY,
-                0xF0F2F6,
-                0xCDD2DC,
-                CIPHER_PRIMARY_FOREGROUND,
-            ),
-            cx,
-        );
-        let create_button = Button::new("select-create-vault")
-            .h(px(32.))
-            .on_click(cx.listener(|this, _, window, cx| this.begin_create_from_picker(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/plus.svg")
-                            .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
-                    )
-                    .child("Create a new vault"),
-            );
-        let open_button = Button::new("select-open-existing")
-            .h(px(32.))
-            .disabled(true)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/folder-open.svg")
-                            .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
-                    )
-                    .child("Open an existing vault…"),
-            );
-        let restore_button = Button::new("select-restore-backup")
-            .h(px(32.))
-            .disabled(backup_busy)
-            .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/refresh-cw.svg")
-                            .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
-                    )
-                    .child("Restore a backup instead"),
-            );
-        rsx! {
-            <div
-                id="vault-picker-view"
-                size_full
-                flex
-                items_center
-                justify_center
-                bg={rgb(CIPHER_BACKGROUND)}
-                p={px(36.)}
-                onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    match event.keystroke.key.as_str() {
-                        "arrowdown" => this.move_vault_selection(1, window, cx),
-                        "arrowup" => this.move_vault_selection(-1, window, cx),
-                        "enter" => this.open_selected_vault(window, cx),
-                        _ => {}
-                    }
-                })}
-            >
-                <div id="vault-picker-card" flex flex_col gap={px(15.)} w={px(416.)}>
-                    <div flex flex_col items_center gap={px(8.)}>
-                        {logo(52., rgb(CIPHER_FOREGROUND).into())}
-                        <div flex flex_col items_center gap={px(4.)}>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>
-                                {"Select a vault"}
-                            </div>
-                            <div text_xs text_center textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
-                                {"Choose which vault to unlock"}
-                            </div>
-                        </div>
-                    </div>
-                    <div flex flex_col gap={px(8.)}>
-                        {...rows}
-                    </div>
-                    {unlock_button}
-                    <div flex flex_col gap={px(8.)}>
-                        <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
-                        {create_button}
-                        {open_button}
-                        {restore_button}
-                        <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
-                            {"↑↓ to choose · Enter to unlock"}
-                        </div>
                     </div>
                     <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
                         {gpui_component::Icon::empty()
@@ -2203,7 +1994,6 @@ impl Render for Nox {
                             .child("The file was left unchanged. Fix it, then restart Nox."),
                     )
                     .into_any_element(),
-                AppState::Selecting => self.render_select_vault(window, cx).into_any_element(),
                 AppState::Locked => self.render_locked(window, cx).into_any_element(),
                 AppState::Unlocked(_) => self.render_unlocked(window, cx).into_any_element(),
             }
@@ -2451,39 +2241,64 @@ mod tests {
         let many = test_dir("route-many");
         register_vaults(&many, &["Personal vault", "Work vault"]);
         let (view, cx) = add_nox_view(cx, many.clone(), DEFAULT_INACTIVITY_TIMEOUT);
-        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::Selecting)));
+        // Several vaults still open straight to Locked — the inline Select on
+        // its account row is the picker now, not a separate screen.
+        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::Locked)));
+        assert!(view.read_with(cx, |nox, _| nox.active_vault.is_some()));
         cleanup(&many);
     }
 
     #[gpui::test]
-    fn the_picker_preselects_the_last_opened_vault_and_arrows_move_the_selection(
+    fn locked_screen_preselects_the_last_opened_vault_and_confirming_another_switches_it(
         cx: &mut TestAppContext,
     ) {
         init(cx);
-        let dir = test_dir("picker-select");
+        let dir = test_dir("inline-picker");
         register_vaults(&dir, &["Personal vault", "Work vault"]);
+        {
+            let mut registry = load_registry(&dir).registry;
+            registry.last_opened = Some(registry.vaults[1].id.clone());
+            save_registry(&dir, &registry).unwrap();
+        }
         let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
 
-        assert_eq!(view.read_with(cx, |nox, _| nox.selected_vault), Some(0));
-        view.update_in(cx, |nox, window, app| {
-            nox.move_vault_selection(1, window, app)
+        assert_eq!(
+            view.read_with(cx, |nox, _| nox
+                .active_vault
+                .as_ref()
+                .map(|v| v.name.clone())),
+            Some("Work vault".into())
+        );
+
+        let personal_id = view.read_with(cx, |nox, _| nox.vaults.vaults[0].id.clone());
+        view.update_in(cx, |nox, _window, cx| {
+            let select = nox.vault_select.clone();
+            select.update(cx, |_, cx| {
+                cx.emit(SelectEvent::Confirm(Some(personal_id.clone())));
+            });
         });
-        assert_eq!(view.read_with(cx, |nox, _| nox.selected_vault), Some(1));
+        cx.run_until_parked();
+
+        assert_eq!(
+            view.read_with(cx, |nox, _| nox
+                .active_vault
+                .as_ref()
+                .map(|v| v.name.clone())),
+            Some("Personal vault".into())
+        );
         cleanup(&dir);
     }
 
-    #[gpui::test]
-    fn a_missing_vault_file_renders_as_unselectable(cx: &mut TestAppContext) {
-        init(cx);
-        let dir = test_dir("picker-missing");
-        register_vaults(&dir, &["Personal vault", "Gone vault"]);
-        fs::remove_file(vault_file(&dir, "gone-vault")).unwrap();
-        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+    #[test]
+    fn a_vault_with_a_missing_file_is_disabled_in_the_picker() {
+        let dir = test_dir("disabled-check");
+        fs::create_dir_all(&dir).unwrap();
+        let present = dir.join("vault.db");
+        fs::write(&present, []).unwrap();
+        let missing = dir.join("gone.db");
 
-        view.update_in(cx, |nox, window, app| nox.select_vault(1, window, app));
-        // The entry stays listed, but cannot become the active vault.
-        assert_eq!(view.read_with(cx, |nox, _| nox.vaults.vaults.len()), 2);
-        assert_ne!(view.read_with(cx, |nox, _| nox.selected_vault), Some(1));
+        assert!(!VaultEntry::new("Personal vault", present).disabled());
+        assert!(VaultEntry::new("Gone vault", missing).disabled());
         cleanup(&dir);
     }
 
@@ -2890,6 +2705,35 @@ mod tests {
     fn create_page_escape_closes_the_window(cx: &mut TestAppContext) {
         init(cx);
         let path = test_path("create-escape");
+        let (_view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        cx.simulate_keystrokes("escape");
+        assert!(cx.windows().is_empty());
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn locked_screens_create_action_opens_the_create_screen(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("locked-create-shortcut");
+        write_existing(&path);
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.begin_create_from_picker(window, locker_cx)
+        });
+
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::NoVault)));
+        let input = view.read_with(cx, |locker, _| locker.create_name.clone());
+        assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn locked_page_escape_closes_the_window(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("locked-escape");
+        write_existing(&path);
         let (_view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
 
         cx.simulate_keystrokes("escape");

@@ -144,10 +144,7 @@ impl Nox {
         self.backup.restore_exiting = false;
         self.backup.restore_reopen_picker = false;
         let mode = match self.state {
-            AppState::NoVault
-            | AppState::RegistryError
-            | AppState::Selecting
-            | AppState::Locked => ThemeMode::Dark,
+            AppState::NoVault | AppState::RegistryError | AppState::Locked => ThemeMode::Dark,
             AppState::Unlocked(_) => ThemeMode::Light,
         };
         Theme::change(mode, Some(window), cx);
@@ -579,10 +576,7 @@ impl Nox {
             }
         }
         let mode = match self.state {
-            AppState::NoVault
-            | AppState::RegistryError
-            | AppState::Selecting
-            | AppState::Locked => ThemeMode::Dark,
+            AppState::NoVault | AppState::RegistryError | AppState::Locked => ThemeMode::Dark,
             AppState::Unlocked(_) => ThemeMode::Light,
         };
         Theme::change(mode, Some(window), cx);
