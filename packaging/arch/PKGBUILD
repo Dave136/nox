@@ -1,0 +1,32 @@
+# Maintainer: David Arenas <davejs136@gmail.com>
+pkgname=nox
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native desktop password manager"
+arch=('x86_64')
+url="https://github.com/dave136/nox"
+license=('GPL3')
+depends=('gcc-libs' 'glibc' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11')
+makedepends=('cargo')
+# rusqlite's "bundled" sqlite3 is compiled by cc/gcc; makepkg's default
+# `lto` OPTION appends -flto to CFLAGS/LDFLAGS, which makes gcc emit
+# GCC-LTO bytecode that rust-lld can't link (undefined sqlite3_* symbols).
+options=('!lto')
+source=()
+sha256sums=()
+
+# Builds straight from this checkout (no source tarball) — bump pkgver to
+# match Cargo.toml's [workspace.package] version when it changes.
+
+build() {
+  cd "$startdir/../.."
+  cargo build --locked --release --bin nox
+}
+
+package() {
+  cd "$startdir/../.."
+  install -Dm755 target/release/nox "$pkgdir/usr/bin/nox"
+  install -Dm644 packaging/nox.desktop "$pkgdir/usr/share/applications/nox.desktop"
+  install -Dm644 packaging/icons/hicolor/scalable/apps/nox.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/nox.svg"
+}

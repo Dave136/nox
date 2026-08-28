@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Nox
+Comment=Native desktop password manager
+Exec=nox
+Icon=nox
+Terminal=false
+Categories=Utility;Security;
+StartupWMClass=nox
