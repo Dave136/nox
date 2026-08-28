@@ -55,7 +55,7 @@ pub(crate) struct ItemEditorState {
     pub(crate) generator: GeneratorPopoverState,
 }
 
-fn now_millis() -> u64 {
+pub(crate) fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as u64)

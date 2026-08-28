@@ -30,16 +30,29 @@ actions!(window_controls, [OpenCommandPalette]);
 pub enum WindowCommand {
     Minimize,
     ToggleMaximize,
+    NewVault,
+    OpenVault,
+    LockVault,
     Close,
 }
 
 impl WindowCommand {
-    pub const ALL: [Self; 3] = [Self::Minimize, Self::ToggleMaximize, Self::Close];
+    pub const ALL: [Self; 6] = [
+        Self::Minimize,
+        Self::ToggleMaximize,
+        Self::NewVault,
+        Self::OpenVault,
+        Self::LockVault,
+        Self::Close,
+    ];
 
     pub const fn label(&self) -> &'static str {
         match self {
             Self::Minimize => "Minimize",
             Self::ToggleMaximize => "Maximize / Restore",
+            Self::NewVault => "New Vault",
+            Self::OpenVault => "Open Vault",
+            Self::LockVault => "Lock Vault",
             Self::Close => "Close Window",
         }
     }
@@ -209,6 +222,7 @@ impl WindowControls {
 
     fn render_file_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let controls = cx.entity().downgrade();
+        let authenticated = self.authenticated;
         rsx! {
             <Button
                 base={Button::new("window-file-menu")}
@@ -221,14 +235,41 @@ impl WindowControls {
                 tab_stop={false}
                 small
                 dropdown_menu={move |menu, _, _| {
-                    let controls = controls.clone();
-                    menu.item(PopupMenuItem::new("New Vault").disabled(true))
-                        .item(PopupMenuItem::new("Open Vault").disabled(true))
-                        .item(PopupMenuItem::new("Lock Vault").disabled(true))
+                    let new_controls = controls.clone();
+                    let open_controls = controls.clone();
+                    let lock_controls = controls.clone();
+                    let close_controls = controls.clone();
+                    menu.item(
+                        PopupMenuItem::new("New Vault")
+                            .disabled(!authenticated)
+                            .on_click(move |_, window, app| {
+                                let _ = new_controls.update(app, |controls, cx| {
+                                    controls.invoke_command(WindowCommand::NewVault, window, cx);
+                                });
+                            }),
+                    )
+                        .item(
+                            PopupMenuItem::new("Open Vault")
+                                .disabled(!authenticated)
+                                .on_click(move |_, window, app| {
+                                    let _ = open_controls.update(app, |controls, cx| {
+                                        controls.invoke_command(WindowCommand::OpenVault, window, cx);
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new("Lock Vault")
+                                .disabled(!authenticated)
+                                .on_click(move |_, window, app| {
+                                    let _ = lock_controls.update(app, |controls, cx| {
+                                        controls.invoke_command(WindowCommand::LockVault, window, cx);
+                                    });
+                                }),
+                        )
                         .separator()
                         .item(
                             PopupMenuItem::new("Close Window").on_click(move |_, window, app| {
-                                let _ = controls.update(app, |controls, cx| {
+                                let _ = close_controls.update(app, |controls, cx| {
                                     controls.invoke_command(WindowCommand::Close, window, cx);
                                 });
                             }),

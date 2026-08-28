@@ -144,7 +144,10 @@ impl Nox {
         self.backup.restore_exiting = false;
         self.backup.restore_reopen_picker = false;
         let mode = match self.state {
-            AppState::NoVault | AppState::Locked => ThemeMode::Dark,
+            AppState::NoVault
+            | AppState::RegistryError
+            | AppState::Selecting
+            | AppState::Locked => ThemeMode::Dark,
             AppState::Unlocked(_) => ThemeMode::Light,
         };
         Theme::change(mode, Some(window), cx);
@@ -161,15 +164,17 @@ impl Nox {
         if !matches!(self.state, AppState::Unlocked(_)) || !self.backup.is_idle() {
             return;
         }
+        let Some(directory) = self.vault_path().map(|path| {
+            path.parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf()
+        }) else {
+            return;
+        };
         self.backup.epoch = self.backup.epoch.wrapping_add(1);
         let epoch = self.backup.epoch;
         self.backup.operation = BackupOperation::ChoosingExportPath;
         self.backup.dialog = None;
-        let directory = self
-            .vault_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
         let receiver = cx.prompt_for_new_path(&directory, Some("nox-backup.lockbak"));
         self.backup.task = cx.spawn_in(window, async move |this, cx| {
             let result = receiver
@@ -478,6 +483,11 @@ impl Nox {
         self.backup.restore_exiting = false;
         self.backup.transition_task = Task::ready(());
         let was_no_vault = matches!(self.state, AppState::NoVault);
+        let destination = match self.vault_path() {
+            Some(path) => path.to_path_buf(),
+            None if was_no_vault => self.data_dir.join("vault.db"),
+            None => return false,
+        };
         window.close_all_dialogs(cx);
         self.discard_clipboard_state(cx);
         self.vault_list = None;
@@ -493,7 +503,6 @@ impl Nox {
         self.backup.operation = BackupOperation::Restoring;
         let backup_secret = backup;
         let master_secret = master;
-        let destination = self.vault_path.clone();
         self.backup.task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -533,6 +542,12 @@ impl Nox {
         }
         match result {
             Ok(result) => {
+                if self.active_vault.is_none() {
+                    self.active_vault = Some(crate::vaults::VaultEntry::new(
+                        "Personal vault",
+                        self.data_dir.join("vault.db"),
+                    ));
+                }
                 self.state = AppState::Locked;
                 self.reset_unlock_input(window, cx);
                 Self::focus_input(&self.unlock_password, window, cx);
@@ -550,7 +565,9 @@ impl Nox {
                 );
             }
             Err(error) => {
-                if was_no_vault && !self.vault_path.exists() {
+                let destination_exists = self.vault_path().is_some_and(Path::exists)
+                    || self.data_dir.join("vault.db").exists();
+                if was_no_vault && !destination_exists {
                     self.state = AppState::NoVault;
                     self.reset_create_inputs(window, cx);
                     Self::focus_input(&self.create_password, window, cx);
@@ -562,7 +579,10 @@ impl Nox {
             }
         }
         let mode = match self.state {
-            AppState::NoVault | AppState::Locked => ThemeMode::Dark,
+            AppState::NoVault
+            | AppState::RegistryError
+            | AppState::Selecting
+            | AppState::Locked => ThemeMode::Dark,
             AppState::Unlocked(_) => ThemeMode::Light,
         };
         Theme::change(mode, Some(window), cx);

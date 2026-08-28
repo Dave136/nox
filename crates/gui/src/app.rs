@@ -17,6 +17,9 @@ pub mod ui;
 #[path = "vault_list.rs"]
 mod vault_list;
 
+use crate::vaults::{
+    VaultEntry, VaultRegistry, adopt_legacy_vault, load_registry, save_registry, slug_for,
+};
 use backup::BackupState;
 use clipboard::ClipboardState;
 pub use clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
@@ -28,13 +31,14 @@ use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use vault_list::VaultListState;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, Entity, FontWeight, KeyBinding, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString, Task, Window, div,
-    ease_out_quint, prelude::*, px, rgb,
+    Animation, AnimationExt, AnyElement, ClickEvent, Context, Entity, FontWeight, KeyBinding,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString, Task,
+    Window, div, ease_out_quint, prelude::*, px, rgb,
 };
 use gpui_component::{
     Disableable, Root, Theme, ThemeMode, WindowExt,
-    button::{Button, ButtonCustomVariant, ButtonVariants as _},
+    button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _},
+    dialog::DialogButtonProps,
     input::{Input, InputState},
 };
 use gpui_rsx::rsx;
@@ -42,9 +46,10 @@ use nox_core::{SecretBytes, Vault, VaultError};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     rc::Rc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::assets::{IconName, icon, logo};
@@ -67,6 +72,13 @@ const CIPHER_FOREGROUND_SUBTLE: u32 = 0x7F8998;
 const CIPHER_DISABLED: u32 = 0x626B78;
 const CIPHER_PRIMARY: u32 = 0xE3E6ED;
 const CIPHER_DANGER: u32 = 0xA9787D;
+const CIPHER_ICON_MUTED: u32 = 0x737E8D;
+const CIPHER_PRIMARY_FOREGROUND: u32 = 0x1A1D22;
+// Mirrors the Pencil frame's `--cipher-accent-blue` token, which the design
+// file itself doesn't currently render onscreen (an inert key-badge layer
+// behind the header logo). Kept for parity with the design's token set.
+#[allow(dead_code)]
+const CIPHER_ACCENT_BLUE: u32 = 0x2D87B9;
 
 fn auth_hover_color(from: u32, to: u32, amount: f32) -> Rgba {
     let from = rgb(from);
@@ -76,6 +88,26 @@ fn auth_hover_color(from: u32, to: u32, amount: f32) -> Rgba {
         g: from.g + (to.g - from.g) * amount,
         b: from.b + (to.b - from.b) * amount,
         a: 1.,
+    }
+}
+
+fn relative_opened_label(last_opened_ms: Option<u64>) -> SharedString {
+    let Some(last_opened_ms) = last_opened_ms else {
+        return "never opened".into();
+    };
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let elapsed = now_ms.saturating_sub(last_opened_ms);
+    if elapsed < 60_000 {
+        "just now".into()
+    } else if elapsed < 3_600_000 {
+        format!("{}m ago", elapsed / 60_000).into()
+    } else if elapsed < 86_400_000 {
+        format!("{}h ago", elapsed / 3_600_000).into()
+    } else {
+        format!("{}d ago", elapsed / 86_400_000).into()
     }
 }
 
@@ -153,7 +185,7 @@ impl Nox {
         settings.normalize();
         self.inactivity_timeout = Duration::from_secs(settings.auto_lock_seconds);
         self.clipboard.timeout = Duration::from_secs(settings.clipboard_seconds);
-        if let Err(error) = save_settings(&self.vault_path, &settings) {
+        if let Err(error) = save_settings(&self.data_dir, &settings) {
             eprintln!("settings persistence failed: {error}");
         }
         self.settings = settings;
@@ -378,6 +410,8 @@ fn home_quick_action(
 #[derive(Debug)]
 pub enum AppState {
     NoVault,
+    RegistryError,
+    Selecting,
     Locked,
     Unlocked(Vault),
 }
@@ -392,8 +426,15 @@ enum FormState {
 /// Root Nox view for vault creation, unlock, and lock lifecycle actions.
 pub struct Nox {
     state: AppState,
-    vault_path: PathBuf,
+    pub(crate) data_dir: PathBuf,
+    pub(crate) vaults: VaultRegistry,
+    pub(crate) active_vault: Option<VaultEntry>,
+    /// Index into `vaults.vaults` for the picker's highlighted row. Distinct
+    /// from `active_vault`: it moves freely as the cursor, including onto
+    /// missing entries; `select_vault` refuses to land it there.
+    pub(crate) selected_vault: Option<usize>,
 
+    create_name: Entity<InputState>,
     create_password: Entity<InputState>,
     create_confirm: Entity<InputState>,
     create_state: FormState,
@@ -429,25 +470,53 @@ pub struct Nox {
 }
 
 impl Nox {
-    /// Construct a Nox view for an already-resolved vault path.
+    /// Construct a Nox view from the app data directory and vault registry.
     pub fn new(
-        vault_path: PathBuf,
+        data_dir: PathBuf,
         inactivity_timeout: Duration,
         clipboard_timeout: Duration,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let state = if vault_path.exists() {
-            AppState::Locked
+        let loaded = load_registry(&data_dir);
+        let mut vaults = loaded.registry;
+        if !loaded.unreadable
+            && adopt_legacy_vault(&data_dir, &mut vaults)
+            && let Err(error) = save_registry(&data_dir, &vaults)
+        {
+            eprintln!("vault registry persistence failed: {error}");
+        }
+        let state = if loaded.unreadable {
+            AppState::RegistryError
         } else {
-            AppState::NoVault
+            match vaults.vaults.len() {
+                0 => AppState::NoVault,
+                1 => AppState::Locked,
+                _ => AppState::Selecting,
+            }
+        };
+        // A single registered vault opens straight to Locked, so it becomes the
+        // active vault immediately. With several, nothing is active until the
+        // picker's selection is opened — `selected_vault` drives the picker instead.
+        let active_vault = match vaults.vaults.as_slice() {
+            [vault] => Some(vault.clone()),
+            _ => None,
+        };
+        let selected_vault = match vaults.vaults.len() {
+            0 | 1 => None,
+            _ => vaults
+                .last_opened
+                .as_ref()
+                .and_then(|id| vaults.vaults.iter().position(|vault| &vault.id == id))
+                .or(Some(0)),
         };
         Theme::change(ThemeMode::Dark, Some(window), cx);
-        let create_password = Self::new_input(window, cx, "Create a strong password");
-        let create_confirm = Self::new_input(window, cx, "Re-enter your master password");
-        let unlock_password = Self::new_input(window, cx, "Password");
+        let create_name = Self::new_input(window, cx, "Personal vault", false);
+        let create_password = Self::new_input(window, cx, "Create a strong password", true);
+        let create_confirm = Self::new_input(window, cx, "Re-enter your master password", true);
+        let unlock_password = Self::new_input(window, cx, "Password", true);
         let locker = cx.weak_entity();
-        let settings = load_settings(&vault_path);
+        let settings = load_settings(&data_dir);
         let window_controls = cx.new(|cx| {
             WindowControls::new(window, cx).with_command_handler(move |command, window, app| {
                 let _ = locker.update(app, |locker, cx| {
@@ -458,7 +527,11 @@ impl Nox {
         cx.bind_keys([KeyBinding::new("ctrl-p", OpenCommandPalette, None)]);
         let locker = Self {
             state,
-            vault_path,
+            data_dir,
+            vaults,
+            active_vault,
+            selected_vault,
+            create_name,
             create_password,
             create_confirm,
             create_state: FormState::Idle,
@@ -487,21 +560,26 @@ impl Nox {
         };
 
         match locker.state {
-            AppState::NoVault => Self::focus_input(&locker.create_password, window, cx),
+            AppState::NoVault => Self::focus_input(&locker.create_name, window, cx),
             AppState::Locked => Self::focus_input(&locker.unlock_password, window, cx),
-            AppState::Unlocked(_) => {}
+            AppState::RegistryError | AppState::Selecting | AppState::Unlocked(_) => {}
         }
         locker
+    }
+
+    pub(crate) fn vault_path(&self) -> Option<&Path> {
+        self.active_vault.as_ref().map(|vault| vault.path.as_path())
     }
 
     fn new_input(
         window: &mut Window,
         cx: &mut Context<Self>,
         placeholder: &'static str,
+        masked: bool,
     ) -> Entity<InputState> {
         cx.new(|cx| {
             InputState::new(window, cx)
-                .masked(true)
+                .masked(masked)
                 .placeholder(placeholder)
         })
     }
@@ -511,12 +589,103 @@ impl Nox {
     }
 
     fn reset_create_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.create_password = Self::new_input(window, cx, "Create a strong password");
-        self.create_confirm = Self::new_input(window, cx, "Re-enter your master password");
+        self.create_name = Self::new_input(window, cx, "Personal vault", false);
+        self.create_password = Self::new_input(window, cx, "Create a strong password", true);
+        self.create_confirm = Self::new_input(window, cx, "Re-enter your master password", true);
     }
 
     fn reset_unlock_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.unlock_password = Self::new_input(window, cx, "Password");
+        self.unlock_password = Self::new_input(window, cx, "Password", true);
+    }
+
+    fn new_vault_path(&self, name: &str) -> PathBuf {
+        let slug = slug_for(name, &self.vaults.vaults);
+        self.data_dir.join("vaults").join(slug).join("vault.db")
+    }
+
+    fn record_vault_opened(&mut self, entry: &VaultEntry) {
+        let now = item_editor::now_millis();
+        if let Some(existing) = self
+            .vaults
+            .vaults
+            .iter_mut()
+            .find(|vault| vault.id == entry.id)
+        {
+            existing.name = entry.name.clone();
+            existing.path = entry.path.clone();
+            existing.last_opened_ms = Some(now);
+        } else {
+            let mut entry = entry.clone();
+            entry.last_opened_ms = Some(now);
+            self.vaults.vaults.push(entry);
+        }
+        self.vaults.last_opened = Some(entry.id.clone());
+    }
+
+    /// Move the picker's highlighted row by `offset`, wrapping. Free to land on
+    /// a missing entry — only `select_vault` refuses those.
+    fn move_vault_selection(
+        &mut self,
+        offset: isize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let len = self.vaults.vaults.len();
+        if len == 0 {
+            return;
+        }
+        let current = self.selected_vault.unwrap_or(0) as isize;
+        self.selected_vault = Some((current + offset).rem_euclid(len as isize) as usize);
+        cx.notify();
+    }
+
+    /// Select a picker row by index. No-ops when that vault's file is missing.
+    fn select_vault(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .vaults
+            .vaults
+            .get(index)
+            .is_some_and(|vault| vault.path.is_file())
+        {
+            return;
+        }
+        self.selected_vault = Some(index);
+        cx.notify();
+    }
+
+    fn open_selected_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(vault) = self
+            .selected_vault
+            .and_then(|index| self.vaults.vaults.get(index))
+            .filter(|vault| vault.path.is_file())
+            .cloned()
+        else {
+            return;
+        };
+        self.active_vault = Some(vault);
+        self.unlock_state = FormState::Idle;
+        self.reset_unlock_input(window, cx);
+        self.state = AppState::Locked;
+        Self::focus_input(&self.unlock_password, window, cx);
+        cx.notify();
+    }
+
+    fn switch_to_vault_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.lock_vault(window, cx);
+        self.state = AppState::Selecting;
+        let active_id = self.active_vault.take().map(|vault| vault.id);
+        self.selected_vault =
+            active_id.and_then(|id| self.vaults.vaults.iter().position(|vault| vault.id == id));
+        self.reset_unlock_input(window, cx);
+        cx.notify();
+    }
+
+    fn begin_create_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.state = AppState::NoVault;
+        self.create_state = FormState::Idle;
+        self.reset_create_inputs(window, cx);
+        Self::focus_input(&self.create_name, window, cx);
+        cx.notify();
     }
 
     fn create_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -546,7 +715,14 @@ impl Nox {
 
         self.create_state = FormState::Pending;
         cx.notify();
-        let path = self.vault_path.clone();
+        let name = self.create_name.read(cx).value();
+        let name = if name.trim().is_empty() {
+            "Personal vault".to_string()
+        } else {
+            name.to_string()
+        };
+        let path = self.new_vault_path(&name);
+        let created_entry = VaultEntry::new(name, path.clone());
         self._create_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -562,6 +738,12 @@ impl Nox {
                 cx.update(|window, app| {
                     this.update(app, |this, cx| match result {
                         Ok((vault, items, deleted, conflicts)) => {
+                            this.active_vault = Some(created_entry.clone());
+                            this.vaults.vaults.push(created_entry.clone());
+                            this.record_vault_opened(&created_entry);
+                            if let Err(error) = save_registry(&this.data_dir, &this.vaults) {
+                                eprintln!("vault registry persistence failed: {error}");
+                            }
                             this.state = AppState::Unlocked(vault);
                             Theme::change(ThemeMode::Dark, Some(window), cx);
                             this.vault_list = Some(VaultListState::from_initial_load(
@@ -601,13 +783,15 @@ impl Nox {
         if self.unlock_state == FormState::Pending || !self.backup.is_idle() {
             return;
         }
+        let Some(path) = self.vault_path().map(Path::to_path_buf) else {
+            return;
+        };
 
         let password = self.unlock_password.read(cx).value();
         let secret = SecretBytes::new(password.as_bytes());
         self.reset_unlock_input(window, cx);
         self.unlock_state = FormState::Pending;
         cx.notify();
-        let path = self.vault_path.clone();
         self._unlock_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -623,6 +807,12 @@ impl Nox {
                 cx.update(|window, app| {
                     this.update(app, |this, cx| match result {
                         Ok((vault, items, deleted, conflicts)) => {
+                            if let Some(entry) = this.active_vault.clone() {
+                                this.record_vault_opened(&entry);
+                                if let Err(error) = save_registry(&this.data_dir, &this.vaults) {
+                                    eprintln!("vault registry persistence failed: {error}");
+                                }
+                            }
                             this.state = AppState::Unlocked(vault);
                             Theme::change(ThemeMode::Dark, Some(window), cx);
                             this.vault_list = Some(VaultListState::from_initial_load(
@@ -649,6 +839,72 @@ impl Nox {
                 .ok();
             }
         });
+    }
+
+    /// Opens a confirmation dialog for erasing the local vault, offered from
+    /// the locked screen for a forgotten password or a vault that fails to
+    /// open (corruption). Recovery is impossible without this: `create_vault`
+    /// refuses to run while a vault file already exists at `vault_path`.
+    fn begin_erase_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.unlock_state == FormState::Pending
+            || !self.backup.is_idle()
+            || self.vault_path().is_none()
+        {
+            return;
+        }
+        let owner = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let owner = owner.clone();
+            alert
+                .title("Erase this vault?")
+                .description(
+                    "This permanently deletes the local vault and everything in it. \
+                     This cannot be undone. If you have a backup, restore it instead.",
+                )
+                .button_props(
+                    DialogButtonProps::default()
+                        .show_cancel(true)
+                        .ok_text("Erase vault")
+                        .ok_variant(ButtonVariant::Danger),
+                )
+                .on_ok(move |_: &ClickEvent, window, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.erase_vault_and_start_over(window, cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Deletes the local vault (database, WAL/SHM sidecars, and settings
+    /// sidecar) and returns to the vault-creation screen. Irreversible.
+    fn erase_vault_and_start_over(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(db) = self.vault_path().map(Path::to_path_buf) else {
+            return;
+        };
+        let mut wal = db.clone().into_os_string();
+        wal.push("-wal");
+        let mut shm = db.clone().into_os_string();
+        shm.push("-shm");
+        for file in [
+            db.clone(),
+            PathBuf::from(wal),
+            PathBuf::from(shm),
+            Settings::sidecar_path(&db),
+        ] {
+            let _ = fs::remove_file(file);
+        }
+        self.active_vault = None;
+        self.state = AppState::NoVault;
+        self.vault_list = None;
+        self.item_editor = None;
+        self.reveal_password = false;
+        self.conflicts = ConflictState::Closed;
+        self.conflicts_open = false;
+        self.reset_create_inputs(window, cx);
+        self.reset_unlock_input(window, cx);
+        Self::focus_input(&self.create_password, window, cx);
+        cx.notify();
     }
 
     fn note_activity(&mut self, cx: &mut Context<Self>) {
@@ -735,11 +991,26 @@ impl Nox {
         &mut self,
         command: WindowCommand,
         window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         match command {
             WindowCommand::Minimize => window.minimize_window(),
             WindowCommand::ToggleMaximize => window.zoom_window(),
+            WindowCommand::NewVault => {
+                if matches!(&self.state, AppState::Unlocked(_)) {
+                    self.lock_vault(window, cx);
+                }
+                self.begin_create_from_picker(window, cx);
+            }
+            WindowCommand::OpenVault => {
+                if matches!(&self.state, AppState::Unlocked(_)) {
+                    self.lock_vault(window, cx);
+                }
+                self.state = AppState::Selecting;
+                self.reset_unlock_input(window, cx);
+                cx.notify();
+            }
+            WindowCommand::LockVault => self.lock_vault(window, cx),
             WindowCommand::Close => window.remove_window(),
         }
     }
@@ -890,6 +1161,19 @@ impl Nox {
                             .size(px(14.))
                             .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))}
                     </div>
+                    <div id="create-vault-name" flex flex_col gap={px(7.)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                            {"VAULT NAME"}
+                        </div>
+                        <Input
+                            base={Input::new(&self.create_name)
+                                .aria_label("Vault name")}
+                            h={px(44.)}
+                            bg={rgb(CIPHER_SURFACE)}
+                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            rounded={px(8.)}
+                        />
+                    </div>
                     <div id="create-vault-password" flex flex_col gap={px(7.)}>
                         <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
                             {"MASTER PASSWORD"}
@@ -922,6 +1206,24 @@ impl Nox {
                     {create_button}
                     <div flex flex_col gap={px(8.)}>
                         <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        {if self.vaults.vaults.is_empty() {
+                            div().into_any_element()
+                        } else {
+                            Button::new("create-back-to-vault-list")
+                                .h(px(32.))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.state = AppState::Selecting;
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(7.))
+                                        .child("Back to vault list"),
+                                )
+                                .into_any_element()
+                        }}
                         {restore_button}
                         {backup_status}
                         <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
@@ -940,12 +1242,14 @@ impl Nox {
     fn render_locked(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.unlock_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
-        let vault_name = self
-            .vault_path
-            .file_stem()
-            .and_then(|name| name.to_str())
+        let vault = self.active_vault.as_ref();
+        let vault_name = vault
+            .map(|vault| vault.name.as_str())
             .unwrap_or("Local vault")
             .to_owned();
+        let vault_opened = vault
+            .map(|vault| relative_opened_label(vault.last_opened_ms))
+            .unwrap_or_else(|| "never opened".into());
         let error = match &self.unlock_state {
             FormState::Error(message) => div()
                 .text_sm()
@@ -1031,6 +1335,23 @@ impl Nox {
             ),
             cx,
         );
+        // No backup, and the password is gone or the file won't open: the only way
+        // forward is to discard it and start over. Kept low-emphasis (ghost, small
+        // text) since it's destructive and every other path here should be tried first.
+        let erase_button = Button::new("erase-vault")
+            .ghost()
+            .disabled(backup_busy)
+            .on_click(cx.listener(|this, _, window, cx| this.begin_erase_vault(window, cx)))
+            .child(
+                div()
+                    .text_xs()
+                    .text_center()
+                    .w_full()
+                    .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))
+                    .child(
+                        "Forgot your password, or this vault won't open? Erase it and start over",
+                    ),
+            );
         rsx! {
             <div
                 id="locked-view"
@@ -1081,10 +1402,10 @@ impl Nox {
                         </div>
                         <div flex flex_col flex_1 gap={px(2.)}>
                             <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND_SOFT)}>
-                                {"Local vault"}
+                                {vault_name.clone()}
                             </div>
                             <div text_xs textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
-                                {format!("{vault_name} · Local")}
+                                {format!("Local · {vault_opened}")}
                             </div>
                         </div>
                         {icon(IconName::KeySquare, Some(14.), Some(rgb(CIPHER_FOREGROUND_SUBTLE).into()))}
@@ -1107,10 +1428,319 @@ impl Nox {
                     {unlock_button}
                     <div flex flex_col gap={px(8.)}>
                         <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        {if self.vaults.vaults.len() > 1 {
+                            Button::new("switch-vault")
+                                .h(px(32.))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.switch_to_vault_list(window, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(7.))
+                                        .child("Switch vault"),
+                                )
+                                .into_any_element()
+                        } else {
+                            div().into_any_element()
+                        }}
                         {restore_button}
                         {backup_status}
                         <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
                             {"Enter to unlock"}
+                        </div>
+                        {erase_button}
+                    </div>
+                    <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        {gpui_component::Icon::empty()
+                            .path("icons/shield-check.svg")
+                            .size(px(13.))}
+                        <div text_xs>{"Encrypted locally · Works offline"}</div>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+
+    fn render_select_vault(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let pending = self.unlock_state == FormState::Pending;
+        let backup_busy = !self.backup.is_idle();
+        let selectable = self
+            .selected_vault
+            .and_then(|index| self.vaults.vaults.get(index))
+            .is_some_and(|vault| vault.path.is_file());
+        let selected_index = self.selected_vault;
+        let mut order: Vec<usize> = (0..self.vaults.vaults.len()).collect();
+        order.sort_by(|&a, &b| {
+            let a_v = &self.vaults.vaults[a];
+            let b_v = &self.vaults.vaults[b];
+            b_v.last_opened_ms
+                .cmp(&a_v.last_opened_ms)
+                .then_with(|| a_v.name.to_lowercase().cmp(&b_v.name.to_lowercase()))
+        });
+
+        let rows: Vec<_> = order
+            .into_iter()
+            .map(|index| {
+                let vault = self.vaults.vaults[index].clone();
+                let selected = selected_index == Some(index);
+                let missing = !vault.path.is_file();
+                let secondary = if missing {
+                    "File not found".to_owned()
+                } else {
+                    format!("Local · {}", relative_opened_label(vault.last_opened_ms))
+                };
+                let initials: String = vault
+                    .name
+                    .split_whitespace()
+                    .filter_map(|part| part.chars().next())
+                    .take(2)
+                    .collect::<String>()
+                    .to_uppercase();
+                let button_id = SharedString::from(format!("vault-picker-row-{index}"));
+                let row = Button::new(button_id)
+                    .w_full()
+                    .h(px(48.))
+                    .rounded(px(8.))
+                    .disabled(missing)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select_vault(index, window, cx);
+                    }))
+                    .border_1()
+                    .border_color(rgb(if selected {
+                        CIPHER_BORDER_STRONG
+                    } else {
+                        CIPHER_BORDER
+                    }))
+                    .custom(
+                        ButtonCustomVariant::new(cx)
+                            .color(
+                                rgb(if selected {
+                                    CIPHER_SURFACE_RAISED
+                                } else {
+                                    CIPHER_SURFACE
+                                })
+                                .into(),
+                            )
+                            .hover(rgb(CIPHER_SURFACE_RAISED).into())
+                            .active(rgb(CIPHER_SURFACE_RAISED).into())
+                            .foreground(
+                                rgb(if missing {
+                                    CIPHER_DISABLED
+                                } else if selected {
+                                    CIPHER_FOREGROUND_SOFT
+                                } else {
+                                    CIPHER_FOREGROUND
+                                })
+                                .into(),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .w_full()
+                            .px(px(12.))
+                            .child(
+                                div()
+                                    .size(px(28.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_full()
+                                    .bg(rgb(CIPHER_SURFACE_RAISED))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(if missing {
+                                                CIPHER_DISABLED
+                                            } else {
+                                                CIPHER_FOREGROUND
+                                            }))
+                                            .child(initials),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(if missing {
+                                                CIPHER_DISABLED
+                                            } else {
+                                                CIPHER_FOREGROUND_SOFT
+                                            }))
+                                            .child(vault.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(if missing {
+                                                CIPHER_DISABLED
+                                            } else {
+                                                CIPHER_FOREGROUND_SUBTLE
+                                            }))
+                                            .child(secondary),
+                                    ),
+                            )
+                            .child(
+                                gpui_component::Icon::empty()
+                                    .path(if missing {
+                                        "icons/circle-x.svg"
+                                    } else {
+                                        "icons/chevron-right.svg"
+                                    })
+                                    .size(px(14.))
+                                    .text_color(rgb(if missing {
+                                        CIPHER_DISABLED
+                                    } else {
+                                        CIPHER_ICON_MUTED
+                                    })),
+                            ),
+                    );
+                row.into_any_element()
+            })
+            .collect();
+
+        let unlock_button = Button::new("select-vault-unlock")
+            .w_full()
+            .h(px(44.))
+            .rounded(px(7.))
+            .disabled(pending || backup_busy || !selectable)
+            .loading(pending)
+            .on_click(cx.listener(|this, _, window, cx| this.open_selected_vault(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .font_weight(FontWeight::BOLD)
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/lock-keyhole-open.svg")
+                            .size(px(15.))
+                            .text_color(rgb(CIPHER_PRIMARY_FOREGROUND)),
+                    )
+                    .child(if pending {
+                        "Unlocking…"
+                    } else {
+                        "Unlock vault"
+                    }),
+            );
+        let unlock_button = animated_auth_button(
+            "select-vault-unlock",
+            unlock_button,
+            self.auth_hovered.get("select-vault-unlock").copied(),
+            (
+                CIPHER_PRIMARY,
+                0xF0F2F6,
+                0xCDD2DC,
+                CIPHER_PRIMARY_FOREGROUND,
+            ),
+            cx,
+        );
+        let create_button = Button::new("select-create-vault")
+            .h(px(32.))
+            .on_click(cx.listener(|this, _, window, cx| this.begin_create_from_picker(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/plus.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                    )
+                    .child("Create a new vault"),
+            );
+        let open_button = Button::new("select-open-existing")
+            .h(px(32.))
+            .disabled(true)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/folder-open.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                    )
+                    .child("Open an existing vault…"),
+            );
+        let restore_button = Button::new("select-restore-backup")
+            .h(px(32.))
+            .disabled(backup_busy)
+            .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/refresh-cw.svg")
+                            .size(px(14.))
+                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                    )
+                    .child("Restore a backup instead"),
+            );
+        rsx! {
+            <div
+                id="vault-picker-view"
+                size_full
+                flex
+                items_center
+                justify_center
+                bg={rgb(CIPHER_BACKGROUND)}
+                p={px(36.)}
+                onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "arrowdown" => this.move_vault_selection(1, window, cx),
+                        "arrowup" => this.move_vault_selection(-1, window, cx),
+                        "enter" => this.open_selected_vault(window, cx),
+                        _ => {}
+                    }
+                })}
+            >
+                <div id="vault-picker-card" flex flex_col gap={px(15.)} w={px(416.)}>
+                    <div flex flex_col items_center gap={px(8.)}>
+                        {logo(52., rgb(CIPHER_FOREGROUND).into())}
+                        <div flex flex_col items_center gap={px(4.)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>
+                                {"Select a vault"}
+                            </div>
+                            <div text_xs text_center textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                                {"Choose which vault to unlock"}
+                            </div>
+                        </div>
+                    </div>
+                    <div flex flex_col gap={px(8.)}>
+                        {...rows}
+                    </div>
+                    {unlock_button}
+                    <div flex flex_col gap={px(8.)}>
+                        <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        {create_button}
+                        {open_button}
+                        {restore_button}
+                        <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
+                            {"↑↓ to choose · Enter to unlock"}
                         </div>
                     </div>
                     <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
@@ -1556,6 +2186,24 @@ impl Render for Nox {
         } else {
             match &self.state {
                 AppState::NoVault => self.render_no_vault(window, cx).into_any_element(),
+                AppState::RegistryError => div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .p(px(32.))
+                    .text_color(rgb(CIPHER_FOREGROUND))
+                    .child("Nox could not read vaults.json.")
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                            .child("The file was left unchanged. Fix it, then restart Nox."),
+                    )
+                    .into_any_element(),
+                AppState::Selecting => self.render_select_vault(window, cx).into_any_element(),
                 AppState::Locked => self.render_locked(window, cx).into_any_element(),
                 AppState::Unlocked(_) => self.render_unlocked(window, cx).into_any_element(),
             }
@@ -1606,9 +2254,9 @@ pub struct FatalStartupError {
 
 impl FatalStartupError {
     pub fn new(error: VaultError) -> Self {
-        eprintln!("could not determine Nox vault path: {error}");
+        eprintln!("could not determine Nox data directory: {error}");
         Self {
-            message: "Nox could not determine a safe vault path.".into(),
+            message: "Nox could not determine a safe data directory.".into(),
         }
     }
 }
@@ -1628,6 +2276,7 @@ mod tests {
     use super::item_editor::EditorMode;
     use super::*;
     use super::{backup, conflicts};
+    use crate::vaults::{VaultEntry, VaultRegistry, registry_path, save_registry};
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use gpui_component::{ActiveTheme, Root, Theme, ThemeMode, WindowExt};
     use nox_core::{
@@ -1655,6 +2304,35 @@ mod tests {
             .join("vault.db");
         let _ = fs::remove_dir_all(path.parent().unwrap());
         path
+    }
+
+    fn test_dir(label: &str) -> PathBuf {
+        test_path(label).parent().unwrap().to_path_buf()
+    }
+
+    fn vault_file(data_dir: &Path, slug: &str) -> PathBuf {
+        data_dir.join("vaults").join(slug).join("vault.db")
+    }
+
+    /// Register `names` as real (empty) vault files under `data_dir`, at the
+    /// same slugged path `create_vault` would use.
+    fn register_vaults(data_dir: &Path, names: &[&str]) {
+        fs::create_dir_all(data_dir).unwrap();
+        let entries: Vec<VaultEntry> = names
+            .iter()
+            .map(|name| {
+                let slug = slug_for(name, &[]);
+                let path = vault_file(data_dir, &slug);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, []).unwrap();
+                VaultEntry::new(*name, path)
+            })
+            .collect();
+        let registry = VaultRegistry {
+            vaults: entries,
+            ..VaultRegistry::default()
+        };
+        save_registry(data_dir, &registry).unwrap();
     }
 
     fn init(cx: &mut TestAppContext) {
@@ -1720,15 +2398,108 @@ mod tests {
         inactivity_timeout: Duration,
         clipboard_timeout: Duration,
     ) -> (Entity<Nox>, &mut VisualTestContext) {
+        add_nox_view_with_clipboard_timeout(
+            cx,
+            path.parent().unwrap().to_path_buf(),
+            inactivity_timeout,
+            clipboard_timeout,
+        )
+    }
+
+    fn add_nox_view_with_clipboard_timeout(
+        cx: &mut TestAppContext,
+        data_dir: PathBuf,
+        inactivity_timeout: Duration,
+        clipboard_timeout: Duration,
+    ) -> (Entity<Nox>, &mut VisualTestContext) {
         let holder = Rc::new(RefCell::new(None));
         let holder_for_window = holder.clone();
         let (_, visual_cx) = cx.add_window_view(move |window, cx| {
             let locker =
-                cx.new(|cx| Nox::new(path, inactivity_timeout, clipboard_timeout, window, cx));
+                cx.new(|cx| Nox::new(data_dir, inactivity_timeout, clipboard_timeout, window, cx));
             holder_for_window.borrow_mut().replace(locker.clone());
             Root::new(locker, window, cx)
         });
         (holder.take().unwrap(), visual_cx)
+    }
+
+    fn add_nox_view(
+        cx: &mut TestAppContext,
+        data_dir: PathBuf,
+        timeout: Duration,
+    ) -> (Entity<Nox>, &mut VisualTestContext) {
+        add_nox_view_with_clipboard_timeout(cx, data_dir, timeout, DEFAULT_CLIPBOARD_TIMEOUT)
+    }
+
+    #[gpui::test]
+    fn startup_routes_on_the_number_of_registered_vaults(cx: &mut TestAppContext) {
+        init(cx);
+
+        let empty = test_dir("route-empty");
+        let (view, cx) = add_nox_view(cx, empty.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::NoVault)));
+        cleanup(&empty);
+
+        let one = test_dir("route-one");
+        register_vaults(&one, &["Personal vault"]);
+        let (view, cx) = add_nox_view(cx, one.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        // A single-vault user must never see a picker.
+        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::Locked)));
+        assert!(view.read_with(cx, |nox, _| nox.active_vault.is_some()));
+        cleanup(&one);
+
+        let many = test_dir("route-many");
+        register_vaults(&many, &["Personal vault", "Work vault"]);
+        let (view, cx) = add_nox_view(cx, many.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::Selecting)));
+        cleanup(&many);
+    }
+
+    #[gpui::test]
+    fn the_picker_preselects_the_last_opened_vault_and_arrows_move_the_selection(
+        cx: &mut TestAppContext,
+    ) {
+        init(cx);
+        let dir = test_dir("picker-select");
+        register_vaults(&dir, &["Personal vault", "Work vault"]);
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        assert_eq!(view.read_with(cx, |nox, _| nox.selected_vault), Some(0));
+        view.update_in(cx, |nox, window, app| {
+            nox.move_vault_selection(1, window, app)
+        });
+        assert_eq!(view.read_with(cx, |nox, _| nox.selected_vault), Some(1));
+        cleanup(&dir);
+    }
+
+    #[gpui::test]
+    fn a_missing_vault_file_renders_as_unselectable(cx: &mut TestAppContext) {
+        init(cx);
+        let dir = test_dir("picker-missing");
+        register_vaults(&dir, &["Personal vault", "Gone vault"]);
+        fs::remove_file(vault_file(&dir, "gone-vault")).unwrap();
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        view.update_in(cx, |nox, window, app| nox.select_vault(1, window, app));
+        // The entry stays listed, but cannot become the active vault.
+        assert_eq!(view.read_with(cx, |nox, _| nox.vaults.vaults.len()), 2);
+        assert_ne!(view.read_with(cx, |nox, _| nox.selected_vault), Some(1));
+        cleanup(&dir);
+    }
+
+    #[gpui::test]
+    fn unreadable_registry_routes_to_an_error_without_overwriting_it(cx: &mut TestAppContext) {
+        init(cx);
+        let dir = test_dir("route-unreadable");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("vault.db"), []).unwrap();
+        fs::write(registry_path(&dir), b"not json").unwrap();
+
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::RegistryError)));
+        assert_eq!(fs::read(registry_path(&dir)).unwrap(), b"not json");
+        cleanup(&dir);
     }
 
     #[gpui::test]
@@ -1737,7 +2508,8 @@ mod tests {
         let fresh = test_path("fresh");
         let (view, cx) = add_locker_view(cx, fresh.clone(), DEFAULT_INACTIVITY_TIMEOUT);
         assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::NoVault)));
-        let input = view.read_with(cx, |locker, _| locker.create_password.clone());
+        // The vault-name field leads the create form, so it takes initial focus.
+        let input = view.read_with(cx, |locker, _| locker.create_name.clone());
         assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
         cleanup(&fresh);
 
@@ -1748,6 +2520,32 @@ mod tests {
         let input = view.read_with(cx, |locker, _| locker.unlock_password.clone());
         assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
         cleanup(&existing);
+    }
+
+    #[gpui::test]
+    fn erasing_a_locked_vault_deletes_it_and_returns_to_the_create_screen(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("erase");
+        write_existing(&path);
+        let wal = {
+            let mut wal = path.clone().into_os_string();
+            wal.push("-wal");
+            PathBuf::from(wal)
+        };
+        fs::write(&wal, []).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.erase_vault_and_start_over(window, locker_cx)
+        });
+
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::NoVault)));
+        assert!(!path.exists());
+        assert!(!wal.exists());
+        let input = view.read_with(cx, |locker, _| locker.create_password.clone());
+        assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
+        cleanup(&path);
     }
 
     #[gpui::test]
@@ -1825,7 +2623,14 @@ mod tests {
             before,
             view.read_with(cx, |locker, _| locker.create_password.entity_id())
         );
-        assert!(path.exists());
+        // Creation now lands under `<data_dir>/vaults/<slug>/vault.db`, not the
+        // flat legacy path the caller passed in.
+        let created_path =
+            view.read_with(cx, |locker, _| locker.vault_path().unwrap().to_path_buf());
+        assert!(created_path.exists());
+        // The vault landed under a nested `vaults/<slug>/` directory, not the flat
+        // path `cleanup` expects — clean up the whole data dir instead.
+        cleanup(path.parent().unwrap());
         cleanup(&path);
     }
 
@@ -2070,7 +2875,8 @@ mod tests {
         init(cx);
         let path = test_path("focus");
         let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
-        let input = view.read_with(cx, |locker, _| locker.create_password.clone());
+        // The vault-name field leads the create form, so it takes initial focus.
+        let input = view.read_with(cx, |locker, _| locker.create_name.clone());
         assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
         cx.simulate_keystrokes("enter");
         assert_eq!(
@@ -2253,12 +3059,7 @@ mod tests {
         cx: &'a mut TestAppContext,
         label: &str,
         payloads: &[ItemPayload],
-    ) -> (
-        Entity<Nox>,
-        &'a mut VisualTestContext,
-        PathBuf,
-        Vec<ItemId>,
-    ) {
+    ) -> (Entity<Nox>, &'a mut VisualTestContext, PathBuf, Vec<ItemId>) {
         let path = test_path(label);
         let mut vault = Vault::create(b"correct", &path).unwrap();
         let ids = payloads

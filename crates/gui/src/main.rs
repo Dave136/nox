@@ -1,5 +1,6 @@
 mod app;
 mod assets;
+mod vaults;
 
 use gpui::{AppContext, WindowDecorations, WindowOptions};
 use gpui_platform::application;
@@ -30,12 +31,12 @@ fn main() {
 
     app.run(|cx| {
         init(cx);
-        match nox_core::default_vault_path() {
-            Ok(path) => {
+        match nox_core::default_data_dir() {
+            Ok(data_dir) => {
                 cx.open_window(window_options(), move |window, cx| {
                     let view = cx.new(|cx| {
                         app::Nox::new(
-                            path,
+                            data_dir,
                             app::DEFAULT_INACTIVITY_TIMEOUT,
                             app::DEFAULT_CLIPBOARD_TIMEOUT,
                             window,
