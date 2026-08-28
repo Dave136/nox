@@ -9,7 +9,7 @@ use std::fmt;
 pub enum MigrationError {
     /// SQLite rejected a migration operation.
     Sql(rusqlite::Error),
-    /// The database was created by a newer Locker release.
+    /// The database was created by a newer Nox release.
     NewerVersion(u32),
 }
 

@@ -3,7 +3,7 @@
 //! Matches the Pencil "All Items Detail Pane" frame — both states: "No
 //! Selection" (nothing picked yet) and the filled layout below.
 
-use super::Locker;
+use super::Nox;
 use super::clipboard::CopyField;
 use super::vault_list;
 use gpui::{
@@ -16,7 +16,7 @@ use gpui_component::{
 };
 use locker_core::ItemType;
 
-impl Locker {
+impl Nox {
     pub(crate) fn render_item_detail(
         &mut self,
         _window: &mut Window,

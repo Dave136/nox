@@ -1,4 +1,4 @@
-//! Core vault, storage, and cryptographic primitives for Locker.
+//! Core vault, storage, and cryptographic primitives for Nox.
 
 pub mod backup;
 pub mod clock;

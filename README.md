@@ -1,6 +1,6 @@
-# Locker
+# Nox
 
-Locker is a native desktop password manager for a **single-device** release.
+Nox is a native desktop password manager for a **single-device** release.
 It stores one local encrypted vault per installation. Synchronization is not
 available yet.
 
@@ -9,7 +9,7 @@ available yet.
 - One local encrypted vault per installation.
 - Login and Secure Note items.
 - Create, edit, delete, restore, search, and local password generation.
-- Explicit locking and an inactivity timeout while the unlocked Locker window
+- Explicit locking and an inactivity timeout while the unlocked Nox window
   is inactive.
 - Conditional clipboard clearing that leaves newer clipboard content alone.
 - Encrypted backup export and restore.
@@ -19,7 +19,7 @@ available yet.
 
 Version 1 supports **macOS and Linux**. Windows is unsupported.
 
-Locker currently has no dedicated operating-system suspend or session-lock
+Nox currently has no dedicated operating-system suspend or session-lock
 notification in its GUI stack. The macOS and Linux Wayland rows below therefore
 record the accepted v1 limitation; Linux X11 was not exercised and remains a
 separate unverified environment.
@@ -31,12 +31,12 @@ separate unverified environment.
 | Linux X11 | Not verified | Not verified | Not verified | Not verified |
 
 The Suspend and OS session lock cells for macOS and Linux Wayland record the
-accepted v1 limitation, not positive runtime claims. Explicitly lock Locker
+accepted v1 limitation, not positive runtime claims. Explicitly lock Nox
 before suspending the machine, locking the operating-system session, or leaving
 it unattended. The real
 production-duration and suspend/session runs must be completed on supported
 hardware before the unverified explicit-lock and inactivity rows can support a
-release claim. Locker does not currently promise immediate locking on a suspend
+release claim. Nox does not currently promise immediate locking on a suspend
 or operating-system session-lock event.
 
 ## Data and security model
@@ -47,9 +47,9 @@ database is copied or device storage is stolen. The database can still reveal
 limited metadata such as record counts, ciphertext sizes, timestamps, and
 membership-related records.
 
-While the vault is unlocked, decrypted data is available to the running Locker
+While the vault is unlocked, decrypted data is available to the running Nox
 process. Search decrypts data into memory and does not persist a plaintext
-search index. Locking changes the application state and drops Locker-owned
+search index. Locking changes the application state and drops Nox-owned
 unlocked state; it cannot erase copies already captured by the operating system,
 another program, clipboard history, screenshots, or a user.
 
@@ -60,27 +60,27 @@ compromised or already-unlocked computer.
 
 ### Master password
 
-Locker cannot recover or reset a forgotten local master password. The creation
+Nox cannot recover or reset a forgotten local master password. The creation
 screen says:
 
-> Locker cannot recover a forgotten master password. Store it somewhere safe.
+> Nox cannot recover a forgotten master password. Store it somewhere safe.
 
-After the vault is locked or Locker is restarted, losing the master password
-means the local vault cannot be unlocked again. If Locker is still unlocked,
+After the vault is locked or Nox is restarted, losing the master password
+means the local vault cannot be unlocked again. If Nox is still unlocked,
 export a fresh encrypted backup before locking. A usable backup can still help
 recover the data if its backup password is known: restore lets you choose a new
 local master password; it does not recover or reset the old one.
 
 ### Backups
 
-- Export is manual. Locker does not create, schedule, upload, replicate, or
+- Export is manual. Nox does not create, schedule, upload, replicate, or
   verify backups for you.
 - Each backup is a point-in-time encrypted archive. Changes made after export
   are not in that archive.
-- A backup needs both the archive and its backup password. Locker cannot recover
+- A backup needs both the archive and its backup password. Nox cannot recover
   or reset a forgotten backup password. The export screen says:
 
-  > Locker cannot recover this backup password. Without it, the backup cannot be restored.
+  > Nox cannot recover this backup password. Without it, the backup cannot be restored.
 
 - The backup password and local master password have different roles. Restore
   accepts the backup password and asks for a new local master password.
@@ -93,7 +93,7 @@ local master password; it does not recover or reset the old one.
 
 - A failed import leaves an existing vault unchanged. This does not remove the
   need for a separate backup before an operation that can replace a vault.
-- Locker has no non-destructive backup-verification command. Keep multiple
+- Nox has no non-destructive backup-verification command. Keep multiple
   versioned backup files and their passwords in separately protected, durable
   locations. Do not use the only live vault as a restore-test fixture: a
   successful restore can replace newer local data.
@@ -105,9 +105,9 @@ every usable encrypted backup are both lost.
 
 ## Security limitations
 
-Locker does not protect against:
+Nox does not protect against:
 
-- a compromised operating system or an unlocked Locker process;
+- a compromised operating system or an unlocked Nox process;
 - keyloggers, screen capture, or a malicious clipboard manager;
 - a malicious or compromised device that is already a trusted vault member;
 - recovery of plaintext that a formerly trusted device copied before removal;
@@ -119,8 +119,8 @@ release. The trusted-member and LAN-peer limitations describe the trust boundary
 that will apply when synchronization ships; they are not a claim that this GUI
 currently exposes a network surface.
 
-Locker conditionally clears the clipboard after its timeout only when the
-clipboard still contains text Locker copied. It does not disable operating
+Nox conditionally clears the clipboard after its timeout only when the
+clipboard still contains text Nox copied. It does not disable operating
 system or third-party clipboard history and cannot erase copies already read
 elsewhere.
 

@@ -34,7 +34,7 @@ fn main() {
             Ok(path) => {
                 cx.open_window(window_options(), move |window, cx| {
                     let view = cx.new(|cx| {
-                        app::Locker::new(
+                        app::Nox::new(
                             path,
                             app::DEFAULT_INACTIVITY_TIMEOUT,
                             app::DEFAULT_CLIPBOARD_TIMEOUT,
@@ -48,7 +48,7 @@ fn main() {
                     // chrome ourselves, so disable it.
                     cx.new(|cx| Root::new(view, window, cx).bordered(false))
                 })
-                .expect("open Locker window");
+                .expect("open Nox window");
             }
             Err(error) => {
                 cx.open_window(window_options(), move |window, cx| {

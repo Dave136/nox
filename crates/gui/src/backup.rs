@@ -2,7 +2,7 @@ use super::{
     AppState, CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_BORDER_STRONG, CIPHER_DANGER,
     CIPHER_DISABLED, CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED, CIPHER_FOREGROUND_SECONDARY,
     CIPHER_FOREGROUND_SOFT, CIPHER_FOREGROUND_SUBTLE, CIPHER_PRIMARY, CIPHER_SURFACE,
-    CIPHER_SURFACE_RAISED, Locker, animated_auth_button,
+    CIPHER_SURFACE_RAISED, Nox, animated_auth_button,
 };
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent,
@@ -88,7 +88,7 @@ impl BackupState {
 
 fn masked_input(
     window: &mut Window,
-    cx: &mut Context<Locker>,
+    cx: &mut Context<Nox>,
     placeholder: &'static str,
 ) -> Entity<InputState> {
     cx.new(|cx| {
@@ -98,7 +98,7 @@ fn masked_input(
     })
 }
 
-impl Locker {
+impl Nox {
     pub(crate) fn leave_restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(
             self.backup.operation,
@@ -230,7 +230,7 @@ impl Locker {
             dialog
                 .title("Export backup")
                 .child(format!("Destination: {}", destination.display()))
-                .child("Locker cannot recover this backup password. Without it, the backup cannot be restored.")
+                .child("Nox cannot recover this backup password. Without it, the backup cannot be restored.")
                 .child(Input::new(&password).mask_toggle())
                 .child(Input::new(&confirmation).mask_toggle())
                 .confirm()
@@ -351,7 +351,7 @@ impl Locker {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose Locker backup".into()),
+            prompt: Some("Choose Nox backup".into()),
         });
         self.backup.task = cx.spawn_in(window, async move |this, cx| {
             let result = receiver
@@ -843,15 +843,15 @@ pub(crate) fn backup_error_message(operation: &str, error: &BackupError) -> Shar
         }
         BackupError::UnsupportedVersion => "This backup version is not supported.".into(),
         BackupError::InvalidArchive(_) | BackupError::Journal(_) => {
-            "The selected file is not a valid Locker backup.".into()
+            "The selected file is not a valid Nox backup.".into()
         }
         BackupError::SourceEqualsDestination => {
             "Choose a backup file different from the local vault.".into()
         }
         BackupError::Io(_) if operation == "export" => {
-            "Locker could not write the backup to that location.".into()
+            "Nox could not write the backup to that location.".into()
         }
-        BackupError::Io(_) => "Locker could not read or restore the selected backup.".into(),
+        BackupError::Io(_) => "Nox could not read or restore the selected backup.".into(),
         _ => "The backup operation failed. Your existing vault was not replaced.".into(),
     }
 }

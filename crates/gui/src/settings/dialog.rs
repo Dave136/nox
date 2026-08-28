@@ -1,4 +1,4 @@
-use super::super::Locker;
+use super::super::Nox;
 use super::Settings;
 use gpui::{
     Animation, AnimationExt, AnyElement, App, BoxShadow, Entity, FontWeight, MouseButton, Window,
@@ -26,7 +26,7 @@ const SEARCH_ICON: u32 = 0x788390;
 const MODAL_BACKDROP: u32 = 0x0A0C0F99;
 
 pub(crate) fn render_settings_modal(
-    locker: Entity<Locker>,
+    locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
     conflict_count: usize,
@@ -126,7 +126,7 @@ impl SettingsSection {
 }
 
 pub(crate) fn render_settings_dialog(
-    locker: Entity<Locker>,
+    locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
     conflict_count: usize,
@@ -194,7 +194,7 @@ pub(crate) fn render_settings_dialog(
         .into_any_element()
 }
 
-fn render_navigation(locker: Entity<Locker>, selected: SettingsSection) -> AnyElement {
+fn render_navigation(locker: Entity<Nox>, selected: SettingsSection) -> AnyElement {
     let mut list = div().flex().flex_col().gap(px(5.));
     for (section, label, icon) in SettingsSection::ALL {
         list = list.child(navigation_item(
@@ -255,7 +255,7 @@ fn render_navigation(locker: Entity<Locker>, selected: SettingsSection) -> AnyEl
 }
 
 fn navigation_item(
-    locker: Entity<Locker>,
+    locker: Entity<Nox>,
     section: SettingsSection,
     label: &'static str,
     icon: &'static str,
@@ -305,7 +305,7 @@ fn navigation_item(
 }
 
 fn render_section(
-    locker: Entity<Locker>,
+    locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
     conflict_count: usize,
@@ -412,7 +412,7 @@ fn settings_row_with_height(
 fn toggle(
     id: &'static str,
     enabled: bool,
-    locker: Entity<Locker>,
+    locker: Entity<Nox>,
     change: fn(&mut Settings),
 ) -> AnyElement {
     div()
@@ -436,7 +436,7 @@ fn toggle(
         .into_any_element()
 }
 
-fn update_settings<F>(locker: Entity<Locker>, window: &mut Window, app: &mut App, change: F)
+fn update_settings<F>(locker: Entity<Nox>, window: &mut Window, app: &mut App, change: F)
 where
     F: FnOnce(&mut Settings),
 {
@@ -447,7 +447,7 @@ where
     });
 }
 
-fn appearance_section(locker: Entity<Locker>, settings: Settings) -> AnyElement {
+fn appearance_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
     let theme_sync = toggle(
         "settings-sync-system",
         settings.sync_system_theme,
@@ -628,7 +628,7 @@ fn theme_card() -> AnyElement {
         .into_any_element()
 }
 
-fn opacity_control(locker: Entity<Locker>, value: u8) -> AnyElement {
+fn opacity_control(locker: Entity<Nox>, value: u8) -> AnyElement {
     let rail_width = 196.;
     let knob = ((value.saturating_sub(60) as f32 / 40.) * rail_width).round();
     div()
@@ -685,7 +685,7 @@ fn opacity_control(locker: Entity<Locker>, value: u8) -> AnyElement {
         .into_any_element()
 }
 
-fn language_control(locker: Entity<Locker>, language: &str) -> AnyElement {
+fn language_control(locker: Entity<Nox>, language: &str) -> AnyElement {
     let label = language.to_owned();
     div()
         .id("settings-language")
@@ -725,7 +725,7 @@ fn language_control(locker: Entity<Locker>, language: &str) -> AnyElement {
         .into_any_element()
 }
 
-fn security_section(locker: Entity<Locker>, settings: Settings) -> AnyElement {
+fn security_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
     let auto_lock = duration_control(
         "settings-auto-lock",
         locker.clone(),
@@ -762,7 +762,7 @@ fn security_section(locker: Entity<Locker>, settings: Settings) -> AnyElement {
 
 fn duration_control(
     id: &'static str,
-    locker: Entity<Locker>,
+    locker: Entity<Nox>,
     seconds: u64,
     field: fn(&mut Settings) -> &mut u64,
 ) -> AnyElement {
@@ -811,7 +811,7 @@ fn format_duration(seconds: u64) -> String {
     }
 }
 
-fn vault_section(locker: Entity<Locker>, conflict_count: usize) -> AnyElement {
+fn vault_section(locker: Entity<Nox>, conflict_count: usize) -> AnyElement {
     let restore = locker.clone();
     let export = locker.clone();
     let conflicts = locker;
@@ -863,7 +863,7 @@ fn vault_section(locker: Entity<Locker>, conflict_count: usize) -> AnyElement {
         .into_any_element()
 }
 
-fn import_export_section(locker: Entity<Locker>) -> AnyElement {
+fn import_export_section(locker: Entity<Nox>) -> AnyElement {
     let export = locker.clone();
     let restore = locker;
     div()
@@ -913,7 +913,7 @@ fn action_button(
         .into_any_element()
 }
 
-fn privacy_section(locker: Entity<Locker>, settings: Settings) -> AnyElement {
+fn privacy_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -940,7 +940,7 @@ fn privacy_section(locker: Entity<Locker>, settings: Settings) -> AnyElement {
 }
 
 fn availability_section(
-    locker: Entity<Locker>,
+    locker: Entity<Nox>,
     settings: Settings,
     title: &'static str,
     subtitle: &'static str,

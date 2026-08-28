@@ -1,4 +1,4 @@
-use super::{AppState, Locker};
+use super::{AppState, Nox};
 use gpui::{AnyElement, Context, FontWeight, SharedString, Window, div, prelude::*, px};
 use gpui_component::{
     ActiveTheme, Disableable, Sizable,
@@ -112,7 +112,7 @@ fn truncate(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
 
-impl Locker {
+impl Nox {
     pub(crate) fn open_conflicts(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.conflicts_open = true;
         self.note_activity(cx);

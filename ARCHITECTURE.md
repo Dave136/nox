@@ -1,8 +1,8 @@
-# Locker — Local-Sync Password Manager Architecture
+# Nox — Local-Sync Password Manager Architecture
 
 ## Status
 
-This document is the implementation specification for Locker v1. It preserves the
+This document is the implementation specification for Nox v1. It preserves the
 original product direction while making the storage, cryptographic, trust, and
 replication rules explicit enough to implement and test.
 
@@ -27,7 +27,7 @@ Confirmed product decisions:
 
 ## Security and Failure Model
 
-Locker v1 protects against:
+Nox v1 protects against:
 
 - theft or copying of the local vault database while it is locked;
 - passive or active LAN attackers who do not know the pairing code and are not
@@ -36,7 +36,7 @@ Locker v1 protects against:
 - interrupted local writes, duplicate messages, reordered messages, and peers that
   are temporarily offline.
 
-Locker v1 does **not** protect against:
+Nox v1 does **not** protect against:
 
 - a compromised operating system, unlocked process, keylogger, screen capture, or
   malicious clipboard manager;
@@ -277,7 +277,7 @@ Device A must be unlocked for the entire operation.
    limits failed attempts, and is destroyed on cancellation or application exit.
 3. B enters the secret, discovers A, and opens a bounded, timeout-controlled TCP
    connection.
-4. A and B run asymmetric SPAKE2 roles. The SPAKE2 identity strings bind the Locker
+4. A and B run asymmetric SPAKE2 roles. The SPAKE2 identity strings bind the Nox
    protocol version, pairing instance, and role names to the transcript.
 5. The SPAKE2 result is expanded into separate confirmation and encryption keys.
    Both sides perform an explicit second-round key confirmation over the complete
@@ -307,7 +307,7 @@ Noise_KK_25519_ChaChaPoly_BLAKE2s
 ```
 
 Both sides know the other's static X25519 key from the membership chain. The Noise
-prologue binds the Locker protocol version and vault ID. Plain TCP is sufficient;
+prologue binds the Nox protocol version and vault ID. Plain TCP is sufficient;
 QUIC is intentionally omitted because Noise already supplies mutual authentication
 and encryption.
 
@@ -392,7 +392,7 @@ projection.
 
 Discovery uses mDNS/DNS-SD service `_locker._tcp`. Advertisements expose only the
 protocol version, listening port, and the stable device identifier needed to match a
-known member. This leaks the presence of a Locker peer and its stable pseudonymous
+known member. This leaks the presence of a Nox peer and its stable pseudonymous
 identifier to the LAN; it does not expose vault contents, names, or keys. No mDNS
 response means no automatic sync attempt in v1.
 
@@ -490,7 +490,7 @@ imports the latest item state into a new vault ID and membership genesis rather 
 forging membership in the old vault. Import failure leaves the existing vault
 unchanged.
 
-Locker cannot recover a forgotten master password. The UI must state this clearly
+Nox cannot recover a forgotten master password. The UI must state this clearly
 when the user creates a vault and backup.
 
 ## GPUI Application
@@ -512,7 +512,7 @@ Minimal v1 screens and behaviors:
 - Generate passwords locally with the OS CSPRNG and user-selected length and
   character classes.
 - Copy username or password to the clipboard with a configurable timeout. Clear it
-  only if the clipboard still contains the value Locker wrote, so newer user data
+  only if the clipboard still contains the value Nox wrote, so newer user data
   is not overwritten.
 
 ### Devices and sync

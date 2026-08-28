@@ -1,4 +1,4 @@
-use super::Locker;
+use super::Nox;
 use gpui::{ClipboardItem, Context, Task, Window};
 use locker_core::{ItemId, SecretBytes};
 use std::time::Duration;
@@ -43,7 +43,7 @@ impl ClipboardState {
     }
 }
 
-impl Locker {
+impl Nox {
     pub(crate) fn copy_username(
         &mut self,
         item_id: ItemId,

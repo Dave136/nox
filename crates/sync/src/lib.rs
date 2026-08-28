@@ -1,4 +1,4 @@
-//! LAN discovery, pairing, and journal replication for Locker.
+//! LAN discovery, pairing, and journal replication for Nox.
 
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Semaphore;

@@ -84,7 +84,7 @@ pub(crate) fn animated_auth_button(
     button: Button,
     hovered: Option<bool>,
     colors: (u32, u32, u32, u32),
-    cx: &mut Context<Locker>,
+    cx: &mut Context<Nox>,
 ) -> AnyElement {
     let (base, hover, active, foreground) = colors;
     let variant = ButtonCustomVariant::new(cx)
@@ -143,7 +143,7 @@ fn sync_status_pill() -> AnyElement {
         .into_any_element()
 }
 
-impl Locker {
+impl Nox {
     pub(crate) fn update_settings(
         &mut self,
         mut settings: Settings,
@@ -286,7 +286,7 @@ fn home_quick_action(
     enabled: bool,
     hovered: Option<bool>,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    cx: &mut Context<Locker>,
+    cx: &mut Context<Nox>,
 ) -> AnyElement {
     let mut icon_box = div()
         .size(px(32.))
@@ -389,8 +389,8 @@ enum FormState {
     Error(SharedString),
 }
 
-/// Root Locker view for vault creation, unlock, and lock lifecycle actions.
-pub struct Locker {
+/// Root Nox view for vault creation, unlock, and lock lifecycle actions.
+pub struct Nox {
     state: AppState,
     vault_path: PathBuf,
 
@@ -412,7 +412,7 @@ pub struct Locker {
     pub(crate) item_editor: Option<ItemEditorState>,
     /// Freshly rendered (title, body) for the open item-editor Sheet, refreshed
     /// every `render_unlocked` pass. See `open_item_editor_sheet` for why this
-    /// indirection exists instead of the Sheet reading `Locker` directly.
+    /// indirection exists instead of the Sheet reading `Nox` directly.
     item_editor_sheet_cell: Rc<RefCell<Option<(SharedString, AnyElement)>>>,
     active_view: ActiveView,
     /// Whether the selected item's password is shown in plaintext in the detail panel.
@@ -428,8 +428,8 @@ pub struct Locker {
     auth_hovered: HashMap<&'static str, bool>,
 }
 
-impl Locker {
-    /// Construct a Locker view for an already-resolved vault path.
+impl Nox {
+    /// Construct a Nox view for an already-resolved vault path.
     pub fn new(
         vault_path: PathBuf,
         inactivity_timeout: Duration,
@@ -1542,7 +1542,7 @@ impl Locker {
     }
 }
 
-impl Render for Locker {
+impl Render for Nox {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let authenticated = matches!(&self.state, AppState::Unlocked(_));
         self.window_controls.update(cx, |controls, cx| {
@@ -1606,9 +1606,9 @@ pub struct FatalStartupError {
 
 impl FatalStartupError {
     pub fn new(error: VaultError) -> Self {
-        eprintln!("could not determine Locker vault path: {error}");
+        eprintln!("could not determine Nox vault path: {error}");
         Self {
-            message: "Locker could not determine a safe vault path.".into(),
+            message: "Nox could not determine a safe vault path.".into(),
         }
     }
 }
@@ -1645,7 +1645,7 @@ mod tests {
 
     #[test]
     fn rsx_macro_builds_a_basic_element() {
-        let _ = gpui_rsx::rsx! { <div>{"Locker"}</div> };
+        let _ = gpui_rsx::rsx! { <div>{"Nox"}</div> };
     }
 
     fn test_path(label: &str) -> PathBuf {
@@ -1661,7 +1661,7 @@ mod tests {
         cx.update(gpui_component::init);
     }
 
-    fn set_input(view: &Entity<Locker>, cx: &mut VisualTestContext, password: &str) {
+    fn set_input(view: &Entity<Nox>, cx: &mut VisualTestContext, password: &str) {
         view.update_in(cx, |locker, window, locker_cx| {
             let input = locker.unlock_password.clone();
             input.update(locker_cx, |input, input_cx| {
@@ -1671,7 +1671,7 @@ mod tests {
     }
 
     fn set_create_inputs(
-        view: &Entity<Locker>,
+        view: &Entity<Nox>,
         cx: &mut VisualTestContext,
         password: &str,
         confirmation: &str,
@@ -1710,7 +1710,7 @@ mod tests {
         cx: &mut TestAppContext,
         path: PathBuf,
         timeout: Duration,
-    ) -> (Entity<Locker>, &mut VisualTestContext) {
+    ) -> (Entity<Nox>, &mut VisualTestContext) {
         add_locker_view_with_clipboard_timeout(cx, path, timeout, DEFAULT_CLIPBOARD_TIMEOUT)
     }
 
@@ -1719,12 +1719,12 @@ mod tests {
         path: PathBuf,
         inactivity_timeout: Duration,
         clipboard_timeout: Duration,
-    ) -> (Entity<Locker>, &mut VisualTestContext) {
+    ) -> (Entity<Nox>, &mut VisualTestContext) {
         let holder = Rc::new(RefCell::new(None));
         let holder_for_window = holder.clone();
         let (_, visual_cx) = cx.add_window_view(move |window, cx| {
             let locker =
-                cx.new(|cx| Locker::new(path, inactivity_timeout, clipboard_timeout, window, cx));
+                cx.new(|cx| Nox::new(path, inactivity_timeout, clipboard_timeout, window, cx));
             holder_for_window.borrow_mut().replace(locker.clone());
             Root::new(locker, window, cx)
         });
@@ -2254,7 +2254,7 @@ mod tests {
         label: &str,
         payloads: &[ItemPayload],
     ) -> (
-        Entity<Locker>,
+        Entity<Nox>,
         &'a mut VisualTestContext,
         PathBuf,
         Vec<ItemId>,
@@ -2280,7 +2280,7 @@ mod tests {
     }
 
     fn set_editor_values(
-        view: &Entity<Locker>,
+        view: &Entity<Nox>,
         cx: &mut VisualTestContext,
         title: &str,
         username: &str,

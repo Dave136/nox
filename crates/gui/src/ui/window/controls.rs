@@ -78,7 +78,7 @@ impl WindowControls {
     }
 
     /// Show or hide the command search trigger. Called on every render from
-    /// the owning `Locker` view so this always reflects `AppState`, with no
+    /// the owning `Nox` view so this always reflects `AppState`, with no
     /// separate transition site to keep in sync.
     pub fn set_authenticated(&mut self, authenticated: bool, cx: &mut Context<Self>) {
         if self.authenticated != authenticated {
@@ -252,7 +252,7 @@ impl WindowControls {
                 small
                 dropdown_menu={|menu, _, _| {
                     menu.item(PopupMenuItem::new("Keyboard Shortcuts").disabled(true))
-                        .item(PopupMenuItem::new("About Locker").disabled(true))
+                        .item(PopupMenuItem::new("About Nox").disabled(true))
                 }}
             />
         }

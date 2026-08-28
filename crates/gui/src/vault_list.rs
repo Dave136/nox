@@ -4,7 +4,7 @@
 //! Pencil "Nox — All Items · No Selection" frame.
 
 use super::nav::ActiveView;
-use super::{AppState, Locker};
+use super::{AppState, Nox};
 use gpui::{
     AnyElement, Context, ElementId, Entity, FontWeight, KeyDownEvent, SharedString, Subscription,
     UniformListScrollHandle, Window, div, prelude::*, px, rgb, uniform_list,
@@ -134,7 +134,7 @@ impl VaultListState {
         items: Result<Vec<(ItemId, ItemPayload)>, VaultError>,
         deleted_ids: Result<Vec<ItemId>, VaultError>,
         window: &mut Window,
-        cx: &mut Context<Locker>,
+        cx: &mut Context<Nox>,
     ) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let (load, items, deleted_ids) = match (items, deleted_ids) {
@@ -375,7 +375,7 @@ fn type_filter_pill(
     active: bool,
     enabled: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    cx: &mut Context<Locker>,
+    cx: &mut Context<Nox>,
 ) -> AnyElement {
     let label_color = rgb(if active {
         super::CIPHER_FOREGROUND
@@ -552,7 +552,7 @@ fn list_header_row(first_column: &'static str, third_column: &'static str) -> An
         .into_any_element()
 }
 
-impl Locker {
+impl Nox {
     pub(crate) fn recompute_vault_list_filter(&mut self, cx: &mut Context<Self>) {
         let Some(list) = self.vault_list.as_mut() else {
             return;

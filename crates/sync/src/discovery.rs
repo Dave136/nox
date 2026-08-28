@@ -1,4 +1,4 @@
-//! Privacy-minimal DNS-SD discovery for Locker.
+//! Privacy-minimal DNS-SD discovery for Nox.
 //!
 //! Discovery is deliberately only a transport hint.  The returned endpoint
 //! is untrusted until membership authorization and the authenticated sync

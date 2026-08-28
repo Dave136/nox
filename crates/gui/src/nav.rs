@@ -2,7 +2,7 @@
 //! Pencil "Nox — Home" frame carries no brand mark inside the sidebar itself
 //! (only the title bar's small logo), so this doesn't render one either.
 
-use super::{Locker, settings};
+use super::{Nox, settings};
 use gpui::{AnyElement, Context, FontWeight, Window, div, prelude::*, px, rgb};
 use gpui_component::{
     Icon,
@@ -30,7 +30,7 @@ impl ActiveView {
     }
 }
 
-impl Locker {
+impl Nox {
     /// Switch the active nav view, resetting selection-scoped UI state that
     /// no longer applies (a Login's password may have been revealed, etc).
     pub(crate) fn set_active_view(&mut self, view: ActiveView, cx: &mut Context<Self>) {
@@ -197,7 +197,7 @@ fn sidebar_link(
     label: &'static str,
     active: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    cx: &mut Context<Locker>,
+    cx: &mut Context<Nox>,
 ) -> AnyElement {
     let resting_bg = if active {
         super::CIPHER_SURFACE_RAISED

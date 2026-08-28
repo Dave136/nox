@@ -1,4 +1,4 @@
-use super::{AppState, Locker, nav::ActiveView};
+use super::{AppState, Nox, nav::ActiveView};
 use gpui::{
     AnyElement, Context, Entity, FontWeight, SharedString, Window, div, prelude::*, px, rgb,
 };
@@ -64,7 +64,7 @@ fn now_millis() -> u64 {
 fn input(
     value: impl Into<SharedString>,
     window: &mut Window,
-    cx: &mut Context<Locker>,
+    cx: &mut Context<Nox>,
     placeholder: &'static str,
     masked: bool,
 ) -> Entity<InputState> {
@@ -84,7 +84,7 @@ fn input(
 fn textarea(
     value: impl Into<SharedString>,
     window: &mut Window,
-    cx: &mut Context<Locker>,
+    cx: &mut Context<Nox>,
     placeholder: &'static str,
 ) -> Entity<TextareaState> {
     let value = value.into();
@@ -102,7 +102,7 @@ fn textarea(
 }
 
 impl ItemEditorState {
-    pub(crate) fn for_create(window: &mut Window, cx: &mut Context<Locker>) -> Self {
+    pub(crate) fn for_create(window: &mut Window, cx: &mut Context<Nox>) -> Self {
         let title_input = input("", window, cx, "Title", false);
         let username_input = input("", window, cx, "Username", false);
         let password_input = input("", window, cx, "Password", true);
@@ -133,7 +133,7 @@ impl ItemEditorState {
         item_id: ItemId,
         vault: &Vault,
         window: &mut Window,
-        cx: &mut Context<Locker>,
+        cx: &mut Context<Nox>,
     ) -> Result<Self, VaultError> {
         let payload = vault.get_item(item_id)?.ok_or(VaultError::ItemNotFound)?;
         Ok(Self::from_payload(
@@ -148,7 +148,7 @@ impl ItemEditorState {
         item_id: ItemId,
         vault: &Vault,
         window: &mut Window,
-        cx: &mut Context<Locker>,
+        cx: &mut Context<Nox>,
     ) -> Result<Self, VaultError> {
         let payload = vault
             .last_known_payload(item_id)?
@@ -165,7 +165,7 @@ impl ItemEditorState {
         mode: EditorMode,
         payload: ItemPayload,
         window: &mut Window,
-        cx: &mut Context<Locker>,
+        cx: &mut Context<Nox>,
     ) -> Self {
         let mut editor = Self::for_create(window, cx);
         editor.mode = mode;
@@ -189,7 +189,7 @@ impl ItemEditorState {
         editor
     }
 
-    fn payload(&self, window: &mut Window, cx: &mut Context<Locker>) -> ItemPayload {
+    fn payload(&self, window: &mut Window, cx: &mut Context<Nox>) -> ItemPayload {
         let item_type = self.item_type;
         let title = self.title_input.read(cx).value().to_string();
         let username = if item_type == ItemType::Login {
@@ -269,7 +269,7 @@ fn password_is_reused(password: &str, items: &[(ItemId, ItemPayload)]) -> bool {
         })
 }
 
-impl Locker {
+impl Nox {
     pub(crate) fn uses_secure_note_workspace(&self) -> bool {
         self.active_view == ActiveView::SecureNotes
             && matches!(
@@ -306,8 +306,8 @@ impl Locker {
     /// Open the shadcn-style Sheet (drawer) that hosts the create/edit/restore form.
     ///
     /// The Sheet's content builder is invoked by `Root::render_sheet_layer`
-    /// from *inside* `Locker`'s own render pass, so it cannot call
-    /// `Entity::update`/`read` on `Locker` (it is already leased for that
+    /// from *inside* `Nox`'s own render pass, so it cannot call
+    /// `Entity::update`/`read` on `Nox` (it is already leased for that
     /// render and would panic). Instead `render_unlocked` refreshes
     /// `item_editor_sheet_cell` with freshly rendered content on every pass,
     /// and this closure just reads whatever is currently sitting in the cell.
@@ -560,7 +560,7 @@ impl Locker {
     /// the body since both are derived from the same editor state snapshot.
     pub(crate) fn render_item_editor(
         &mut self,
-        locker: Entity<Locker>,
+        locker: Entity<Nox>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (SharedString, AnyElement) {

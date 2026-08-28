@@ -9,7 +9,7 @@ use snow::error::{Error as SnowError, StateProblem};
 use std::{fmt, sync::OnceLock};
 use tokio::time::{self, Instant};
 
-/// The fixed Noise suite used by Locker v1.
+/// The fixed Noise suite used by Nox v1.
 pub const NOISE_PATTERN: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
 /// ChaChaPoly's authentication tag size.
 pub const NOISE_TAG_BYTES: usize = 16;

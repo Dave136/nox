@@ -1073,7 +1073,7 @@ impl Vault {
     }
 }
 
-/// Return the platform's default Locker vault path without touching the filesystem.
+/// Return the platform's default Nox vault path without touching the filesystem.
 pub fn default_vault_path() -> Result<PathBuf, VaultError> {
     #[cfg(target_os = "macos")]
     let base = {
