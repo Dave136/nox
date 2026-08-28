@@ -31,14 +31,13 @@ use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use vault_list::VaultListState;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, ClickEvent, Context, Entity, FontWeight, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString,
-    Subscription, Task, Window, div, ease_out_quint, prelude::*, px, rgb,
+    Animation, AnimationExt, AnyElement, Context, Entity, FontWeight, KeyBinding, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString, Subscription, Task,
+    Window, div, ease_out_quint, prelude::*, px, rgb,
 };
 use gpui_component::{
     Disableable, IndexPath, Root, Theme, ThemeMode, WindowExt,
-    button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _},
-    dialog::DialogButtonProps,
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputState},
     select::{Select, SelectEvent, SelectItem, SelectState},
 };
@@ -47,7 +46,6 @@ use nox_core::{SecretBytes, Vault, VaultError};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fs,
     path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -72,6 +70,12 @@ pub(crate) const CIPHER_FOREGROUND_MUTED: u32 = 0x8F98A8;
 const CIPHER_FOREGROUND_SUBTLE: u32 = 0x7F8998;
 const CIPHER_DISABLED: u32 = 0x626B78;
 const CIPHER_PRIMARY: u32 = 0xE3E6ED;
+// The Pencil frame's own auth-primary-button fill is `--cipher-primary`
+// (#E3E6ED, off-white) — by explicit request the auth flow's primary
+// buttons (Create vault, Unlock vault) read as true white instead.
+const CIPHER_PRIMARY_AUTH: u32 = 0xFFFFFF;
+const CIPHER_PRIMARY_AUTH_HOVER: u32 = 0xF5F6F8;
+const CIPHER_PRIMARY_AUTH_ACTIVE: u32 = CIPHER_PRIMARY;
 const CIPHER_DANGER: u32 = 0xA9787D;
 const CIPHER_ICON_MUTED: u32 = 0x737E8D;
 const CIPHER_PRIMARY_FOREGROUND: u32 = 0x1A1D22;
@@ -932,72 +936,6 @@ impl Nox {
         });
     }
 
-    /// Opens a confirmation dialog for erasing the local vault, offered from
-    /// the locked screen for a forgotten password or a vault that fails to
-    /// open (corruption). Recovery is impossible without this: `create_vault`
-    /// refuses to run while a vault file already exists at `vault_path`.
-    fn begin_erase_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.unlock_state == FormState::Pending
-            || !self.backup.is_idle()
-            || self.vault_path().is_none()
-        {
-            return;
-        }
-        let owner = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let owner = owner.clone();
-            alert
-                .title("Erase this vault?")
-                .description(
-                    "This permanently deletes the local vault and everything in it. \
-                     This cannot be undone. If you have a backup, restore it instead.",
-                )
-                .button_props(
-                    DialogButtonProps::default()
-                        .show_cancel(true)
-                        .ok_text("Erase vault")
-                        .ok_variant(ButtonVariant::Danger),
-                )
-                .on_ok(move |_: &ClickEvent, window, cx| {
-                    let _ = owner.update(cx, |this, cx| {
-                        this.erase_vault_and_start_over(window, cx);
-                    });
-                    true
-                })
-        });
-    }
-
-    /// Deletes the local vault (database, WAL/SHM sidecars, and settings
-    /// sidecar) and returns to the vault-creation screen. Irreversible.
-    fn erase_vault_and_start_over(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(db) = self.vault_path().map(Path::to_path_buf) else {
-            return;
-        };
-        let mut wal = db.clone().into_os_string();
-        wal.push("-wal");
-        let mut shm = db.clone().into_os_string();
-        shm.push("-shm");
-        for file in [
-            db.clone(),
-            PathBuf::from(wal),
-            PathBuf::from(shm),
-            Settings::sidecar_path(&db),
-        ] {
-            let _ = fs::remove_file(file);
-        }
-        self.active_vault = None;
-        self.state = AppState::NoVault;
-        self.vault_list = None;
-        self.item_editor = None;
-        self.reveal_password = false;
-        self.conflicts = ConflictState::Closed;
-        self.conflicts_open = false;
-        self.reset_create_inputs(window, cx);
-        self.reset_unlock_input(window, cx);
-        Self::focus_input(&self.create_password, window, cx);
-        cx.notify();
-    }
-
     fn note_activity(&mut self, cx: &mut Context<Self>) {
         if matches!(&self.state, AppState::Unlocked(_)) {
             self.last_activity = cx.background_executor().now();
@@ -1150,11 +1088,18 @@ impl Nox {
             "create-vault-submit",
             create_button,
             self.auth_hovered.get("create-vault-submit").copied(),
-            (CIPHER_PRIMARY, 0xF0F2F6, 0xCDD2DC, CIPHER_BACKGROUND),
+            (
+                CIPHER_PRIMARY_AUTH,
+                CIPHER_PRIMARY_AUTH_HOVER,
+                CIPHER_PRIMARY_AUTH_ACTIVE,
+                CIPHER_PRIMARY_FOREGROUND,
+            ),
             cx,
         );
         let restore_button = Button::new("create-restore-backup")
+            .w_full()
             .h(px(32.))
+            .px(px(12.))
             .disabled(backup_busy)
             .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)))
             .child(
@@ -1164,7 +1109,7 @@ impl Nox {
                     .gap(px(7.))
                     .child(
                         gpui_component::Icon::empty()
-                            .path("icons/refresh-cw.svg")
+                            .path("icons/archive-restore.svg")
                             .size(px(14.))
                             .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
                     )
@@ -1325,11 +1270,15 @@ impl Nox {
     fn render_locked(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.unlock_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
+        // `appearance(true)` (the default) is kept deliberately: it's what
+        // gives the trigger its focus-ring/open-state border out of the box.
+        // Our own bg/border/radius below are applied afterward and win at
+        // rest — see it flip to the theme's ring color while open, which
+        // `appearance(false)` would have thrown away entirely.
         let vault_select = Select::new(&self.vault_select)
-            .appearance(false)
             .w_full()
             .h(px(48.))
-            .px(px(12.))
+            .px(px(16.))
             .rounded(px(8.))
             .border_1()
             .border_color(rgb(CIPHER_BORDER))
@@ -1389,15 +1338,17 @@ impl Nox {
             unlock_button,
             self.auth_hovered.get("unlock-submit").copied(),
             (
-                CIPHER_PRIMARY,
-                0xF0F2F6,
-                0xCDD2DC,
+                CIPHER_PRIMARY_AUTH,
+                CIPHER_PRIMARY_AUTH_HOVER,
+                CIPHER_PRIMARY_AUTH_ACTIVE,
                 CIPHER_PRIMARY_FOREGROUND,
             ),
             cx,
         );
         let create_button = Button::new("locked-create-vault")
+            .w_full()
             .h(px(32.))
+            .px(px(12.))
             .on_click(cx.listener(|this, _, window, cx| this.begin_create_from_picker(window, cx)))
             .child(
                 div()
@@ -1425,7 +1376,9 @@ impl Nox {
             cx,
         );
         let restore_button = Button::new("restore-backup")
+            .w_full()
             .h(px(32.))
+            .px(px(12.))
             .disabled(backup_busy)
             .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)))
             .child(
@@ -1435,7 +1388,7 @@ impl Nox {
                     .gap(px(7.))
                     .child(
                         gpui_component::Icon::empty()
-                            .path("icons/refresh-cw.svg")
+                            .path("icons/archive-restore.svg")
                             .size(px(14.))
                             .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
                     )
@@ -1453,23 +1406,6 @@ impl Nox {
             ),
             cx,
         );
-        // No backup, and the password is gone or the file won't open: the only way
-        // forward is to discard it and start over. Kept low-emphasis (ghost, small
-        // text) since it's destructive and every other path here should be tried first.
-        let erase_button = Button::new("erase-vault")
-            .ghost()
-            .disabled(backup_busy)
-            .on_click(cx.listener(|this, _, window, cx| this.begin_erase_vault(window, cx)))
-            .child(
-                div()
-                    .text_xs()
-                    .text_center()
-                    .w_full()
-                    .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))
-                    .child(
-                        "Forgot your password, or this vault won't open? Erase it and start over",
-                    ),
-            );
         rsx! {
             <div
                 id="locked-view"
@@ -1532,7 +1468,6 @@ impl Nox {
                         <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
                             {"Enter to unlock · Esc to close"}
                         </div>
-                        {erase_button}
                     </div>
                     <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
                         {gpui_component::Icon::empty()
@@ -2335,32 +2270,6 @@ mod tests {
         let input = view.read_with(cx, |locker, _| locker.unlock_password.clone());
         assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
         cleanup(&existing);
-    }
-
-    #[gpui::test]
-    fn erasing_a_locked_vault_deletes_it_and_returns_to_the_create_screen(cx: &mut TestAppContext) {
-        init(cx);
-        let path = test_path("erase");
-        write_existing(&path);
-        let wal = {
-            let mut wal = path.clone().into_os_string();
-            wal.push("-wal");
-            PathBuf::from(wal)
-        };
-        fs::write(&wal, []).unwrap();
-        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
-        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
-
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.erase_vault_and_start_over(window, locker_cx)
-        });
-
-        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::NoVault)));
-        assert!(!path.exists());
-        assert!(!wal.exists());
-        let input = view.read_with(cx, |locker, _| locker.create_password.clone());
-        assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
-        cleanup(&path);
     }
 
     #[gpui::test]

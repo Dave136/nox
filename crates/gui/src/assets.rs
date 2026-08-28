@@ -18,6 +18,7 @@ macro_rules! icons {
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 const ICONS: &[(&str, &[u8])] = icons![
+    "archive-restore",
     "arrow-left-right",
     "arrow-up-down",
     "bell",
