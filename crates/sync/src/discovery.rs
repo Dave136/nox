@@ -4,11 +4,11 @@
 //! is untrusted until membership authorization and the authenticated sync
 //! handshakes accept it.
 
-use nox_core::DeviceId;
 use mdns_sd::{
     DaemonEvent, DaemonStatus, Receiver, ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent,
     ServiceInfo,
 };
+use nox_core::DeviceId;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
@@ -968,12 +968,9 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(192, 168, 1, 3)),
         ];
         let properties = [("v", "1"), ("m", "p"), ("i", &"00".repeat(16))];
-        let endpoint = parse_resolved_service(&service(
-            "pair._nox._tcp.local.",
-            &properties,
-            &addresses,
-        ))
-        .unwrap();
+        let endpoint =
+            parse_resolved_service(&service("pair._nox._tcp.local.", &properties, &addresses))
+                .unwrap();
         let expected: HashSet<_> = [
             "192.168.1.2:7000".parse().unwrap(),
             "192.168.1.3:7000".parse().unwrap(),
