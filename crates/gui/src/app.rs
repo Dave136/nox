@@ -5,13 +5,7 @@ use crate::conflicts::ConflictState;
 use crate::item_editor::{self, ItemEditorState};
 use crate::nav::ActiveView;
 use crate::settings::{self, Settings, SettingsSection, load_settings, save_settings};
-use crate::theme::{
-    self, CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_BORDER_STRONG, CIPHER_DANGER, CIPHER_DISABLED,
-    CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED, CIPHER_FOREGROUND_SECONDARY,
-    CIPHER_FOREGROUND_SOFT, CIPHER_FOREGROUND_SUBTLE, CIPHER_ICON_MUTED, CIPHER_PRIMARY,
-    CIPHER_PRIMARY_AUTH, CIPHER_PRIMARY_AUTH_ACTIVE, CIPHER_PRIMARY_AUTH_HOVER,
-    CIPHER_PRIMARY_FOREGROUND, CIPHER_SURFACE, CIPHER_SURFACE_RAISED,
-};
+use crate::theme::Theme;
 use crate::ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use crate::vault_list::VaultListState;
 use crate::vaults::{
@@ -19,9 +13,9 @@ use crate::vaults::{
 };
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FontWeight, KeyBinding,
+    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FontWeight, Hsla, KeyBinding,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString,
-    Subscription, Task, Window, div, ease_out_quint, point, prelude::*, px, rgb, rgba,
+    Subscription, Task, Window, div, ease_out_quint, point, prelude::*, px, rgba,
 };
 use gpui_component::{
     Disableable, IndexPath, Root, Sizable, ThemeMode, WindowExt,
@@ -47,15 +41,21 @@ pub const DEFAULT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(300);
 
 const UNLOCK_ERROR_MESSAGE: &str = "Incorrect password or corrupted vault.";
 const AUTH_HOVER_DURATION: Duration = Duration::from_millis(140);
-fn auth_hover_color(from: u32, to: u32, amount: f32) -> Rgba {
-    let from = rgb(from);
-    let to = rgb(to);
+/// Interpolate two theme roles for the hover transition.
+///
+/// The mix happens in RGB, not in the `Hsla` the roles are stored as: hue is
+/// circular, so lerping it takes near-greys on a detour through unrelated
+/// hues. Converting to `Rgba` first keeps the original channel-wise math.
+fn auth_hover_color(from: Hsla, to: Hsla, amount: f32) -> Hsla {
+    let from: Rgba = from.into();
+    let to: Rgba = to.into();
     Rgba {
         r: from.r + (to.r - from.r) * amount,
         g: from.g + (to.g - from.g) * amount,
         b: from.b + (to.b - from.b) * amount,
         a: 1.,
     }
+    .into()
 }
 
 fn relative_opened_label(last_opened_ms: Option<u64>) -> SharedString {
@@ -86,20 +86,20 @@ fn vault_initials(name: &str) -> String {
         .to_uppercase()
 }
 
-fn vault_dropdown_trailing(missing: bool, checked: bool) -> (&'static str, u32) {
+fn vault_dropdown_trailing(theme: Theme, missing: bool, checked: bool) -> (&'static str, Hsla) {
     if missing {
-        ("icons/circle-x.svg", CIPHER_DISABLED)
+        ("icons/circle-x.svg", theme.text_ghost)
     } else if checked {
-        ("icons/check.svg", CIPHER_FOREGROUND_SOFT)
+        ("icons/check.svg", theme.text_soft)
     } else {
-        ("icons/chevron-right.svg", CIPHER_ICON_MUTED)
+        ("icons/chevron-right.svg", theme.icon_muted)
     }
 }
 
 /// Shared avatar + name + status row content for the vault Select — used
 /// both as the trigger's `display_title` (no trailing icon; the Select adds
 /// its own caret) and as each dropdown option's `render` (with one).
-fn vault_row_content(vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyElement {
+fn vault_row_content(theme: Theme, vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyElement {
     let missing = !vault.path.is_file();
     let secondary = if missing {
         "File not found".to_owned()
@@ -118,16 +118,16 @@ fn vault_row_content(vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyEle
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .bg(rgb(CIPHER_SURFACE_RAISED))
+                .bg(theme.raised)
                 .child(
                     div()
                         .text_size(px(9.))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(if missing {
-                            CIPHER_DISABLED
+                        .text_color(if missing {
+                            theme.text_ghost
                         } else {
-                            CIPHER_FOREGROUND
-                        }))
+                            theme.text
+                        })
                         .child(vault_initials(&vault.name)),
                 ),
         )
@@ -141,21 +141,21 @@ fn vault_row_content(vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyEle
                     div()
                         .text_size(px(11.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(if missing {
-                            CIPHER_DISABLED
+                        .text_color(if missing {
+                            theme.text_ghost
                         } else {
-                            CIPHER_FOREGROUND_SOFT
-                        }))
+                            theme.text_soft
+                        })
                         .child(vault.name.clone()),
                 )
                 .child(
                     div()
                         .text_size(px(9.))
-                        .text_color(rgb(if missing {
-                            CIPHER_DISABLED
+                        .text_color(if missing {
+                            theme.text_ghost
                         } else {
-                            CIPHER_FOREGROUND_SUBTLE
-                        }))
+                            theme.text_subtle
+                        })
                         .child(secondary),
                 ),
         )
@@ -171,7 +171,10 @@ impl SelectItem for VaultEntry {
     }
 
     fn display_title(&self) -> Option<AnyElement> {
-        Some(vault_row_content(self, None))
+        // `SelectItem` hands no `cx` to its renderers, so the palette can't be
+        // read from the global here. Nox ships one theme, so naming it
+        // directly is exact rather than a guess.
+        Some(vault_row_content(Theme::cipher_midnight(), self, None))
     }
 
     fn value(&self) -> &Self::Value {
@@ -215,20 +218,20 @@ pub(crate) fn animated_auth_button(
     id: &'static str,
     button: Button,
     hovered: Option<bool>,
-    colors: (u32, u32, u32, u32),
+    colors: (Hsla, Hsla, Hsla, Hsla),
     cx: &mut Context<Nox>,
 ) -> AnyElement {
     let (base, hover, active, foreground) = colors;
     let variant = ButtonCustomVariant::new(cx)
-        .foreground(rgb(foreground).into())
-        .active(rgb(active).into());
+        .foreground(foreground)
+        .active(active);
     let button = button.on_hover(cx.listener(move |this, is_hovered, _, cx| {
         this.auth_hovered.insert(id, *is_hovered);
         cx.notify();
     }));
     let Some(hovered) = hovered else {
         return button
-            .custom(variant.color(rgb(base).into()).hover(rgb(base).into()))
+            .custom(variant.color(base).hover(base))
             .into_any_element();
     };
     button
@@ -239,7 +242,7 @@ pub(crate) fn animated_auth_button(
                 let amount = if hovered { delta } else { 1. - delta };
                 let color = auth_hover_color(base, hover, amount);
                 button
-                    .custom(variant.color(color.into()).hover(color.into()))
+                    .custom(variant.color(color).hover(color))
                     .opacity(0.96 + amount * 0.04)
             },
         )
@@ -249,7 +252,7 @@ pub(crate) fn animated_auth_button(
 // ponytail: static display only — no sync status is wired from the `sync`
 // crate into the GUI yet, so this always reads "Synced" regardless of the
 // vault's real sync/pairing state. Add real wiring if that's ever needed.
-fn sync_status_pill() -> AnyElement {
+fn sync_status_pill(theme: Theme) -> AnyElement {
     div()
         .flex()
         .items_center()
@@ -258,18 +261,18 @@ fn sync_status_pill() -> AnyElement {
         .py(px(9.))
         .rounded(px(8.))
         .border_1()
-        .border_color(rgb(CIPHER_BORDER))
+        .border_color(theme.border)
         .child(
             gpui_component::Icon::empty()
                 .path("icons/cloud-check.svg")
                 .size(px(16.))
-                .text_color(rgb(CIPHER_FOREGROUND_MUTED)),
+                .text_color(theme.text_muted),
         )
         .child(
             div()
                 .text_size(px(13.))
                 .font_weight(FontWeight(500.))
-                .text_color(rgb(CIPHER_FOREGROUND))
+                .text_color(theme.text)
                 .child("Synced"),
         )
         .into_any_element()
@@ -298,6 +301,7 @@ impl Nox {
     /// "Add Item Button" node exactly (`#E3E6ED` fill, dark icon/label) and
     /// reuses the auth screens' animated hover.
     fn render_add_item_button(&mut self, id: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
         let button = Button::new(id)
             .h(px(38.))
             .px(px(16.))
@@ -312,13 +316,13 @@ impl Nox {
                         gpui_component::Icon::empty()
                             .path("icons/plus.svg")
                             .size(px(16.))
-                            .text_color(rgb(CIPHER_BACKGROUND)),
+                            .text_color(theme.canvas),
                     )
                     .child(
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight(500.))
-                            .text_color(rgb(CIPHER_BACKGROUND))
+                            .text_color(theme.canvas)
                             .child(if self.active_view == ActiveView::SecureNotes {
                                 "Add note"
                             } else {
@@ -330,7 +334,12 @@ impl Nox {
             id,
             button,
             self.auth_hovered.get(id).copied(),
-            (0xF0F2F6, CIPHER_PRIMARY, 0xCDD2DC, CIPHER_BACKGROUND),
+            (
+                theme.inverse_bright,
+                theme.inverse,
+                theme.inverse_press,
+                theme.canvas,
+            ),
             cx,
         )
     }
@@ -372,7 +381,7 @@ pub(crate) fn relative_time(updated_at_ms: u64) -> String {
     }
 }
 
-fn home_stat_tile(label: &'static str, value: usize) -> AnyElement {
+fn home_stat_tile(theme: Theme, label: &'static str, value: usize) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -382,19 +391,19 @@ fn home_stat_tile(label: &'static str, value: usize) -> AnyElement {
         .h(px(82.))
         .px(px(14.))
         .rounded(px(8.))
-        .bg(rgb(0x20242A))
+        .bg(theme.field)
         .child(
             div()
                 .text_xs()
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                .text_color(theme.text_muted)
                 .child(label),
         )
         .child(
             div()
                 .text_xl()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(CIPHER_FOREGROUND_SECONDARY))
+                .text_color(theme.text_secondary)
                 .child(format!("{value}")),
         )
         .into_any_element()
@@ -420,10 +429,11 @@ fn home_quick_action(
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &mut Context<Nox>,
 ) -> AnyElement {
+    let theme = Theme::current(cx);
     let mut icon_box = div()
         .size(px(32.))
         .rounded(px(8.))
-        .bg(rgb(0x20242A))
+        .bg(theme.field)
         .flex()
         .items_center()
         .justify_center()
@@ -431,10 +441,10 @@ fn home_quick_action(
             gpui_component::Icon::empty()
                 .path(icon_path)
                 .size(px(16.))
-                .text_color(rgb(CIPHER_FOREGROUND_SECONDARY)),
+                .text_color(theme.text_secondary),
         );
     if enabled {
-        icon_box = icon_box.group_hover(id, |style| style.bg(rgb(CIPHER_SURFACE)));
+        icon_box = icon_box.group_hover(id, |style| style.bg(theme.surface));
     }
     // Neutralizes Button's own hardcoded `justify_center` on its content
     // wrapper (see `sidebar_link` in nav.rs for the full explanation): a
@@ -451,12 +461,7 @@ fn home_quick_action(
                 .items_center()
                 .gap(px(11.))
                 .child(icon_box)
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(CIPHER_FOREGROUND))
-                        .child(label),
-                ),
+                .child(div().text_sm().text_color(theme.text).child(label)),
         );
     if !enabled {
         content = content.child(
@@ -464,8 +469,8 @@ fn home_quick_action(
                 .flex_shrink_0()
                 .text_size(px(10.))
                 .font_weight(FontWeight::from(600.))
-                .text_color(rgb(CIPHER_FOREGROUND_MUTED))
-                .bg(rgb(CIPHER_SURFACE_RAISED))
+                .text_color(theme.text_muted)
+                .bg(theme.raised)
                 .rounded(px(4.))
                 .px(px(6.))
                 .py(px(2.))
@@ -486,8 +491,8 @@ fn home_quick_action(
         return button
             .custom(
                 ButtonCustomVariant::new(cx)
-                    .color(rgb(CIPHER_SURFACE).into())
-                    .foreground(rgb(CIPHER_FOREGROUND).into()),
+                    .color(theme.surface)
+                    .foreground(theme.text),
             )
             .into_any_element();
     }
@@ -495,15 +500,20 @@ fn home_quick_action(
         id,
         button,
         hovered,
-        (
-            CIPHER_SURFACE,
-            CIPHER_SURFACE_RAISED,
-            CIPHER_SURFACE_RAISED,
-            CIPHER_FOREGROUND,
-        ),
+        (theme.surface, theme.raised, theme.raised, theme.text),
         cx,
     )
 }
+
+/// The secure-note workspace is the app's one light surface — a "paper" ground
+/// for long-form note editing. Cipher Midnight has no role for it, and
+/// inventing one would imply a light palette that does not exist.
+const SECURE_NOTE_PAPER: Rgba = Rgba {
+    r: 0.969,
+    g: 0.973,
+    b: 0.980,
+    a: 1.,
+};
 
 /// The top-level vault lifecycle state.
 #[allow(clippy::large_enum_variant)]
@@ -633,7 +643,7 @@ impl Nox {
                 cx.notify();
             },
         );
-        theme::apply(ThemeMode::Dark, Some(window), cx);
+        crate::theme::apply(ThemeMode::Dark, Some(window), cx);
         let create_name = Self::new_input(window, cx, "Personal vault", false);
         let create_password = Self::new_input(window, cx, "Create a strong password", true);
         let create_confirm = Self::new_input(window, cx, "Re-enter your master password", true);
@@ -826,7 +836,7 @@ impl Nox {
                                 eprintln!("vault registry persistence failed: {error}");
                             }
                             this.state = AppState::Unlocked(vault);
-                            theme::apply(ThemeMode::Dark, Some(window), cx);
+                            crate::theme::apply(ThemeMode::Dark, Some(window), cx);
                             this.vault_list = Some(VaultListState::from_initial_load(
                                 items, deleted, window, cx,
                             ));
@@ -895,7 +905,7 @@ impl Nox {
                                 }
                             }
                             this.state = AppState::Unlocked(vault);
-                            theme::apply(ThemeMode::Dark, Some(window), cx);
+                            crate::theme::apply(ThemeMode::Dark, Some(window), cx);
                             this.vault_list = Some(VaultListState::from_initial_load(
                                 items, deleted, window, cx,
                             ));
@@ -997,7 +1007,7 @@ impl Nox {
         if let AppState::Unlocked(vault) = std::mem::replace(&mut self.state, AppState::Locked) {
             vault.lock();
         }
-        theme::apply(ThemeMode::Dark, Some(window), cx);
+        crate::theme::apply(ThemeMode::Dark, Some(window), cx);
         Self::focus_input(&self.unlock_password, window, cx);
         cx.notify();
     }
@@ -1028,13 +1038,14 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let theme = Theme::current(cx);
         let pending = self.create_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
         let error = match &self.create_state {
             FormState::Error(message) => div()
                 .text_sm()
                 .text_center()
-                .text_color(rgb(CIPHER_DANGER))
+                .text_color(theme.danger)
                 .child(message.clone()),
             FormState::Idle | FormState::Pending => div(),
         };
@@ -1042,7 +1053,7 @@ impl Nox {
             backup::BackupOperation::Failed(message) => div()
                 .text_sm()
                 .text_center()
-                .text_color(rgb(CIPHER_DANGER))
+                .text_color(theme.danger)
                 .child(message.clone()),
             _ => div(),
         };
@@ -1075,10 +1086,10 @@ impl Nox {
             create_button,
             self.auth_hovered.get("create-vault-submit").copied(),
             (
-                CIPHER_PRIMARY_AUTH,
-                CIPHER_PRIMARY_AUTH_HOVER,
-                CIPHER_PRIMARY_AUTH_ACTIVE,
-                CIPHER_PRIMARY_FOREGROUND,
+                theme.inverse,
+                theme.inverse_hover,
+                theme.inverse_active,
+                theme.on_inverse,
             ),
             cx,
         );
@@ -1098,7 +1109,7 @@ impl Nox {
                         gpui_component::Icon::empty()
                             .path("icons/archive-restore.svg")
                             .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                            .text_color(theme.text_subtle),
                     )
                     .child("Restore a backup instead"),
             );
@@ -1107,10 +1118,10 @@ impl Nox {
             restore_button,
             self.auth_hovered.get("create-restore-backup").copied(),
             (
-                CIPHER_BACKGROUND,
-                CIPHER_SURFACE_RAISED,
-                CIPHER_BORDER,
-                CIPHER_FOREGROUND_SECONDARY,
+                theme.canvas,
+                theme.raised,
+                theme.border,
+                theme.text_secondary,
             ),
             cx,
         );
@@ -1121,7 +1132,7 @@ impl Nox {
                 flex
                 items_center
                 justify_center
-                bg={rgb(CIPHER_BACKGROUND)}
+                bg={theme.canvas}
                 p={px(36.)}
                 onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     match event.keystroke.key.as_str() {
@@ -1139,12 +1150,12 @@ impl Nox {
                     w={px(416.)}
                 >
                     <div flex flex_col items_center gap={px(8.)}>
-                        {logo(52., rgb(CIPHER_FOREGROUND).into())}
+                        {logo(52., theme.text)}
                         <div flex flex_col items_center gap={px(4.)}>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>
                                 {"Create your vault"}
                             </div>
-                            <div text_xs text_center textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                            <div text_xs text_center textColor={theme.text_muted}>
                                 {"Choose a master password to secure your data"}
                             </div>
                         </div>
@@ -1157,28 +1168,28 @@ impl Nox {
                         h={px(48.)}
                         px={px(12.)}
                         rounded={px(8.)}
-                        bg={rgb(CIPHER_SURFACE)}
+                        bg={theme.surface}
                         border_1
-                        borderColor={rgb(CIPHER_BORDER)}
+                        borderColor={theme.border}
                     >
-                        <div size={px(28.)} flex items_center justify_center rounded_full bg={rgb(CIPHER_SURFACE_RAISED)}>
-                            <div text_sm fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"!"}</div>
+                        <div size={px(28.)} flex items_center justify_center rounded_full bg={theme.raised}>
+                            <div text_sm fontWeight={FontWeight::BOLD} textColor={theme.text}>{"!"}</div>
                         </div>
                         <div flex flex_col flex_1 gap={px(2.)}>
-                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND_SOFT)}>
+                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_soft}>
                                 {"No password recovery"}
                             </div>
-                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                            <div text_xs textColor={theme.text_subtle}>
                                 {"Store your master password somewhere safe"}
                             </div>
                         </div>
                         {gpui_component::Icon::empty()
                             .path("icons/shield-alert.svg")
                             .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))}
+                            .text_color(theme.text_subtle)}
                     </div>
                     <div id="create-vault-name" flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
                             {"VAULT NAME"}
                         </div>
                             <Input
@@ -1187,17 +1198,17 @@ impl Nox {
                                     gpui_component::Icon::empty()
                                         .path("icons/database.svg")
                                         .size(px(15.))
-                                        .text_color(rgb(CIPHER_ICON_MUTED)),
+                                        .text_color(theme.icon_muted),
                                     )
                                     .aria_label("Vault name")}
                                 h={px(44.)}
-                                bg={rgb(CIPHER_SURFACE)}
-                                borderColor={rgb(CIPHER_BORDER_STRONG)}
+                                bg={theme.surface}
+                                borderColor={theme.border_strong}
                                 rounded={px(8.)}
                         />
                     </div>
                     <div id="create-vault-password" flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
                             {"MASTER PASSWORD"}
                         </div>
                         <Input
@@ -1207,17 +1218,17 @@ impl Nox {
                                     gpui_component::Icon::empty()
                                         .path("icons/lock.svg")
                                         .size(px(15.))
-                                        .text_color(rgb(CIPHER_ICON_MUTED)),
+                                        .text_color(theme.icon_muted),
                                 )
                                 .aria_label("Master password")}
                             h={px(44.)}
-                            bg={rgb(CIPHER_SURFACE)}
-                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            bg={theme.surface}
+                            borderColor={theme.border_strong}
                             rounded={px(8.)}
                         />
                     </div>
                     <div id="create-vault-confirm" flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
                             {"CONFIRM MASTER PASSWORD"}
                         </div>
                         <Input
@@ -1227,19 +1238,19 @@ impl Nox {
                                     gpui_component::Icon::empty()
                                         .path("icons/lock.svg")
                                         .size(px(15.))
-                                        .text_color(rgb(CIPHER_ICON_MUTED)),
+                                        .text_color(theme.icon_muted),
                                 )
                                 .aria_label("Confirm master password")}
                             h={px(44.)}
-                            bg={rgb(CIPHER_SURFACE)}
-                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            bg={theme.surface}
+                            borderColor={theme.border_strong}
                             rounded={px(8.)}
                         />
                     </div>
                     {error}
                     {create_button}
                     <div flex flex_col gap={px(8.)}>
-                        <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        <div h={px(1.)} w_full bg={theme.border} />
                         {if self.vaults.vaults.is_empty() {
                             div().into_any_element()
                         } else {
@@ -1259,11 +1270,11 @@ impl Nox {
                         }}
                         {restore_button}
                         {backup_status}
-                        <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
+                        <div text_xs text_center textColor={theme.text_ghost}>
                             {"Enter to create · Esc to close"}
                         </div>
                     </div>
-                    <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                    <div flex items_center justify_center gap={px(7.)} textColor={theme.text_subtle}>
                         {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(13.))}
                         <div text_xs>{"Encrypted locally · You hold the keys"}</div>
                     </div>
@@ -1273,28 +1284,30 @@ impl Nox {
     }
 
     fn render_locked(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
         let pending = self.unlock_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
         let trigger_content = self.active_vault.as_ref().map_or_else(
             || div().child("Select a vault").into_any_element(),
             |vault| {
                 vault_row_content(
+                    theme,
                     vault,
                     Some(
                         gpui_component::Icon::empty()
                             .path("icons/chevron-down.svg")
                             .size(px(14.))
-                            .text_color(rgb(0x748092))
+                            .text_color(theme.icon_muted)
                             .into_any_element(),
                     ),
                 )
             },
         );
         let trigger_variant = ButtonCustomVariant::new(cx)
-            .color(rgb(CIPHER_SURFACE).into())
-            .hover(rgb(CIPHER_SURFACE).into())
-            .active(rgb(CIPHER_SURFACE).into())
-            .foreground(rgb(CIPHER_FOREGROUND_SOFT).into());
+            .color(theme.surface)
+            .hover(theme.surface)
+            .active(theme.surface)
+            .foreground(theme.text_soft);
         let trigger = Button::new("vault-select-trigger")
             .custom(trigger_variant)
             .w_full()
@@ -1302,8 +1315,8 @@ impl Nox {
             .px(px(12.))
             .rounded(px(8.))
             .border_1()
-            .border_color(rgb(CIPHER_BORDER))
-            .bg(rgb(CIPHER_SURFACE))
+            .border_color(theme.border)
+            .bg(theme.surface)
             .child(trigger_content);
         let vaults = self.vaults.vaults.clone();
         let selected_id = self.active_vault.as_ref().map(|vault| vault.id.clone());
@@ -1316,11 +1329,11 @@ impl Nox {
                 let rows = vaults.iter().cloned().enumerate().map(|(index, vault)| {
                     let missing = !vault.path.is_file();
                     let checked = selected_id.as_ref() == Some(&vault.id);
-                    let (icon, color) = vault_dropdown_trailing(missing, checked);
+                    let (icon, color) = vault_dropdown_trailing(theme, missing, checked);
                     let trailing = gpui_component::Icon::empty()
                         .path(icon)
                         .size(px(14.))
-                        .text_color(rgb(color))
+                        .text_color(color)
                         .into_any_element();
                     let select = select.clone();
                     let popover = popover.clone();
@@ -1331,13 +1344,9 @@ impl Nox {
                         .h(px(40.))
                         .px(px(8.))
                         .rounded(px(6.))
-                        .bg(rgb(if checked {
-                            CIPHER_SURFACE_RAISED
-                        } else {
-                            CIPHER_SURFACE
-                        }))
+                        .bg(if checked { theme.raised } else { theme.surface })
                         .when(!checked && !missing, |row| {
-                            row.hover(|style| style.bg(rgb(CIPHER_SURFACE_RAISED)))
+                            row.hover(|style| style.bg(theme.raised))
                         })
                         .when(!missing, |row| {
                             row.cursor_pointer().on_click(move |_, window, app| {
@@ -1347,7 +1356,7 @@ impl Nox {
                                 popover.update(app, |state, cx| state.dismiss(window, cx));
                             })
                         })
-                        .child(vault_row_content(&vault, Some(trailing)))
+                        .child(vault_row_content(theme, &vault, Some(trailing)))
                 });
                 div()
                     .w(px(416.))
@@ -1357,8 +1366,8 @@ impl Nox {
                     .gap(px(1.))
                     .rounded(px(8.))
                     .border_1()
-                    .border_color(rgb(CIPHER_BORDER))
-                    .bg(rgb(CIPHER_SURFACE))
+                    .border_color(theme.border)
+                    .bg(theme.surface)
                     .shadow(vec![BoxShadow {
                         color: rgba(0x00000066).into(),
                         offset: point(px(0.), px(4.)),
@@ -1371,7 +1380,7 @@ impl Nox {
         let error = match &self.unlock_state {
             FormState::Error(message) => div()
                 .text_sm()
-                .text_color(rgb(CIPHER_DANGER))
+                .text_color(theme.danger)
                 .child(message.clone()),
             FormState::Idle | FormState::Pending => div(),
         };
@@ -1379,17 +1388,17 @@ impl Nox {
             backup::BackupOperation::Failed(message) => div()
                 .text_sm()
                 .text_center()
-                .text_color(rgb(CIPHER_DANGER))
+                .text_color(theme.danger)
                 .child(message.clone()),
             backup::BackupOperation::Succeeded(message) => div()
                 .text_sm()
                 .text_center()
-                .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))
+                .text_color(theme.text_subtle)
                 .child(message.clone()),
             backup::BackupOperation::AwaitingRestoreConfirmation { archive_path } => div()
                 .text_sm()
                 .text_center()
-                .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))
+                .text_color(theme.text_subtle)
                 .child(format!("Restore: {}", archive_path.display())),
             _ => div(),
         };
@@ -1411,7 +1420,7 @@ impl Nox {
                         gpui_component::Icon::empty()
                             .path("icons/lock-keyhole-open.svg")
                             .size(px(15.))
-                            .text_color(rgb(CIPHER_PRIMARY_FOREGROUND)),
+                            .text_color(theme.on_inverse),
                     )
                     .child(if pending {
                         "Unlocking…"
@@ -1424,10 +1433,10 @@ impl Nox {
             unlock_button,
             self.auth_hovered.get("unlock-submit").copied(),
             (
-                CIPHER_PRIMARY_AUTH,
-                CIPHER_PRIMARY_AUTH_HOVER,
-                CIPHER_PRIMARY_AUTH_ACTIVE,
-                CIPHER_PRIMARY_FOREGROUND,
+                theme.inverse,
+                theme.inverse_hover,
+                theme.inverse_active,
+                theme.on_inverse,
             ),
             cx,
         );
@@ -1446,7 +1455,7 @@ impl Nox {
                         gpui_component::Icon::empty()
                             .path("icons/plus.svg")
                             .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                            .text_color(theme.text_subtle),
                     )
                     .child("Create a new vault"),
             );
@@ -1455,10 +1464,10 @@ impl Nox {
             create_button,
             self.auth_hovered.get("locked-create-vault").copied(),
             (
-                CIPHER_BACKGROUND,
-                CIPHER_SURFACE_RAISED,
-                CIPHER_BORDER,
-                CIPHER_FOREGROUND_SECONDARY,
+                theme.canvas,
+                theme.raised,
+                theme.border,
+                theme.text_secondary,
             ),
             cx,
         );
@@ -1478,7 +1487,7 @@ impl Nox {
                         gpui_component::Icon::empty()
                             .path("icons/archive-restore.svg")
                             .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                            .text_color(theme.text_subtle),
                     )
                     .child("Restore a backup instead"),
             );
@@ -1487,10 +1496,10 @@ impl Nox {
             restore_button,
             self.auth_hovered.get("restore-backup").copied(),
             (
-                CIPHER_BACKGROUND,
-                CIPHER_SURFACE_RAISED,
-                CIPHER_BORDER,
-                CIPHER_FOREGROUND_SECONDARY,
+                theme.canvas,
+                theme.raised,
+                theme.border,
+                theme.text_secondary,
             ),
             cx,
         );
@@ -1501,7 +1510,7 @@ impl Nox {
                 flex
                 items_center
                 justify_center
-                bg={rgb(CIPHER_BACKGROUND)}
+                bg={theme.canvas}
                 p={px(36.)}
                 onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     match event.keystroke.key.as_str() {
@@ -1519,12 +1528,12 @@ impl Nox {
                     w={px(416.)}
                 >
                     <div flex flex_col items_center gap={px(8.)}>
-                        {logo(52., rgb(CIPHER_FOREGROUND).into())}
+                        {logo(52., theme.text)}
                         <div flex flex_col items_center gap={px(4.)}>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>
                                 {"Unlock your vault"}
                             </div>
-                            <div text_xs text_center textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                            <div text_xs text_center textColor={theme.text_muted}>
                                 {"Enter your master password to continue"}
                             </div>
                         </div>
@@ -1533,7 +1542,7 @@ impl Nox {
                         {vault_select}
                     </div>
                     <div id="unlock-password" flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
                             {"MASTER PASSWORD"}
                         </div>
                         <Input
@@ -1547,27 +1556,27 @@ impl Nox {
                                     gpui_component::Icon::empty()
                                         .path("icons/lock.svg")
                                         .size(px(15.))
-                                        .text_color(rgb(CIPHER_ICON_MUTED)),
+                                        .text_color(theme.icon_muted),
                                 )
                                 .aria_label("Master password")}
                             h={px(44.)}
-                            bg={rgb(CIPHER_SURFACE)}
-                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            bg={theme.surface}
+                            borderColor={theme.border_strong}
                             rounded={px(8.)}
                         />
                     </div>
                     {error}
                     {unlock_button}
                     <div flex flex_col gap={px(8.)}>
-                        <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        <div h={px(1.)} w_full bg={theme.border} />
                         {create_button}
                         {restore_button}
                         {backup_status}
-                        <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
+                        <div text_xs text_center textColor={theme.text_ghost}>
                             {"Enter to unlock · Esc to close"}
                         </div>
                     </div>
-                    <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                    <div flex items_center justify_center gap={px(7.)} textColor={theme.text_subtle}>
                         {gpui_component::Icon::empty()
                             .path("icons/shield-check.svg")
                             .size(px(13.))}
@@ -1579,16 +1588,17 @@ impl Nox {
     }
 
     fn render_unlocked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
         if self.active_view == ActiveView::Home {
             let nav = self.render_sidebar_nav(cx);
             let home = self.render_home(window, cx);
-            return rsx! { <div id="home-shell" size_full flex bg={rgb(CIPHER_BACKGROUND)}>{nav}{home}</div> };
+            return rsx! { <div id="home-shell" size_full flex bg={theme.canvas}>{nav}{home}</div> };
         }
         if self.uses_secure_note_workspace() {
             let nav = self.render_sidebar_nav(cx);
             let workspace = self.render_secure_note_workspace(window, cx);
             return rsx! {
-                <div id="secure-note-workspace-shell" size_full flex bg={rgb(0xF7F8FA)}>
+                <div id="secure-note-workspace-shell" size_full flex bg={SECURE_NOTE_PAPER}>
                     {nav}
                     {workspace}
                 </div>
@@ -1598,7 +1608,7 @@ impl Nox {
             let nav = self.render_sidebar_nav(cx);
             let workspace = self.render_login_workspace(window, cx);
             return rsx! {
-                <div id="login-workspace-shell" size_full flex bg={rgb(CIPHER_BACKGROUND)}>
+                <div id="login-workspace-shell" size_full flex bg={theme.canvas}>
                     {nav}
                     {workspace}
                 </div>
@@ -1647,7 +1657,7 @@ impl Nox {
                 id="unlocked-view"
                 size_full
                 flex
-                bg={rgb(CIPHER_BACKGROUND)}
+                bg={theme.canvas}
                 onMouseMove={cx.listener(|this, _: &MouseMoveEvent, _, cx| {
                     this.note_activity(cx);
                 })}
@@ -1670,11 +1680,11 @@ impl Nox {
                         px={px(32.)}
                         flex_shrink_0
                         border_b_1
-                        borderColor={rgb(CIPHER_BORDER)}
+                        borderColor={theme.border}
                     >
                         <div flex flex_col gap={px(3.)}>
-                            <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{page_title}</div>
-                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                            <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{page_title}</div>
+                            <div text_xs textColor={theme.text_muted}>
                                 {if self.active_view == ActiveView::SecureNotes {
                                     format!("{item_count} {item_noun}")
                                 } else {
@@ -1686,7 +1696,7 @@ impl Nox {
                             <Button
                                 base={Button::new("lock-vault")
                                     .ghost()
-                                    .icon(gpui_component::Icon::empty().path("icons/lock-keyhole-open.svg").text_color(rgb(CIPHER_FOREGROUND_MUTED)))
+                                    .icon(gpui_component::Icon::empty().path("icons/lock-keyhole-open.svg").text_color(theme.text_muted))
                                     .tooltip("Lock vault")
                                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                                         if !event.keystroke.modifiers.modified()
@@ -1700,12 +1710,12 @@ impl Nox {
                                         cx.listener(|this, _, window, cx| this.lock_vault(window, cx)),
                                     )}
                             />
-                            {sync_status_pill()}
+                            {sync_status_pill(theme)}
                             {add}
                         </div>
                     </div>
                     {conflict_panel}
-                    <div flex flex_col flex_1 min_h={px(0.)} p={px(28.)} pt={px(20.)} gap={px(16.)} bg={rgb(CIPHER_BACKGROUND)}>
+                    <div flex flex_col flex_1 min_h={px(0.)} p={px(28.)} pt={px(20.)} gap={px(16.)} bg={theme.canvas}>
                         {list_toolbar}
                         <div flex flex_1 min_h={px(0.)} gap={px(16.)}>
                             {list}
@@ -1718,6 +1728,7 @@ impl Nox {
     }
 
     fn render_home(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
         let (total, logins, notes, recent) =
             self.vault_list
                 .as_ref()
@@ -1747,7 +1758,7 @@ impl Nox {
             .ghost()
             .h(px(26.))
             .label("View all ›")
-            .text_color(rgb(CIPHER_FOREGROUND_SECONDARY))
+            .text_color(theme.text_secondary)
             .on_click({
                 let locker = locker.clone();
                 move |_, _window, cx| {
@@ -1780,7 +1791,7 @@ impl Nox {
                     .justify_start()
                     .px(px(18.))
                     .border_b_1()
-                    .border_color(rgb(CIPHER_BORDER))
+                    .border_color(theme.border)
                     .on_click(move |_, window, cx| {
                         row_locker.update(cx, |locker, cx| {
                             locker.open_editor_for_item(item_id, false, window, cx)
@@ -1801,7 +1812,7 @@ impl Nox {
                                         div()
                                             .size(px(34.))
                                             .rounded(px(8.))
-                                            .bg(rgb(CIPHER_SURFACE_RAISED))
+                                            .bg(theme.raised)
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -1809,7 +1820,7 @@ impl Nox {
                                                 gpui_component::Icon::empty()
                                                     .path(icon_path)
                                                     .size(px(15.))
-                                                    .text_color(rgb(CIPHER_FOREGROUND_SECONDARY)),
+                                                    .text_color(theme.text_secondary),
                                             ),
                                     )
                                     .child(
@@ -1818,15 +1829,12 @@ impl Nox {
                                             .flex_col()
                                             .gap(px(2.))
                                             .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(rgb(CIPHER_FOREGROUND))
-                                                    .child(title),
+                                                div().text_sm().text_color(theme.text).child(title),
                                             )
                                             .child(
                                                 div()
                                                     .text_xs()
-                                                    .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                                                    .text_color(theme.text_muted)
                                                     .child(subtitle),
                                             ),
                                     ),
@@ -1836,17 +1844,12 @@ impl Nox {
                                     .flex()
                                     .items_center()
                                     .gap(px(16.))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(CIPHER_FOREGROUND_MUTED))
-                                            .child(time),
-                                    )
+                                    .child(div().text_xs().text_color(theme.text_muted).child(time))
                                     .child(
                                         gpui_component::Icon::empty()
                                             .path("icons/ellipsis-vertical.svg")
                                             .size(px(14.))
-                                            .text_color(rgb(CIPHER_FOREGROUND_MUTED)),
+                                            .text_color(theme.text_muted),
                                     ),
                             ),
                     )
@@ -1858,7 +1861,7 @@ impl Nox {
                 .py(px(40.))
                 .text_sm()
                 .text_center()
-                .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                .text_color(theme.text_muted)
                 .child("No items yet")
                 .into_any_element()
         } else {
@@ -1921,23 +1924,23 @@ impl Nox {
             cx,
         );
         rsx! {
-            <div id="home-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={rgb(CIPHER_BACKGROUND)}>
-                <div id="home-header" flex items_center justify_between h={px(88.)} px={px(32.)} flex_shrink_0 border_b_1 borderColor={rgb(CIPHER_BORDER)}>
+            <div id="home-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
+                <div id="home-header" flex items_center justify_between h={px(88.)} px={px(32.)} flex_shrink_0 border_b_1 borderColor={theme.border}>
                     <div flex flex_col gap={px(3.)}>
-                        <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Home"}</div>
-                        <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Your vault at a glance"}</div>
+                        <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Home"}</div>
+                        <div text_xs textColor={theme.text_muted}>{"Your vault at a glance"}</div>
                     </div>
                     <div flex items_center gap={px(10.)}>
-                        {sync_status_pill()}
+                        {sync_status_pill(theme)}
                         {add}
                     </div>
                 </div>
                 <div id="home-dashboard" flex flex_col gap={px(20.)} p={px(32.)} overflow_y_scroll>
-                    <div id="home-hero" flex items_start justify_between p={px(24.)} bg={rgb(0x1E2126)} rounded={px(10.)} border_1 border_color={rgb(0x353C47)}>
+                    <div id="home-hero" flex items_start justify_between p={px(24.)} bg={theme.surface} rounded={px(10.)} border_1 border_color={theme.field_border}>
                         <div flex flex_col gap={px(8.)} w={px(360.)}>
-                            <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"WELCOME BACK"}</div>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Your vault is secure"}</div>
-                            <div text_sm textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                            <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_muted}>{"WELCOME BACK"}</div>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Your vault is secure"}</div>
+                            <div text_sm textColor={theme.text_muted}>
                                 {format!(
                                     "Stored locally and encrypted. {total} item{} in your vault.",
                                     if total == 1 { "" } else { "s" },
@@ -1945,15 +1948,15 @@ impl Nox {
                             </div>
                         </div>
                         <div flex gap={px(12.)}>
-                            {home_stat_tile("VAULT ITEMS", total)}
-                            {home_stat_tile("LOGINS", logins)}
-                            {home_stat_tile("SECURE NOTES", notes)}
+                            {home_stat_tile(theme, "VAULT ITEMS", total)}
+                            {home_stat_tile(theme, "LOGINS", logins)}
+                            {home_stat_tile(theme, "SECURE NOTES", notes)}
                         </div>
                     </div>
                     <div id="home-quick-actions" flex flex_col gap={px(12.)}>
                         <div flex items_center justify_between>
-                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Quick actions"}</div>
-                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Ctrl+P to search or create"}</div>
+                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Quick actions"}</div>
+                            <div text_xs textColor={theme.text_muted}>{"Ctrl+P to search or create"}</div>
                         </div>
                         <div flex gap={px(12.)}>
                             {new_login}
@@ -1963,30 +1966,30 @@ impl Nox {
                         </div>
                     </div>
                     <div flex gap={px(20.)} items_start>
-                        <div id="home-recent-items" flex flex_col flex_1 min_w={px(0.)} rounded={px(10.)} bg={rgb(CIPHER_SURFACE)}>
-                            <div flex items_center justify_between h={px(58.)} px={px(18.)} border_b_1 borderColor={rgb(CIPHER_BORDER)}>
+                        <div id="home-recent-items" flex flex_col flex_1 min_w={px(0.)} rounded={px(10.)} bg={theme.surface}>
+                            <div flex items_center justify_between h={px(58.)} px={px(18.)} border_b_1 borderColor={theme.border}>
                                 <div flex flex_col gap={px(2.)}>
-                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Recent items"}</div>
-                                    <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Newest first"}</div>
+                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Recent items"}</div>
+                                    <div text_xs textColor={theme.text_muted}>{"Newest first"}</div>
                                 </div>
                                 {view_all}
                             </div>
                             {recent_body}
                         </div>
                         <div flex flex_col gap={px(16.)} w={px(330.)} flex_shrink_0>
-                            <div flex flex_col gap={px(10.)} p={px(18.)} rounded={px(10.)} bg={rgb(CIPHER_SURFACE)}>
+                            <div flex flex_col gap={px(10.)} p={px(18.)} rounded={px(10.)} bg={theme.surface}>
                                 <div flex items_center gap={px(8.)}>
-                                    {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(15.)).text_color(rgb(CIPHER_FOREGROUND_SECONDARY))}
-                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Security health"}</div>
+                                    {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(15.)).text_color(theme.text_secondary)}
+                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Security health"}</div>
                                 </div>
-                                <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Password health scoring isn't available yet."}</div>
+                                <div text_xs textColor={theme.text_muted}>{"Password health scoring isn't available yet."}</div>
                             </div>
-                            <div flex flex_col gap={px(10.)} p={px(18.)} rounded={px(10.)} bg={rgb(CIPHER_SURFACE)}>
+                            <div flex flex_col gap={px(10.)} p={px(18.)} rounded={px(10.)} bg={theme.surface}>
                                 <div flex items_center gap={px(8.)}>
-                                    {gpui_component::Icon::empty().path("icons/star.svg").size(px(15.)).text_color(rgb(CIPHER_FOREGROUND_SECONDARY))}
-                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Favorites"}</div>
+                                    {gpui_component::Icon::empty().path("icons/star.svg").size(px(15.)).text_color(theme.text_secondary)}
+                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Favorites"}</div>
                                 </div>
-                                <div text_xs textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"Favoriting items isn't available yet."}</div>
+                                <div text_xs textColor={theme.text_muted}>{"Favoriting items isn't available yet."}</div>
                             </div>
                         </div>
                     </div>
@@ -1998,6 +2001,7 @@ impl Nox {
 
 impl Render for Nox {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
         let authenticated = matches!(&self.state, AppState::Unlocked(_));
         self.window_controls.update(cx, |controls, cx| {
             controls.set_authenticated(authenticated, cx)
@@ -2018,12 +2022,12 @@ impl Render for Nox {
                     .justify_center()
                     .gap(px(8.))
                     .p(px(32.))
-                    .text_color(rgb(CIPHER_FOREGROUND))
+                    .text_color(theme.text)
                     .child("Nox could not read vaults.json.")
                     .child(
                         div()
                             .text_sm()
-                            .text_color(rgb(CIPHER_FOREGROUND_MUTED))
+                            .text_color(theme.text_muted)
                             .child("The file was left unchanged. Fix it, then restart Nox."),
                     )
                     .into_any_element(),
@@ -2035,6 +2039,7 @@ impl Render for Nox {
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let settings_modal = self.settings_open.then(|| {
             settings::render_settings_modal(
+                theme,
                 cx.entity(),
                 self.settings.clone(),
                 self.settings_section,
@@ -2047,7 +2052,7 @@ impl Render for Nox {
                 relative
                 flex
                 flex_col
-                bg={rgb(CIPHER_BACKGROUND)}
+                bg={theme.canvas}
                 onAction={cx.listener(|this, _: &OpenCommandPalette, window, cx| {
                     // open_palette itself no-ops while unauthenticated.
                     this.window_controls
@@ -2055,7 +2060,7 @@ impl Render for Nox {
                 })}
             >
                 {self.window_controls.clone()}
-                <div flex_1 bg={rgb(CIPHER_BACKGROUND)}>{body}</div>
+                <div flex_1 bg={theme.canvas}>{body}</div>
                 {for modal in settings_modal {
                     {modal}
                 }}
@@ -2339,17 +2344,18 @@ mod tests {
 
     #[test]
     fn vault_dropdown_uses_a_check_for_the_selected_vault() {
+        let theme = crate::theme::Theme::cipher_midnight();
         assert_eq!(
-            vault_dropdown_trailing(false, true),
-            ("icons/check.svg", CIPHER_FOREGROUND_SOFT)
+            vault_dropdown_trailing(theme, false, true),
+            ("icons/check.svg", theme.text_soft)
         );
         assert_eq!(
-            vault_dropdown_trailing(false, false),
-            ("icons/chevron-right.svg", CIPHER_ICON_MUTED)
+            vault_dropdown_trailing(theme, false, false),
+            ("icons/chevron-right.svg", theme.icon_muted)
         );
         assert_eq!(
-            vault_dropdown_trailing(true, false),
-            ("icons/circle-x.svg", CIPHER_DISABLED)
+            vault_dropdown_trailing(theme, true, false),
+            ("icons/circle-x.svg", theme.text_ghost)
         );
     }
 
@@ -2581,8 +2587,10 @@ mod tests {
 
     #[test]
     fn auth_hover_color_interpolates_between_state_colors() {
-        assert_eq!(auth_hover_color(0x000000, 0xFFFFFF, 0.), rgb(0x000000));
-        assert_eq!(auth_hover_color(0x000000, 0xFFFFFF, 1.), rgb(0xFFFFFF));
+        let black: Hsla = gpui::rgb(0x000000).into();
+        let white: Hsla = gpui::rgb(0xFFFFFF).into();
+        assert_eq!(auth_hover_color(black, white, 0.), black);
+        assert_eq!(auth_hover_color(black, white, 1.), white);
     }
 
     #[gpui::test]

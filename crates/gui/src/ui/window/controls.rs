@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, App, Context, CursorStyle, Div, Entity, FocusHandle, Focusable, Keystroke,
-    MouseButton, MouseDownEvent, ResizeEdge, Window, actions, div, prelude::*, px, rgb,
+    MouseButton, MouseDownEvent, ResizeEdge, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt,
@@ -14,9 +14,7 @@ use std::{cell::Cell, rc::Rc};
 
 use crate::{
     assets::{IconName, icon, logo},
-    theme::{
-        CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_DANGER, CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED,
-    },
+    theme::Theme,
 };
 
 // use crate::assets::{IconName};
@@ -218,6 +216,7 @@ impl WindowControls {
     }
 
     fn render_file_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
         let controls = cx.entity().downgrade();
         let authenticated = self.authenticated;
         rsx! {
@@ -225,7 +224,7 @@ impl WindowControls {
                 base={Button::new("window-file-menu")}
                 label={"File"}
                 bg={cx.theme().transparent}
-                textColor={rgb(CIPHER_FOREGROUND_MUTED)}
+                textColor={theme.text_muted}
                 border_0
                 // Keep title-bar controls out of the vault form's tab order; Ctrl+P
                 // provides the keyboard route to every native window command.
@@ -277,12 +276,13 @@ impl WindowControls {
     }
 
     fn render_help_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
         rsx! {
             <Button
                 base={Button::new("window-help-menu")}
                 label={"Help"}
                 bg={cx.theme().transparent}
-                textColor={rgb(CIPHER_FOREGROUND_MUTED)}
+                textColor={theme.text_muted}
                 border_0
                 // Keep title-bar controls out of the vault form's tab order; Ctrl+P
                 // provides the keyboard route to every native window command.
@@ -297,6 +297,7 @@ impl WindowControls {
     }
 
     fn render_shell(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
         let open =
             cx.listener(|this, _: &gpui::ClickEvent, window, cx| this.open_palette(window, cx));
         let drag_left = cx.listener(|_, _: &MouseDownEvent, window, _| {
@@ -313,12 +314,12 @@ impl WindowControls {
                             .debug_selector(|| "window-command-palette-trigger".to_owned())}
                         min_w={px(200.)}
                         onClick={open}
-                        bg={rgb(CIPHER_BACKGROUND)}
+                        bg={theme.canvas}
                         border_color={cx.theme().input}
                         tab_stop={false}
                     >
                         <div flex items_center w_full gap={px(8.)}>
-                            {icon(IconName::Search, Some(14.), Some(rgb(CIPHER_FOREGROUND_MUTED).into()))}
+                            {icon(IconName::Search, Some(14.), Some(theme.text_muted))}
                             <div flex_1 text_color={cx.theme().muted_foreground}>
                                 {"Search commands…"}
                             </div>
@@ -342,13 +343,13 @@ impl WindowControls {
                 h={px(44.)}
                 px={px(12.)}
                 gap={px(4.)}
-                bg={rgb(CIPHER_BACKGROUND)}
+                bg={theme.canvas}
                 border_b_1
-                borderColor={rgb(CIPHER_BORDER)}
+                borderColor={theme.border}
             >
                 <div flex items_center gap={px(4.)}>
-                    <div flex items_center gap={px(7.)} mr={px(8.)} textColor={rgb(CIPHER_FOREGROUND)}>
-                        {logo(18., rgb(CIPHER_FOREGROUND).into())}
+                    <div flex items_center gap={px(7.)} mr={px(8.)} textColor={theme.text}>
+                        {logo(18., theme.text)}
                     </div>
                     {self.render_file_menu(cx)}
                     {self.render_help_menu(cx)}
@@ -375,7 +376,7 @@ impl WindowControls {
                         bg={cx.theme().transparent}
                         border_0
                     >
-                        {icon(IconName::WindowMinimize, Some(12.), Some(rgb(CIPHER_FOREGROUND_MUTED).into()))}
+                        {icon(IconName::WindowMinimize, Some(12.), Some(theme.text_muted))}
                     </Button>
                     <Button
                         base={Button::new("window-maximize")}
@@ -384,7 +385,7 @@ impl WindowControls {
                         border_0
                         onClick={self.command_callback(WindowCommand::ToggleMaximize, cx)}
                     >
-                        {icon(IconName::WindowMaximize, Some(12.), Some(rgb(CIPHER_FOREGROUND_MUTED).into()))}
+                        {icon(IconName::WindowMaximize, Some(12.), Some(theme.text_muted))}
                     </Button>
                     <Button
                         base={Button::new("window-close")}
@@ -393,7 +394,7 @@ impl WindowControls {
                         border_0
                         onClick={self.command_callback(WindowCommand::Close, cx)}
                     >
-                        {icon(IconName::X, Some(12.), Some(rgb(CIPHER_DANGER).into()))}
+                        {icon(IconName::X, Some(12.), Some(theme.danger))}
                     </Button>
                 </div>
             </div>

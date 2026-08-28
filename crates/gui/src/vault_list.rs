@@ -5,9 +5,10 @@
 
 use crate::app::{AppState, Nox};
 use crate::nav::ActiveView;
+use crate::theme::Theme;
 use gpui::{
-    AnyElement, Context, ElementId, Entity, FontWeight, KeyDownEvent, SharedString, Subscription,
-    UniformListScrollHandle, Window, div, prelude::*, px, rgb, uniform_list,
+    AnyElement, Context, ElementId, Entity, FontWeight, Hsla, KeyDownEvent, SharedString,
+    Subscription, UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
     Disableable, Sizable,
@@ -20,13 +21,6 @@ use std::collections::HashSet;
 use crate::assets::{IconName, icon};
 
 /// Colors from the Pencil "All Items Split Workspace" frame that don't
-/// already have a `crate::app::CIPHER_*` equivalent.
-const LIST_HEADER_BG: u32 = 0x191C21;
-const ITEM_ICON_BG: u32 = 0x282D35;
-const TYPE_PILL_ACTIVE_BG: u32 = 0x2A2F38;
-const MUTED_COUNT: u32 = 0x697482;
-const COLUMN_HEADER: u32 = 0x6F7886;
-
 /// Column widths shared by the list header row and every item row, so the
 /// two stay aligned.
 const COL_TYPE_W: f32 = 110.;
@@ -97,16 +91,20 @@ pub(crate) fn duplicate_passwords(items: &[(ItemId, ItemPayload)]) -> HashSet<St
 
 /// `(label, color)` for a login's password health, or `("—", muted)` when it
 /// has no password set yet.
-pub(crate) fn login_health(payload: &ItemPayload, dupes: &HashSet<String>) -> (&'static str, u32) {
+pub(crate) fn login_health(
+    theme: Theme,
+    payload: &ItemPayload,
+    dupes: &HashSet<String>,
+) -> (&'static str, Hsla) {
     if payload.password.is_empty() {
-        return ("—", crate::theme::CIPHER_FOREGROUND_SUBTLE);
+        return ("—", theme.text_subtle);
     }
     if dupes.contains(&payload.password) {
-        ("Reused", crate::theme::CIPHER_DANGER)
+        ("Reused", theme.danger)
     } else if is_weak_password(&payload.password) {
-        ("Weak", crate::theme::CIPHER_DANGER)
+        ("Weak", theme.danger)
     } else {
-        ("Strong", crate::theme::CIPHER_FOREGROUND_SECONDARY)
+        ("Strong", theme.text_secondary)
     }
 }
 
@@ -371,17 +369,14 @@ fn type_filter_pill(
     id: &'static str,
     label: &'static str,
     count: usize,
-    count_color: Option<u32>,
+    count_color: Option<Hsla>,
     active: bool,
     enabled: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &mut Context<Nox>,
 ) -> AnyElement {
-    let label_color = rgb(if active {
-        crate::theme::CIPHER_FOREGROUND
-    } else {
-        crate::theme::CIPHER_FOREGROUND_MUTED
-    });
+    let theme = Theme::current(cx);
+    let label_color = if active { theme.text } else { theme.text_muted };
     let content = div()
         .flex()
         .items_center()
@@ -396,20 +391,15 @@ fn type_filter_pill(
         .child(
             div()
                 .text_size(px(10.))
-                .text_color(rgb(count_color.unwrap_or(MUTED_COUNT)))
+                .text_color(count_color.unwrap_or(theme.text_count))
                 .child(format!("{count}")),
         );
     let (bg, hover_bg) = if active {
-        (TYPE_PILL_ACTIVE_BG, TYPE_PILL_ACTIVE_BG)
+        (theme.pill_active, theme.pill_active)
     } else {
-        (
-            crate::theme::CIPHER_SURFACE,
-            crate::theme::CIPHER_SURFACE_RAISED,
-        )
+        (theme.surface, theme.raised)
     };
-    let variant = ButtonCustomVariant::new(cx)
-        .color(rgb(bg).into())
-        .hover(rgb(hover_bg).into());
+    let variant = ButtonCustomVariant::new(cx).color(bg).hover(hover_bg);
     Button::new(id)
         .disabled(!enabled)
         .custom(variant)
@@ -430,17 +420,22 @@ fn type_filter_pill(
 /// explanation of that trick.
 #[allow(clippy::too_many_arguments)]
 fn item_row_content(
+    theme: Theme,
     icon_path: &'static str,
     title: String,
     subtitle: String,
-    third_column: (String, u32),
+    third_column: (String, Hsla),
     updated: String,
     selected: bool,
 ) -> AnyElement {
     let (third_label, third_color) = third_column;
     // Matches the Pencil frame's selected-row treatment: the icon box
     // brightens along with the row itself, not just the row background.
-    let icon_bg = if selected { 0x414854 } else { ITEM_ICON_BG };
+    let icon_bg = if selected {
+        theme.item_icon_selected
+    } else {
+        theme.item_icon
+    };
     div()
         .flex()
         .items_center()
@@ -451,7 +446,7 @@ fn item_row_content(
                 .size(px(32.))
                 .flex_shrink_0()
                 .rounded(px(8.))
-                .bg(rgb(icon_bg))
+                .bg(icon_bg)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -459,7 +454,7 @@ fn item_row_content(
                     gpui_component::Icon::empty()
                         .path(icon_path)
                         .size(px(15.))
-                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
+                        .text_color(theme.text_secondary),
                 ),
         )
         .child(
@@ -474,14 +469,14 @@ fn item_row_content(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND))
+                        .text_color(theme.text)
                         .truncate()
                         .child(title),
                 )
                 .child(
                     div()
                         .text_size(px(12.))
-                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                        .text_color(theme.text_subtle)
                         .truncate()
                         .child(subtitle),
                 ),
@@ -491,7 +486,7 @@ fn item_row_content(
                 .w(px(COL_TYPE_W))
                 .flex_shrink_0()
                 .text_size(px(12.))
-                .text_color(rgb(third_color))
+                .text_color(third_color)
                 .child(third_label),
         )
         .child(
@@ -499,7 +494,7 @@ fn item_row_content(
                 .w(px(COL_UPDATED_W))
                 .flex_shrink_0()
                 .text_size(px(12.))
-                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                .text_color(theme.text_subtle)
                 .child(updated),
         )
         .child(
@@ -512,7 +507,7 @@ fn item_row_content(
                     gpui_component::Icon::empty()
                         .path("icons/ellipsis.svg")
                         .size(px(14.))
-                        .text_color(rgb(MUTED_COUNT)),
+                        .text_color(theme.text_count),
                 ),
         )
         .into_any_element()
@@ -521,12 +516,16 @@ fn item_row_content(
 /// The list header row's column labels — same widths as `item_row_content`
 /// so header and rows stay aligned. Logins swaps "ITEM"/"TYPE" for
 /// "ACCOUNT"/"HEALTH", matching the Pencil "Logins List Header" frame.
-fn list_header_row(first_column: &'static str, third_column: &'static str) -> AnyElement {
+fn list_header_row(
+    theme: Theme,
+    first_column: &'static str,
+    third_column: &'static str,
+) -> AnyElement {
     let label = |text: &'static str| {
         div()
             .text_size(px(10.))
             .font_weight(FontWeight(600.))
-            .text_color(rgb(COLUMN_HEADER))
+            .text_color(theme.column_header)
             .child(text)
     };
     div()
@@ -537,7 +536,7 @@ fn list_header_row(first_column: &'static str, third_column: &'static str) -> An
         .px(px(14.))
         .gap(px(14.))
         .flex_shrink_0()
-        .bg(rgb(LIST_HEADER_BG))
+        .bg(theme.inset)
         .child(div().flex_1().min_w(px(0.)).child(label(first_column)))
         .child(
             div()
@@ -641,6 +640,7 @@ impl Nox {
     /// The search/filter/sort bar above the split view — full width, sitting
     /// above both the list and detail panes (Pencil "All Items Split Toolbar").
     pub(crate) fn render_vault_list_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
         let Some(list) = self.vault_list.as_ref() else {
             return div().into_any_element();
         };
@@ -649,15 +649,11 @@ impl Nox {
         let locker = cx.entity();
 
         let search = Input::new(&search_input)
-            .prefix(icon(
-                IconName::Search,
-                Some(15.),
-                Some(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE).into()),
-            ))
+            .prefix(icon(IconName::Search, Some(15.), Some(theme.text_subtle)))
             .h(px(38.))
             .w(px(360.))
-            .bg(rgb(crate::theme::CIPHER_SURFACE))
-            .border_color(rgb(0x353C47))
+            .bg(theme.surface)
+            .border_color(theme.field_border)
             .rounded(px(8.));
 
         let toolbar_button_content = |icon_path: &'static str, label: SharedString| {
@@ -669,13 +665,13 @@ impl Nox {
                     gpui_component::Icon::empty()
                         .path(icon_path)
                         .size(px(14.))
-                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
+                        .text_color(theme.text_secondary),
                 )
                 .child(
                     div()
                         .text_size(px(13.))
                         .font_weight(FontWeight(500.))
-                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))
+                        .text_color(theme.text_secondary)
                         .child(label),
                 )
         };
@@ -688,9 +684,9 @@ impl Nox {
             .h(px(36.))
             .px(px(11.))
             .rounded(px(7.))
-            .bg(rgb(crate::theme::CIPHER_SURFACE))
+            .bg(theme.surface)
             .border_1()
-            .border_color(rgb(0x353C47))
+            .border_color(theme.field_border)
             .child(toolbar_button_content(
                 "icons/list-filter.svg",
                 "Filter".into(),
@@ -701,9 +697,9 @@ impl Nox {
             .h(px(36.))
             .px(px(11.))
             .rounded(px(7.))
-            .bg(rgb(crate::theme::CIPHER_SURFACE))
+            .bg(theme.surface)
             .border_1()
-            .border_color(rgb(0x353C47))
+            .border_color(theme.field_border)
             .on_click(move |_, _window, app| {
                 locker.update(app, |locker, cx| {
                     if let Some(list) = locker.vault_list.as_mut() {
@@ -743,6 +739,7 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = Theme::current(cx);
         let card = |content: AnyElement| {
             div()
                 .id("vault-list-panel")
@@ -752,9 +749,9 @@ impl Nox {
                 .flex_shrink_0()
                 .h_full()
                 .rounded(px(9.))
-                .bg(rgb(crate::theme::CIPHER_SURFACE))
+                .bg(theme.surface)
                 .border_1()
-                .border_color(rgb(crate::theme::CIPHER_BORDER))
+                .border_color(theme.border)
                 .overflow_hidden()
                 .child(content)
         };
@@ -764,7 +761,7 @@ impl Nox {
                 div()
                     .p(px(16.))
                     .text_sm()
-                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
+                    .text_color(theme.text_muted)
                     .child("No vault loaded")
                     .into_any_element(),
             )
@@ -831,7 +828,7 @@ impl Nox {
                     "login-filter-weak",
                     "Weak",
                     weak_count,
-                    Some(crate::theme::CIPHER_DANGER),
+                    Some(theme.danger),
                     health_filter == Some(LoginHealth::Weak),
                     true,
                     {
@@ -851,7 +848,7 @@ impl Nox {
                     "login-filter-reused",
                     "Reused",
                     reused_count,
-                    Some(crate::theme::CIPHER_DANGER),
+                    Some(theme.danger),
                     health_filter == Some(LoginHealth::Reused),
                     true,
                     {
@@ -1007,7 +1004,7 @@ impl Nox {
                     };
                     let updated = crate::app::relative_time(payload.updated_at);
                     let (subtitle, third_column) = if is_logins_view {
-                        let (label, color) = login_health(&payload, &dupes_for_rows);
+                        let (label, color) = login_health(theme, &payload, &dupes_for_rows);
                         (login_row_subtitle(&payload), (label.to_owned(), color))
                     } else {
                         let label = match payload.item_type {
@@ -1016,10 +1013,11 @@ impl Nox {
                         };
                         (
                             row_subtitle(&payload),
-                            (label.to_owned(), crate::theme::CIPHER_FOREGROUND_SECONDARY),
+                            (label.to_owned(), theme.text_secondary),
                         )
                     };
                     let content = item_row_content(
+                        theme,
                         icon_path,
                         title,
                         subtitle,
@@ -1028,16 +1026,11 @@ impl Nox {
                         selected,
                     );
                     let (bg, hover_bg) = if selected {
-                        (
-                            crate::theme::CIPHER_SURFACE_RAISED,
-                            crate::theme::CIPHER_SURFACE_RAISED,
-                        )
+                        (theme.raised, theme.raised)
                     } else {
-                        (crate::theme::CIPHER_SURFACE, 0x20242A)
+                        (theme.surface, theme.field)
                     };
-                    let variant = ButtonCustomVariant::new(app)
-                        .color(rgb(bg).into())
-                        .hover(rgb(hover_bg).into());
+                    let variant = ButtonCustomVariant::new(app).color(bg).hover(hover_bg);
                     Button::new(row_id)
                         .custom(variant)
                         .w_full()
@@ -1062,7 +1055,7 @@ impl Nox {
                 .small()
                 .w_full()
                 .justify_start()
-                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
+                .text_color(theme.text_muted)
                 .label(format!("Preview & Restore — Deleted item {}", index + 1))
                 .on_click({
                     let locker = locker.clone();
@@ -1078,7 +1071,7 @@ impl Nox {
             ListLoadState::Failed(message) => div()
                 .p(px(12.))
                 .text_sm()
-                .text_color(rgb(crate::theme::CIPHER_DANGER))
+                .text_color(theme.danger)
                 .child(message),
         };
 
@@ -1100,17 +1093,17 @@ impl Nox {
             .h(px(40.))
             .px(px(14.))
             .flex_shrink_0()
-            .bg(rgb(LIST_HEADER_BG))
+            .bg(theme.inset)
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                    .text_color(theme.text_subtle)
                     .child(format!("{item_count} of {scope_total} {scope_noun} shown")),
             )
             .child(if is_logins_view {
                 div()
                     .text_size(px(10.))
-                    .text_color(rgb(crate::theme::CIPHER_DANGER))
+                    .text_color(theme.danger)
                     .child(format!(
                         "{weak_count} weak · {reused_count} reused passwords"
                     ))
@@ -1118,7 +1111,7 @@ impl Nox {
             } else {
                 div()
                     .text_size(px(10.))
-                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))
+                    .text_color(theme.text_secondary)
                     .child(if is_secure_notes_view {
                         "All notes encrypted"
                     } else {
@@ -1141,7 +1134,7 @@ impl Nox {
                 }
             }))
             .child(filters_row)
-            .child(list_header_row(first_column, third_column))
+            .child(list_header_row(theme, first_column, third_column))
             .child(error)
             .child(if item_count == 0 {
                 div()
@@ -1150,7 +1143,7 @@ impl Nox {
                     .items_center()
                     .justify_center()
                     .text_sm()
-                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
+                    .text_color(theme.text_muted)
                     .child("No items match this view")
                     .into_any_element()
             } else {
@@ -1166,14 +1159,14 @@ impl Nox {
                     .gap(px(2.))
                     .p(px(8.))
                     .border_t_1()
-                    .border_color(rgb(crate::theme::CIPHER_BORDER))
+                    .border_color(theme.border)
                     .child(
                         Button::new("deleted-section-toggle")
                             .ghost()
                             .small()
                             .w_full()
                             .justify_start()
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
+                            .text_color(theme.text_muted)
                             .label(format!("Deleted ({deleted_count})"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(list) = this.vault_list.as_mut() {
@@ -1258,18 +1251,22 @@ mod tests {
 
     #[test]
     fn login_health_prioritizes_reused_over_weak() {
+        let theme = Theme::cipher_midnight();
         let dupes = HashSet::from(["short".to_owned()]);
         // Short *and* reused — reused should win, since it's determined first.
-        assert_eq!(login_health(&login("short"), &dupes).0, "Reused");
+        assert_eq!(login_health(theme, &login("short"), &dupes).0, "Reused");
         assert_eq!(
-            login_health(&login("longenoughpassword"), &dupes).0,
+            login_health(theme, &login("longenoughpassword"), &dupes).0,
             "Strong"
         );
         assert_eq!(
-            login_health(&login("nodupe12"), &HashSet::new()).0,
+            login_health(theme, &login("nodupe12"), &HashSet::new()).0,
             "Strong"
         );
-        assert_eq!(login_health(&login("short2"), &HashSet::new()).0, "Weak");
-        assert_eq!(login_health(&login(""), &HashSet::new()).0, "—");
+        assert_eq!(
+            login_health(theme, &login("short2"), &HashSet::new()).0,
+            "Weak"
+        );
+        assert_eq!(login_health(theme, &login(""), &HashSet::new()).0, "—");
     }
 }

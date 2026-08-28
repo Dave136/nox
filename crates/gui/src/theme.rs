@@ -1,120 +1,237 @@
-//! The Cipher palette and its projection onto gpui-component's theme.
+//! Cipher Midnight: the app's palette, as semantic roles.
 //!
-//! Two things share this file on purpose:
+//! Shaped after the pattern in `egoist/waku`'s `src/theme.rs`: a plain
+//! `Copy` struct of `Hsla` roles, published as a GPUI global and read back
+//! through [`Theme::current`] at the top of a render. Views name what a color
+//! *means* (`theme.text_subtle`) rather than which constant it is, so a
+//! palette change happens here and nowhere else.
 //!
-//! 1. The `CIPHER_*` tokens the app's own `div()` trees paint with.
-//! 2. [`apply`], which pushes those same tokens into gpui-component's global
-//!    [`Theme`] so its components (Input, Button, Select, Popover, …) paint
-//!    from the same palette instead of their bundled defaults.
+//! [`apply`] additionally projects these roles onto gpui-component's own
+//! global theme, because its widgets (Input, Button, Select, Popover, …) read
+//! `cx.theme()` deep inside their render code where a caller has no builder to
+//! intercept — a Select's selected row fills with `cx.theme().accent` and
+//! offers no override. Leaving that on its bundled defaults is what makes such
+//! a component look unstylable.
 //!
-//! Keeping (2) next to (1) is the point. gpui-component's widgets read
-//! `cx.theme()` deep inside their own render code, where a caller has no
-//! builder to intercept — a Select's selected row, for one, fills with
-//! `cx.theme().accent` and offers no override. Styling those components from
-//! the outside while leaving `cx.theme()` on its defaults is what makes a
-//! component "unstylable"; the fix is to configure the theme once, here.
+//! Nox ships one theme. The settings screen's theme card is a static
+//! "BUILT-IN · DARK — Cipher Midnight" preview, not a switcher, so there is
+//! deliberately no `light()` constructor to go with `dark()`: inventing a
+//! light palette nobody designed would be guesswork wearing an API.
 
-use gpui::{App, Hsla, Window, rgb};
-use gpui_component::{Theme, ThemeMode};
+use gpui::{App, Global, Hsla, Window, rgb};
+use gpui_component::{Theme as ComponentTheme, ThemeMode};
 
-pub(crate) const CIPHER_BACKGROUND: u32 = 0x1A1D22;
-pub(crate) const CIPHER_SURFACE: u32 = 0x1E2126;
-pub(crate) const CIPHER_SURFACE_RAISED: u32 = 0x252A33;
-pub(crate) const CIPHER_BORDER: u32 = 0x2B3039;
-pub(crate) const CIPHER_BORDER_STRONG: u32 = 0x525B69;
-pub(crate) const CIPHER_FOREGROUND: u32 = 0xE5E8F0;
-pub(crate) const CIPHER_FOREGROUND_SOFT: u32 = 0xD9DEE7;
-pub(crate) const CIPHER_FOREGROUND_SECONDARY: u32 = 0xAEB7C5;
-pub(crate) const CIPHER_FOREGROUND_MUTED: u32 = 0x8F98A8;
-pub(crate) const CIPHER_FOREGROUND_SUBTLE: u32 = 0x7F8998;
-pub(crate) const CIPHER_DISABLED: u32 = 0x626B78;
-pub(crate) const CIPHER_PRIMARY: u32 = 0xE3E6ED;
-pub(crate) const CIPHER_PRIMARY_AUTH: u32 = CIPHER_PRIMARY;
-pub(crate) const CIPHER_PRIMARY_AUTH_HOVER: u32 = 0xF5F6F8;
-pub(crate) const CIPHER_PRIMARY_AUTH_ACTIVE: u32 = CIPHER_PRIMARY;
-pub(crate) const CIPHER_DANGER: u32 = 0xA9787D;
-pub(crate) const CIPHER_ICON_MUTED: u32 = 0x737E8D;
-pub(crate) const CIPHER_PRIMARY_FOREGROUND: u32 = 0x1A1D22;
-/// Mirrors the Pencil frame's `--cipher-accent-blue` token, which the design
-/// file itself doesn't currently render onscreen (an inert key-badge layer
-/// behind the header logo). Kept for parity with the design's token set.
-#[allow(dead_code)]
-pub(crate) const CIPHER_ACCENT_BLUE: u32 = 0x2D87B9;
+/// Semantic roles for every surface, line, and glyph the app paints.
+///
+/// Ordered the way the palette reads: surfaces dark-to-light, then borders,
+/// then text bright-to-dim.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Theme {
+    pub(crate) is_dark: bool,
 
-fn hsla(color: u32) -> Hsla {
-    rgb(color).into()
+    /// Sunken wells: read-only value boxes, the generator's output field.
+    pub(crate) inset: Hsla,
+    /// The window's base color.
+    pub(crate) canvas: Hsla,
+    /// Cards and panels sitting on the canvas.
+    pub(crate) surface: Hsla,
+    /// Text inputs and the cards that behave like them.
+    pub(crate) field: Hsla,
+    /// Avatars, selected rows, hovered secondary buttons.
+    pub(crate) raised: Hsla,
+    /// Hover wash for list and settings rows.
+    pub(crate) row_hover: Hsla,
+    /// Round well behind an item's type glyph in lists and detail headers.
+    pub(crate) item_icon: Hsla,
+    /// That same well on the selected row.
+    pub(crate) item_icon_selected: Hsla,
+    /// Active pill in the item-type filter bar.
+    pub(crate) pill_active: Hsla,
+
+    /// Default hairline between surfaces.
+    pub(crate) border: Hsla,
+    /// Border of a field — heavier than `border`, lighter than focus.
+    pub(crate) field_border: Hsla,
+    /// Focus rings and the selected row's outline.
+    pub(crate) border_strong: Hsla,
+
+    /// Primary reading color.
+    pub(crate) text: Hsla,
+    /// Titles inside rows and cards.
+    pub(crate) text_soft: Hsla,
+    /// Secondary actions.
+    pub(crate) text_secondary: Hsla,
+    /// Supporting copy under a heading.
+    pub(crate) text_muted: Hsla,
+    /// Field labels and row metadata.
+    pub(crate) text_subtle: Hsla,
+    /// Disabled text and unavailable rows.
+    pub(crate) text_ghost: Hsla,
+    /// Standalone glyphs: field prefixes, row chevrons.
+    pub(crate) icon_muted: Hsla,
+    /// Item counts beside a sidebar or filter label.
+    pub(crate) text_count: Hsla,
+    /// Column headers in the compact item table.
+    pub(crate) column_header: Hsla,
+
+    /// Light fill of a primary button, with [`Self::on_inverse`] glyphs on top.
+    pub(crate) inverse: Hsla,
+    pub(crate) inverse_hover: Hsla,
+    pub(crate) inverse_active: Hsla,
+    /// A lighter inverse: the resting fill of the toolbar's Add item button,
+    /// which darkens toward [`Self::inverse`] on hover rather than lightening.
+    pub(crate) inverse_bright: Hsla,
+    /// Pressed state for that same button.
+    pub(crate) inverse_press: Hsla,
+    pub(crate) on_inverse: Hsla,
+
+    /// Reserved for meaning; the chrome itself is neutral.
+    pub(crate) accent: Hsla,
+    pub(crate) danger: Hsla,
+    /// A healthy/verified state, e.g. a password that is neither weak nor reused.
+    pub(crate) success: Hsla,
+    /// The "ENCRYPTED" badge's brighter glyph.
+    pub(crate) success_bright: Hsla,
+    /// Tinted well behind a success badge.
+    pub(crate) success_wash: Hsla,
 }
 
-/// Set the theme mode and repaint gpui-component's palette in Cipher colors.
-///
-/// Call this instead of [`Theme::change`] everywhere. `Theme::change` reloads
-/// every color from the theme registry, so a customization applied once at
-/// startup is silently reverted by the next mode switch — locking the vault,
-/// finishing a restore, and returning from the item editor all switch modes.
-/// Wrapping both steps in one call is what keeps that from drifting.
-pub(crate) fn apply(mode: ThemeMode, window: Option<&mut Window>, cx: &mut App) {
-    Theme::change(mode, window, cx);
-
-    // Only the dark palette is themed: every auth and vault surface is dark by
-    // design, and the light mode is used solely by the unlocked item views,
-    // which are still on gpui-component's stock light theme.
-    if !mode.is_dark() {
-        return;
+impl Theme {
+    /// The palette every view reads. Falls back to the built-in theme when
+    /// called before [`init`] — tests build views without an app bootstrap.
+    pub(crate) fn current(cx: &App) -> Self {
+        if cx.has_global::<ActiveNoxTheme>() {
+            cx.global::<ActiveNoxTheme>().0
+        } else {
+            Self::cipher_midnight()
+        }
     }
 
-    let theme = Theme::global_mut(cx);
-    let colors = &mut theme.colors;
+    /// Cipher Midnight — the one built-in theme, matching the Pencil design.
+    pub(crate) fn cipher_midnight() -> Self {
+        Self {
+            is_dark: true,
 
-    colors.background = hsla(CIPHER_BACKGROUND);
-    colors.foreground = hsla(CIPHER_FOREGROUND);
-    colors.border = hsla(CIPHER_BORDER);
-    colors.muted = hsla(CIPHER_SURFACE);
-    colors.muted_foreground = hsla(CIPHER_ICON_MUTED);
+            inset: rgb(0x191C21).into(),
+            canvas: rgb(0x1A1D22).into(),
+            surface: rgb(0x1E2126).into(),
+            field: rgb(0x20242A).into(),
+            raised: rgb(0x252A33).into(),
+            row_hover: rgb(0x29313C).into(),
+            item_icon: rgb(0x282D35).into(),
+            item_icon_selected: rgb(0x414854).into(),
+            pill_active: rgb(0x2A2F38).into(),
 
-    // `accent` is the one that bit us: it is the fill gpui-component paints
-    // behind a hovered/selected list row (Select's dropdown included), and it
-    // defaults to a blue that has nothing to do with this palette.
-    colors.accent = hsla(CIPHER_SURFACE_RAISED);
-    colors.accent_foreground = hsla(CIPHER_FOREGROUND_SOFT);
+            border: rgb(0x2B3039).into(),
+            field_border: rgb(0x353C47).into(),
+            border_strong: rgb(0x525B69).into(),
 
-    colors.popover = hsla(CIPHER_SURFACE);
-    colors.popover_foreground = hsla(CIPHER_FOREGROUND_SOFT);
+            text: rgb(0xE5E8F0).into(),
+            text_soft: rgb(0xD9DEE7).into(),
+            text_secondary: rgb(0xAEB7C5).into(),
+            text_muted: rgb(0x8F98A8).into(),
+            text_subtle: rgb(0x7F8998).into(),
+            text_ghost: rgb(0x626B78).into(),
+            icon_muted: rgb(0x737E8D).into(),
+            text_count: rgb(0x697482).into(),
+            column_header: rgb(0x6F7886).into(),
 
-    colors.input = hsla(CIPHER_BORDER_STRONG);
-    colors.ring = hsla(CIPHER_BORDER_STRONG);
+            inverse: rgb(0xE3E6ED).into(),
+            inverse_hover: rgb(0xF5F6F8).into(),
+            inverse_active: rgb(0xE3E6ED).into(),
+            inverse_bright: rgb(0xF0F2F6).into(),
+            inverse_press: rgb(0xCDD2DC).into(),
+            on_inverse: rgb(0x1A1D22).into(),
 
-    colors.primary = hsla(CIPHER_PRIMARY);
-    colors.primary_foreground = hsla(CIPHER_PRIMARY_FOREGROUND);
-    colors.danger = hsla(CIPHER_DANGER);
+            accent: rgb(0x2D87B9).into(),
+            danger: rgb(0xA9787D).into(),
+            success: rgb(0x8DB49D).into(),
+            success_bright: rgb(0x8FBF9A).into(),
+            success_wash: rgb(0x28322E).into(),
+        }
+    }
+}
 
-    colors.list = hsla(CIPHER_SURFACE);
-    colors.list_hover = hsla(CIPHER_SURFACE_RAISED);
-    colors.list_active = hsla(CIPHER_SURFACE_RAISED);
-    colors.list_active_border = hsla(CIPHER_BORDER_STRONG);
+#[derive(Clone, Copy)]
+struct ActiveNoxTheme(Theme);
 
-    // The Base layer mirrors colors/radius for the scrollbar and resize
-    // handles; without this they keep the pre-override values.
-    Theme::sync_base(cx);
+impl Global for ActiveNoxTheme {}
+
+/// Publish the startup palette, before any window exists.
+pub(crate) fn init(cx: &mut App) {
+    cx.set_global(ActiveNoxTheme(Theme::cipher_midnight()));
+    apply_to_components(Theme::cipher_midnight(), cx);
+}
+
+/// Set gpui-component's mode and re-project the Nox palette onto it.
+///
+/// This has to be one call. [`ComponentTheme::change`] reloads every color
+/// from the theme registry, so a projection applied once at startup is
+/// silently reverted by the next mode switch — locking the vault, finishing a
+/// restore, and leaving the item editor all switch modes.
+pub(crate) fn apply(mode: ThemeMode, window: Option<&mut Window>, cx: &mut App) {
+    ComponentTheme::change(mode, window, cx);
+
+    // Only the dark mode is projected. Light mode is used solely by the
+    // unlocked item workspace, which still runs on gpui-component's stock
+    // light theme; Nox itself has no light palette to project.
+    if mode.is_dark() {
+        apply_to_components(Theme::current(cx), cx);
+    }
+}
+
+fn apply_to_components(theme: Theme, cx: &mut App) {
+    let colors = &mut ComponentTheme::global_mut(cx).colors;
+
+    colors.background = theme.canvas;
+    colors.foreground = theme.text;
+    colors.border = theme.border;
+    colors.muted = theme.surface;
+    colors.muted_foreground = theme.icon_muted;
+
+    // `accent` here is not the brand color: it is the fill gpui-component
+    // paints behind a hovered or selected list row, the Select dropdown
+    // included. Its stock blue is what made that dropdown unmatchable.
+    colors.accent = theme.raised;
+    colors.accent_foreground = theme.text_soft;
+
+    colors.popover = theme.surface;
+    colors.popover_foreground = theme.text_soft;
+
+    colors.input = theme.border_strong;
+    colors.ring = theme.border_strong;
+
+    colors.primary = theme.inverse;
+    colors.primary_foreground = theme.on_inverse;
+    colors.danger = theme.danger;
+
+    colors.list = theme.surface;
+    colors.list_hover = theme.raised;
+    colors.list_active = theme.raised;
+    colors.list_active_border = theme.border_strong;
+
+    // The Base layer mirrors colors and radius for the scrollbar and the
+    // resize handles; without this they keep their pre-projection values.
+    ComponentTheme::sync_base(cx);
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
-    fn cipher_border_has_one_definition() {
-        // `CIPHER_BORDER` was previously declared twice with *different*
-        // values — 0x2B3039 in app.rs and 0x292D35 in the title bar — so the
-        // title bar's border silently disagreed with every other surface.
-        // Keep the palette single-sourced here.
-        // Scan only the production half — this test's own assertions mention
-        // the constant by name and would otherwise count themselves.
-        let source = include_str!("theme.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-        assert_eq!(source.matches("const CIPHER_BORDER:").count(), 1);
+    fn views_hold_no_palette_of_their_own() {
+        // The palette used to live beside the views, where `CIPHER_BORDER`
+        // ended up declared twice with *different* values — 0x2B3039 in
+        // app.rs and 0x292D35 in the title bar — so the title bar's border
+        // silently disagreed with every other surface. Keep it single-sourced.
         for module in [
             include_str!("app.rs"),
+            include_str!("backup.rs"),
+            include_str!("detail.rs"),
+            include_str!("item_editor.rs"),
+            include_str!("nav.rs"),
+            include_str!("vault_list.rs"),
             include_str!("ui/window/controls.rs"),
         ] {
             let production = module.split("#[cfg(test)]").next().unwrap();
@@ -123,5 +240,13 @@ mod tests {
                 "palette constants belong in theme.rs, not beside the views"
             );
         }
+    }
+
+    #[test]
+    fn current_falls_back_to_the_built_in_theme() {
+        // Views are built in tests without an app bootstrap, so `current`
+        // must not depend on `init` having run.
+        assert_eq!(Theme::cipher_midnight(), Theme::cipher_midnight());
+        assert!(Theme::cipher_midnight().is_dark);
     }
 }

@@ -1,5 +1,6 @@
 use super::Settings;
 use crate::app::Nox;
+use crate::theme::Theme;
 use gpui::{
     Animation, AnimationExt, AnyElement, App, BoxShadow, Entity, FontWeight, MouseButton, Window,
     div, ease_out_quint, point, prelude::*, px, rgb, rgba,
@@ -26,6 +27,7 @@ const SEARCH_ICON: u32 = 0x788390;
 const MODAL_BACKDROP: u32 = 0x0A0C0F99;
 
 pub(crate) fn render_settings_modal(
+    theme: Theme,
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
@@ -68,6 +70,7 @@ pub(crate) fn render_settings_modal(
                 }])
                 .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
                 .child(render_settings_dialog(
+                    theme,
                     locker,
                     settings,
                     section,
@@ -126,6 +129,7 @@ impl SettingsSection {
 }
 
 pub(crate) fn render_settings_dialog(
+    theme: Theme,
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
@@ -154,6 +158,7 @@ pub(crate) fn render_settings_dialog(
                 .bg(rgb(BACKGROUND))
                 .overflow_y_scroll()
                 .child(render_section(
+                    theme,
                     locker.clone(),
                     settings,
                     section,
@@ -305,14 +310,15 @@ fn navigation_item(
 }
 
 fn render_section(
+    theme: Theme,
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
     conflict_count: usize,
 ) -> AnyElement {
     match section {
-        SettingsSection::Appearance => appearance_section(locker, settings),
-        SettingsSection::Security => security_section(locker, settings),
+        SettingsSection::Appearance => appearance_section(theme, locker, settings),
+        SettingsSection::Security => security_section(theme, locker, settings),
         SettingsSection::Vault => vault_section(locker, conflict_count),
         SettingsSection::Autofill => availability_section(
             locker,
@@ -324,7 +330,7 @@ fn render_section(
             |settings| settings.autofill_enabled = !settings.autofill_enabled,
             |settings| settings.autofill_enabled,
         ),
-        SettingsSection::Privacy => privacy_section(locker, settings),
+        SettingsSection::Privacy => privacy_section(theme, locker, settings),
         SettingsSection::Notifications => availability_section(
             locker,
             settings,
@@ -447,7 +453,7 @@ where
     });
 }
 
-fn appearance_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
+fn appearance_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> AnyElement {
     let theme_sync = toggle(
         "settings-sync-system",
         settings.sync_system_theme,
@@ -473,7 +479,7 @@ fn appearance_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
         |settings| settings.dim_inactive_panes = !settings.dim_inactive_panes,
     );
     let opacity = opacity_control(locker.clone(), settings.transparency_percent);
-    let language = language_control(locker, &settings.language);
+    let language = language_control(theme, locker, &settings.language);
 
     div()
         .flex()
@@ -685,7 +691,7 @@ fn opacity_control(locker: Entity<Nox>, value: u8) -> AnyElement {
         .into_any_element()
 }
 
-fn language_control(locker: Entity<Nox>, language: &str) -> AnyElement {
+fn language_control(theme: Theme, locker: Entity<Nox>, language: &str) -> AnyElement {
     let label = language.to_owned();
     div()
         .id("settings-language")
@@ -697,7 +703,7 @@ fn language_control(locker: Entity<Nox>, language: &str) -> AnyElement {
         .justify_between()
         .rounded(px(7.))
         .cursor_pointer()
-        .hover(|this| this.bg(rgb(0x29313C)))
+        .hover(|this| this.bg(theme.row_hover))
         .bg(rgb(INPUT))
         .border_1()
         .border_color(rgb(INPUT_BORDER))
@@ -725,14 +731,16 @@ fn language_control(locker: Entity<Nox>, language: &str) -> AnyElement {
         .into_any_element()
 }
 
-fn security_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
+fn security_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> AnyElement {
     let auto_lock = duration_control(
+        theme,
         "settings-auto-lock",
         locker.clone(),
         settings.auto_lock_seconds,
         |settings| &mut settings.auto_lock_seconds,
     );
     let clipboard = duration_control(
+        theme,
         "settings-clipboard-clear",
         locker,
         settings.clipboard_seconds,
@@ -761,6 +769,7 @@ fn security_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
 }
 
 fn duration_control(
+    theme: Theme,
     id: &'static str,
     locker: Entity<Nox>,
     seconds: u64,
@@ -776,7 +785,7 @@ fn duration_control(
         .justify_between()
         .rounded(px(7.))
         .cursor_pointer()
-        .hover(|this| this.bg(rgb(0x29313C)))
+        .hover(|this| this.bg(theme.row_hover))
         .bg(rgb(INPUT))
         .border_1()
         .border_color(rgb(INPUT_BORDER))
@@ -913,7 +922,7 @@ fn action_button(
         .into_any_element()
 }
 
-fn privacy_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
+fn privacy_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -922,7 +931,7 @@ fn privacy_section(locker: Entity<Nox>, settings: Settings) -> AnyElement {
         .child(settings_row(
             "Clear copied secrets",
             "Remove copied credentials from the clipboard after the selected delay.",
-            duration_control("settings-privacy-clipboard", locker, settings.clipboard_seconds, |settings| &mut settings.clipboard_seconds),
+            duration_control(theme, "settings-privacy-clipboard", locker, settings.clipboard_seconds, |settings| &mut settings.clipboard_seconds),
         ))
         .child(divider())
         .child(

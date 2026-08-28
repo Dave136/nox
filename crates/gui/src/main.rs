@@ -45,6 +45,7 @@ fn main() {
 
     app.run(|cx| {
         init(cx);
+        theme::init(cx);
         match nox_core::default_data_dir() {
             Ok(data_dir) => {
                 cx.open_window(window_options(), move |window, cx| {

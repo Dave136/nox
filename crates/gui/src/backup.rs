@@ -1,13 +1,8 @@
 use crate::app::{AppState, Nox, animated_auth_button};
-use crate::theme::{
-    self, CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_BORDER_STRONG, CIPHER_DANGER, CIPHER_DISABLED,
-    CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED, CIPHER_FOREGROUND_SECONDARY,
-    CIPHER_FOREGROUND_SOFT, CIPHER_FOREGROUND_SUBTLE, CIPHER_PRIMARY, CIPHER_SURFACE,
-    CIPHER_SURFACE_RAISED,
-};
+use crate::theme::Theme;
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent,
-    PathPromptOptions, SharedString, Task, Window, div, ease_out_quint, prelude::*, px, rgb,
+    PathPromptOptions, SharedString, Task, Window, div, ease_out_quint, prelude::*, px,
 };
 use gpui_component::{
     Disableable, ThemeMode, WindowExt,
@@ -148,7 +143,7 @@ impl Nox {
             AppState::NoVault | AppState::RegistryError | AppState::Locked => ThemeMode::Dark,
             AppState::Unlocked(_) => ThemeMode::Light,
         };
-        theme::apply(mode, Some(window), cx);
+        crate::theme::apply(mode, Some(window), cx);
         if let Some(focus) = self.backup.restore_prior_focus.take() {
             focus.focus(window, cx);
         }
@@ -434,7 +429,7 @@ impl Nox {
             new_master_confirmation: new_master_confirmation.clone(),
             archive_path: archive_path.clone(),
         });
-        theme::apply(ThemeMode::Dark, Some(window), cx);
+        crate::theme::apply(ThemeMode::Dark, Some(window), cx);
         Self::focus_input(&backup_password, window, cx);
         cx.notify();
     }
@@ -580,7 +575,7 @@ impl Nox {
             AppState::NoVault | AppState::RegistryError | AppState::Locked => ThemeMode::Dark,
             AppState::Unlocked(_) => ThemeMode::Light,
         };
-        theme::apply(mode, Some(window), cx);
+        crate::theme::apply(mode, Some(window), cx);
         self.backup.task = Task::ready(());
         cx.notify();
     }
@@ -590,6 +585,7 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = Theme::current(cx);
         let Some(BackupDialogState::Restore {
             backup_password,
             new_master_password,
@@ -618,7 +614,7 @@ impl Nox {
                 div()
                     .text_sm()
                     .text_center()
-                    .text_color(rgb(CIPHER_DANGER))
+                    .text_color(theme.danger)
                     .child(message)
             })
             .unwrap_or_else(div);
@@ -647,7 +643,12 @@ impl Nox {
             "restore-backup-submit",
             restore_button,
             self.auth_hovered.get("restore-backup-submit").copied(),
-            (CIPHER_PRIMARY, 0xF0F2F6, 0xCDD2DC, CIPHER_BACKGROUND),
+            (
+                theme.inverse,
+                theme.inverse_bright,
+                theme.inverse_press,
+                theme.canvas,
+            ),
             cx,
         );
         let back = Button::new("restore-back")
@@ -671,10 +672,10 @@ impl Nox {
             back,
             self.auth_hovered.get("restore-back").copied(),
             (
-                CIPHER_BACKGROUND,
-                CIPHER_SURFACE_RAISED,
-                CIPHER_BORDER,
-                CIPHER_FOREGROUND_SECONDARY,
+                theme.canvas,
+                theme.raised,
+                theme.border,
+                theme.text_secondary,
             ),
             cx,
         );
@@ -691,7 +692,7 @@ impl Nox {
                         gpui_component::Icon::empty()
                             .path("icons/refresh-cw.svg")
                             .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE)),
+                            .text_color(theme.text_subtle),
                     )
                     .child("Choose a different backup"),
             );
@@ -700,10 +701,10 @@ impl Nox {
             choose_different,
             self.auth_hovered.get("restore-choose-different").copied(),
             (
-                CIPHER_BACKGROUND,
-                CIPHER_SURFACE_RAISED,
-                CIPHER_BORDER,
-                CIPHER_FOREGROUND_SECONDARY,
+                theme.canvas,
+                theme.raised,
+                theme.border,
+                theme.text_secondary,
             ),
             cx,
         );
@@ -715,7 +716,7 @@ impl Nox {
                 flex
                 items_center
                 justify_center
-                bg={rgb(CIPHER_BACKGROUND)}
+                bg={theme.canvas}
                 p={px(36.)}
                 onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     match event.keystroke.key.as_str() {
@@ -736,12 +737,12 @@ impl Nox {
                 </div>
                 <div flex flex_col gap={px(13.)} w={px(416.)}>
                     <div flex flex_col items_center gap={px(8.)}>
-                        {logo(52., rgb(CIPHER_FOREGROUND).into())}
+                        {logo(52., theme.text)}
                         <div flex flex_col items_center gap={px(4.)}>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>
+                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>
                                 {"Restore your vault"}
                             </div>
-                            <div text_xs text_center textColor={rgb(CIPHER_FOREGROUND_MUTED)}>
+                            <div text_xs text_center textColor={theme.text_muted}>
                                 {"Import an encrypted backup and choose a new master password"}
                             </div>
                         </div>
@@ -754,26 +755,26 @@ impl Nox {
                         h={px(48.)}
                         px={px(12.)}
                         rounded={px(8.)}
-                        bg={rgb(CIPHER_SURFACE)}
+                        bg={theme.surface}
                     >
-                        <div size={px(28.)} flex items_center justify_center rounded_full bg={rgb(CIPHER_SURFACE_RAISED)}>
-                            {logo(14., rgb(CIPHER_FOREGROUND).into())}
+                        <div size={px(28.)} flex items_center justify_center rounded_full bg={theme.raised}>
+                            {logo(14., theme.text)}
                         </div>
                         <div flex flex_col flex_1 min_w={px(0.)} gap={px(2.)}>
-                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND_SOFT)}>
+                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_soft}>
                                 {archive_name}
                             </div>
-                            <div text_xs textColor={rgb(CIPHER_FOREGROUND_SUBTLE)} overflow_hidden>
+                            <div text_xs textColor={theme.text_subtle} overflow_hidden>
                                 {archive_display}
                             </div>
                         </div>
                         {gpui_component::Icon::empty()
                             .path("icons/file-lock.svg")
                             .size(px(14.))
-                            .text_color(rgb(CIPHER_FOREGROUND_SUBTLE))}
+                            .text_color(theme.text_subtle)}
                     </div>
                     <div flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
                             {"BACKUP PASSWORD"}
                         </div>
                         <Input
@@ -782,13 +783,13 @@ impl Nox {
                                 .aria_label("Backup password")
                                 .disabled(exiting)}
                             h={px(44.)}
-                            bg={rgb(CIPHER_SURFACE)}
-                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            bg={theme.surface}
+                            borderColor={theme.border_strong}
                             rounded={px(8.)}
                         />
                     </div>
                     <div flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
                             {"NEW MASTER PASSWORD"}
                         </div>
                         <Input
@@ -797,13 +798,13 @@ impl Nox {
                                 .aria_label("New master password")
                                 .disabled(exiting)}
                             h={px(44.)}
-                            bg={rgb(CIPHER_SURFACE)}
-                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            bg={theme.surface}
+                            borderColor={theme.border_strong}
                             rounded={px(8.)}
                         />
                     </div>
                     <div flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
                             {"CONFIRM NEW MASTER PASSWORD"}
                         </div>
                         <Input
@@ -812,21 +813,21 @@ impl Nox {
                                 .aria_label("Confirm new master password")
                                 .disabled(exiting)}
                             h={px(44.)}
-                            bg={rgb(CIPHER_SURFACE)}
-                            borderColor={rgb(CIPHER_BORDER_STRONG)}
+                            bg={theme.surface}
+                            borderColor={theme.border_strong}
                             rounded={px(8.)}
                         />
                     </div>
                     {error}
                     {restore_button}
                     <div flex flex_col gap={px(8.)}>
-                        <div h={px(1.)} w_full bg={rgb(CIPHER_BORDER)} />
+                        <div h={px(1.)} w_full bg={theme.border} />
                         {choose_different}
-                        <div text_xs text_center textColor={rgb(CIPHER_DISABLED)}>
+                        <div text_xs text_center textColor={theme.text_ghost}>
                             {"Enter to restore · Esc to go back"}
                         </div>
                     </div>
-                    <div flex items_center justify_center gap={px(7.)} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
+                    <div flex items_center justify_center gap={px(7.)} textColor={theme.text_subtle}>
                         {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(13.))}
                         <div text_xs>{"The restored vault remains locked until verified"}</div>
                     </div>

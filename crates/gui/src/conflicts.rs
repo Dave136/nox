@@ -1,4 +1,5 @@
 use crate::app::{AppState, Nox};
+use crate::theme::Theme;
 use gpui::{AnyElement, Context, FontWeight, SharedString, Window, div, prelude::*, px};
 use gpui_component::{
     ActiveTheme, Disableable, Sizable,
@@ -220,13 +221,14 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = cx.theme();
-        let border = theme.border;
-        let foreground = theme.foreground;
-        let muted_foreground = theme.muted_foreground;
-        let danger = theme.danger;
-        let card_bg = theme.background;
-        let radius_lg = theme.radius_lg;
+        let _theme = Theme::current(cx);
+        let component_theme = cx.theme();
+        let border = component_theme.border;
+        let foreground = component_theme.foreground;
+        let muted_foreground = component_theme.muted_foreground;
+        let danger = component_theme.danger;
+        let card_bg = component_theme.background;
+        let radius_lg = component_theme.radius_lg;
 
         let close_button = Button::new("close-conflicts")
             .ghost()

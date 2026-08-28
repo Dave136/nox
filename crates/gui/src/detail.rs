@@ -5,10 +5,11 @@
 
 use crate::app::Nox;
 use crate::clipboard::CopyField;
+use crate::theme::Theme;
 use crate::vault_list;
 use gpui::{
     AnyElement, App, ClickEvent, Context, FontWeight, Hsla, SharedString, Window, div, prelude::*,
-    px, rgb,
+    px,
 };
 use gpui_component::{
     Icon, IconName, Sizable,
@@ -22,9 +23,10 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let foreground: Hsla = rgb(crate::theme::CIPHER_FOREGROUND).into();
-        let muted_foreground: Hsla = rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE).into();
-        let accent: Hsla = rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY).into();
+        let theme = Theme::current(cx);
+        let foreground: Hsla = theme.text;
+        let muted_foreground: Hsla = theme.text_subtle;
+        let accent: Hsla = theme.text_secondary;
 
         let card = |content: AnyElement| {
             div()
@@ -35,9 +37,9 @@ impl Nox {
                 .min_w(px(0.))
                 .h_full()
                 .rounded(px(9.))
-                .bg(rgb(crate::theme::CIPHER_SURFACE))
+                .bg(theme.surface)
                 .border_1()
-                .border_color(rgb(crate::theme::CIPHER_BORDER))
+                .border_color(theme.border)
                 .overflow_hidden()
                 .child(content)
         };
@@ -49,7 +51,7 @@ impl Nox {
                 .find(|(id, _)| *id == item_id)
                 .map(|(_, payload)| (item_id, payload.clone()))
         }) else {
-            return card(empty_panel()).into_any_element();
+            return card(empty_panel(theme)).into_any_element();
         };
 
         let feedback = self.clipboard.feedback;
@@ -84,11 +86,11 @@ impl Nox {
                             .size(px(40.))
                             .flex_shrink_0()
                             .rounded(px(9.))
-                            .bg(rgb(if payload.item_type == ItemType::SecureNote {
-                                0x282D35
+                            .bg(if payload.item_type == ItemType::SecureNote {
+                                theme.item_icon
                             } else {
-                                crate::theme::CIPHER_SURFACE_RAISED
-                            }))
+                                theme.raised
+                            })
                             .flex()
                             .items_center()
                             .justify_center()
@@ -138,7 +140,7 @@ impl Nox {
                     .h(px(40.))
                     .w_full()
                     .rounded(px(7.))
-                    .bg(rgb(crate::theme::CIPHER_FOREGROUND))
+                    .bg(theme.text)
                     .on_click(move |_, window, app| {
                         copy_note_locker
                             .update(app, |locker, cx| locker.copy_note(item_id, window, cx));
@@ -153,13 +155,13 @@ impl Nox {
                                 gpui_component::Icon::empty()
                                     .path("icons/copy.svg")
                                     .size(px(14.))
-                                    .text_color(rgb(crate::theme::CIPHER_BACKGROUND)),
+                                    .text_color(theme.canvas),
                             )
                             .child(
                                 div()
                                     .text_size(px(10.))
                                     .font_weight(FontWeight(650.))
-                                    .text_color(rgb(crate::theme::CIPHER_BACKGROUND))
+                                    .text_color(theme.canvas)
                                     .child(if copied {
                                         "Copied!"
                                     } else {
@@ -185,7 +187,7 @@ impl Nox {
                         .h(px(38.))
                         .w_full()
                         .rounded(px(7.))
-                        .bg(rgb(crate::theme::CIPHER_PRIMARY))
+                        .bg(theme.inverse)
                         .on_click(move |_, _window, app| app.open_url(&open_uri))
                         .child(
                             div()
@@ -197,13 +199,13 @@ impl Nox {
                                     gpui_component::Icon::empty()
                                         .path("icons/external-link.svg")
                                         .size(px(14.))
-                                        .text_color(rgb(crate::theme::CIPHER_BACKGROUND)),
+                                        .text_color(theme.canvas),
                                 )
                                 .child(
                                     div()
                                         .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(rgb(crate::theme::CIPHER_BACKGROUND))
+                                        .text_color(theme.canvas)
                                         .child(format!("Open {host}")),
                                 ),
                         ),
@@ -212,6 +214,7 @@ impl Nox {
 
             let username_locker = locker.clone();
             body = body.child(copy_row(
+                theme,
                 "detail-username",
                 "USERNAME",
                 if payload.username.is_empty() {
@@ -222,7 +225,7 @@ impl Nox {
                 feedback == Some((item_id, CopyField::Username)),
                 foreground,
                 accent,
-                crate::theme::CIPHER_FOREGROUND, // bright: copy is the only action here
+                theme.text, // bright: copy is the only action here
                 move |_, window, app| {
                     username_locker
                         .update(app, |locker, cx| locker.copy_username(item_id, window, cx));
@@ -248,7 +251,7 @@ impl Nox {
                         } else {
                             "icons/eye.svg"
                         })
-                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE)),
+                        .text_color(theme.text_subtle),
                 )
                 .on_click(move |_, _window, app| {
                     reveal_locker.update(app, |locker, cx| {
@@ -258,13 +261,14 @@ impl Nox {
                 });
             let password_locker = locker.clone();
             body = body.child(copy_row(
+                theme,
                 "detail-password",
                 "PASSWORD",
                 password_display,
                 feedback == Some((item_id, CopyField::Password)),
                 foreground,
                 accent,
-                crate::theme::CIPHER_FOREGROUND, // bright: copy is the primary action, reveal is secondary
+                theme.text, // bright: copy is the primary action, reveal is secondary
                 move |_, window, app| {
                     password_locker
                         .update(app, |locker, cx| locker.copy_password(item_id, window, cx));
@@ -280,19 +284,20 @@ impl Nox {
                     .icon(
                         gpui_component::Icon::empty()
                             .path("icons/external-link.svg")
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND)),
+                            .text_color(theme.text),
                     )
                     .on_click(move |_, _window, app| app.open_url(&uri_for_open));
                 let uri_for_copy = uri.clone();
                 let uri_locker = locker.clone();
                 body = body.child(copy_row(
+                    theme,
                     SharedString::from(format!("detail-website-{index}")),
                     "WEBSITE",
                     uri.clone(),
                     feedback == Some((item_id, CopyField::Uri(index))),
                     foreground,
                     accent,
-                    crate::theme::CIPHER_FOREGROUND_SUBTLE, // muted: opening is the primary action here
+                    theme.text_subtle, // muted: opening is the primary action here
                     move |_, window, app| {
                         let uri = uri_for_copy.clone();
                         uri_locker.update(app, |locker, cx| {
@@ -315,7 +320,7 @@ impl Nox {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(field_label("NOTE CONTENT"))
+                            .child(field_label(theme, "NOTE CONTENT"))
                             .child(
                                 div()
                                     .flex()
@@ -324,18 +329,18 @@ impl Nox {
                                     .h(px(22.))
                                     .px(px(7.))
                                     .rounded(px(5.))
-                                    .bg(rgb(0x28322E))
+                                    .bg(theme.success_wash)
                                     .child(
                                         gpui_component::Icon::empty()
                                             .path("icons/lock-keyhole.svg")
                                             .size(px(10.))
-                                            .text_color(rgb(0x8DB49D)),
+                                            .text_color(theme.success),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(8.))
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(rgb(0x8DB49D))
+                                            .text_color(theme.success)
                                             .child("ENCRYPTED"),
                                     ),
                             ),
@@ -345,11 +350,11 @@ impl Nox {
                             .min_h(px(112.))
                             .p(px(14.))
                             .rounded(px(8.))
-                            .bg(rgb(0x20242A))
+                            .bg(theme.field)
                             .border_1()
-                            .border_color(rgb(crate::theme::CIPHER_BORDER))
+                            .border_color(theme.border)
                             .text_size(px(12.))
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT))
+                            .text_color(theme.text_soft)
                             .child(if payload.notes.is_empty() {
                                 "No note contents".to_owned()
                             } else {
@@ -363,7 +368,7 @@ impl Nox {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(field_label("Notes"))
+                    .child(field_label(theme, "Notes"))
                     .child(
                         div()
                             .text_sm()
@@ -387,24 +392,31 @@ impl Nox {
             .gap(px(10.))
             .pt(px(4.))
             .border_t_1()
-            .border_color(rgb(crate::theme::CIPHER_BORDER))
+            .border_color(theme.border)
             .child(metadata_row(
+                theme,
                 "Last modified",
                 crate::app::relative_time(payload.updated_at),
             ))
-            .child(metadata_row("Created", absolute_date(payload.created_at)));
+            .child(metadata_row(
+                theme,
+                "Created",
+                absolute_date(payload.created_at),
+            ));
         if payload.item_type == ItemType::Login {
-            let (health_label, health_color) = vault_list::login_health(&payload, &dupes);
+            let (health_label, health_color) = vault_list::login_health(theme, &payload, &dupes);
             metadata = metadata.child(metadata_row_colored(
+                theme,
                 "Password health",
                 health_label,
                 health_color,
             ));
         } else {
             metadata = metadata.child(metadata_row_colored(
+                theme,
                 "Protection",
                 "End-to-end encrypted",
-                0x8DB49D,
+                theme.success,
             ));
         }
         body = body.child(metadata);
@@ -423,10 +435,11 @@ impl Nox {
                 .flex()
                 .gap(px(8.))
                 .child(footer_button(
+                    theme,
                     "detail-edit-item",
                     "icons/pencil.svg",
                     edit_label,
-                    crate::theme::CIPHER_FOREGROUND_SECONDARY,
+                    theme.text_secondary,
                     move |_, window, app| {
                         edit_locker.update(app, |locker, cx| {
                             locker.open_editor_for_item(item_id, false, window, cx)
@@ -434,20 +447,22 @@ impl Nox {
                     },
                 ))
                 .child(footer_button(
+                    theme,
                     "detail-duplicate-item",
                     "icons/copy-plus.svg",
                     duplicate_label,
-                    crate::theme::CIPHER_FOREGROUND_SECONDARY,
+                    theme.text_secondary,
                     move |_, _window, app| {
                         duplicate_locker
                             .update(app, |locker, cx| locker.duplicate_item(item_id, cx));
                     },
                 ))
                 .child(footer_button(
+                    theme,
                     "detail-delete-item",
                     "icons/trash-2.svg",
                     delete_label,
-                    crate::theme::CIPHER_DANGER,
+                    theme.danger,
                     move |_, window, app| {
                         delete_locker.update(app, |locker, cx| {
                             locker.open_delete_confirmation(item_id, window, cx)
@@ -462,33 +477,33 @@ impl Nox {
 
 // ponytail: the design also specifies 0.7px letter-spacing on these labels,
 // which GPUI has no API for (same limitation as the sidebar's section labels).
-fn field_label(text: &'static str) -> impl IntoElement {
+fn field_label(theme: Theme, text: &'static str) -> impl IntoElement {
     div()
         .text_size(px(9.))
         .font_weight(FontWeight(700.))
-        .text_color(rgb(0x737E8D))
+        .text_color(theme.icon_muted)
         .child(text)
 }
 
-fn metadata_row(label: &'static str, value: String) -> AnyElement {
-    metadata_row_colored(label, &value, crate::theme::CIPHER_FOREGROUND_SECONDARY)
+fn metadata_row(theme: Theme, label: &'static str, value: String) -> AnyElement {
+    metadata_row_colored(theme, label, &value, theme.text_secondary)
 }
 
-fn metadata_row_colored(label: &'static str, value: &str, value_color: u32) -> AnyElement {
+fn metadata_row_colored(
+    theme: Theme,
+    label: &'static str,
+    value: &str,
+    value_color: Hsla,
+) -> AnyElement {
     div()
         .flex()
         .items_center()
         .justify_between()
+        .child(div().text_xs().text_color(theme.text_subtle).child(label))
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
-                .child(label),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(value_color))
+                .text_color(value_color)
                 .child(value.to_owned()),
         )
         .into_any_element()
@@ -507,17 +522,18 @@ fn absolute_date(created_at_ms: u64) -> String {
 /// was corrected in the .pen file (and here) so all three share the row
 /// evenly via `flex_1`.
 fn footer_button(
+    theme: Theme,
     id: &'static str,
     icon_path: &'static str,
     label: &'static str,
-    color: u32,
+    color: Hsla,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     Button::new(id)
         .flex_1()
         .h(px(34.))
         .rounded(px(7.))
-        .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
+        .bg(theme.raised)
         .on_click(on_click)
         .child(
             div()
@@ -528,9 +544,9 @@ fn footer_button(
                     gpui_component::Icon::empty()
                         .path(icon_path)
                         .size(px(13.))
-                        .text_color(rgb(color)),
+                        .text_color(color),
                 )
-                .child(div().text_size(px(12.)).text_color(rgb(color)).child(label)),
+                .child(div().text_size(px(12.)).text_color(color).child(label)),
         )
         .into_any_element()
 }
@@ -539,7 +555,7 @@ fn footer_button(
 /// icon badge, title/description, a keyboard-navigation hint, and a search
 /// tip. Every affordance it describes (↑↓/Enter row navigation, Ctrl+P
 /// search) is real, already-wired behavior, not a promise of a future one.
-fn empty_panel() -> AnyElement {
+fn empty_panel(theme: Theme) -> AnyElement {
     div()
         .id("item-detail-empty")
         .flex()
@@ -559,9 +575,9 @@ fn empty_panel() -> AnyElement {
                         .size(px(52.))
                         .flex_shrink_0()
                         .rounded(px(12.))
-                        .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
+                        .bg(theme.raised)
                         .border_1()
-                        .border_color(rgb(0x353C47))
+                        .border_color(theme.field_border)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -569,7 +585,7 @@ fn empty_panel() -> AnyElement {
                             gpui_component::Icon::empty()
                                 .path("icons/mouse-pointer-2.svg")
                                 .size(px(22.))
-                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
+                                .text_color(theme.text_secondary),
                         ),
                 )
                 .child(
@@ -582,14 +598,14 @@ fn empty_panel() -> AnyElement {
                             div()
                                 .text_lg()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND))
+                                .text_color(theme.text)
                                 .child("Select an item"),
                         )
                         .child(
                             div()
                                 .text_sm()
                                 .text_center()
-                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                                .text_color(theme.text_subtle)
                                 .child(
                                     "Choose an item from the list to view its details, reveal fields, or copy credentials.",
                                 ),
@@ -603,19 +619,19 @@ fn empty_panel() -> AnyElement {
                         .h(px(32.))
                         .px(px(11.))
                         .rounded(px(7.))
-                        .bg(rgb(0x191C21))
+                        .bg(theme.inset)
                         .border_1()
-                        .border_color(rgb(0x292D35))
+                        .border_color(theme.border)
                         .child(
                             gpui_component::Icon::empty()
                                 .path("icons/keyboard.svg")
                                 .size(px(14.))
-                                .text_color(rgb(0x737E8D)),
+                                .text_color(theme.icon_muted),
                         )
                         .child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(0x737E8D))
+                                .text_color(theme.icon_muted)
                                 .child("↑↓ navigate · Enter open"),
                         ),
                 )
@@ -628,12 +644,12 @@ fn empty_panel() -> AnyElement {
                             gpui_component::Icon::empty()
                                 .path("icons/search.svg")
                                 .size(px(13.))
-                                .text_color(rgb(crate::theme::CIPHER_DISABLED)),
+                                .text_color(theme.text_ghost),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(rgb(crate::theme::CIPHER_DISABLED))
+                                .text_color(theme.text_ghost)
                                 .child("Press Ctrl+P to search your vault"),
                         ),
                 ),
@@ -649,13 +665,14 @@ fn empty_panel() -> AnyElement {
 /// the more prominent one (e.g. Website's "open externally").
 #[allow(clippy::too_many_arguments)]
 fn copy_row(
+    theme: Theme,
     id: impl Into<SharedString>,
     label: &'static str,
     value: String,
     copied: bool,
     foreground: Hsla,
     accent: Hsla,
-    copy_icon_color: u32,
+    copy_icon_color: Hsla,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     trailing: Option<AnyElement>,
 ) -> AnyElement {
@@ -676,7 +693,7 @@ fn copy_row(
             .into_any_element()
     } else {
         Icon::new(IconName::Copy)
-            .text_color(rgb(copy_icon_color))
+            .text_color(copy_icon_color)
             .with_size(px(14.))
             .into_any_element()
     };
@@ -684,7 +701,7 @@ fn copy_row(
         .flex()
         .flex_col()
         .gap(px(6.))
-        .child(field_label(label))
+        .child(field_label(theme, label))
         .child(
             Button::new(id.into())
                 .ghost()
@@ -692,9 +709,9 @@ fn copy_row(
                 .h(px(40.))
                 .px(px(10.))
                 .rounded(px(7.))
-                .bg(rgb(0x20242A))
+                .bg(theme.field)
                 .border_1()
-                .border_color(rgb(crate::theme::CIPHER_BORDER))
+                .border_color(theme.border)
                 .on_click(on_click)
                 .child(
                     div()

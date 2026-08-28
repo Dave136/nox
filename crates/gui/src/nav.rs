@@ -4,7 +4,8 @@
 
 use crate::app::Nox;
 use crate::settings;
-use gpui::{AnyElement, Context, FontWeight, Window, div, prelude::*, px, rgb};
+use crate::theme::Theme;
+use gpui::{AnyElement, Context, FontWeight, Window, div, prelude::*, px};
 use gpui_component::{
     Icon,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
@@ -58,6 +59,7 @@ impl Nox {
     }
 
     pub(crate) fn render_sidebar_nav(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
         let active = self.active_view;
         let locker = cx.entity();
         let locker_home = locker.clone();
@@ -71,12 +73,12 @@ impl Nox {
                 id="app-sidebar"
                 flex flex_col
                 w={px(224.)} h_full flex_shrink_0
-                bg={rgb(crate::theme::CIPHER_BACKGROUND)}
-                border_r_1 borderColor={rgb(crate::theme::CIPHER_BORDER)}
+                bg={theme.canvas}
+                border_r_1 borderColor={theme.border}
                 px={px(14.)} pt={px(16.)} pb={px(16.)}
             >
                 <div flex flex_col gap={px(SIDEBAR_ROW_GAP)}>
-                    {sidebar_section_label("VAULT")}
+                    {sidebar_section_label(theme, "VAULT")}
                     {sidebar_link("sidebar-home", "icons/house.svg", "Home", active == ActiveView::Home, move |_, _window, app| {
                         locker_home.update(app, |locker, cx| locker.set_active_view(ActiveView::Home, cx));
                     }, cx)}
@@ -84,23 +86,23 @@ impl Nox {
                         locker_all_items.update(app, |locker, cx| locker.set_active_view(ActiveView::AllItems, cx));
                     }, cx)}
                     // ponytail: visual-only until the vault model owns favorite state; add filtering when that state exists.
-                    {sidebar_static_item("icons/star.svg", "Favorites")}
+                    {sidebar_static_item(theme, "icons/star.svg", "Favorites")}
                     {sidebar_link("sidebar-logins", "icons/key-round.svg", "Logins", active == ActiveView::Logins, move |_, _window, app| {
                         locker_logins.update(app, |locker, cx| locker.set_active_view(ActiveView::Logins, cx));
                     }, cx)}
-                    {sidebar_static_item("icons/credit-card.svg", "Cards")}
+                    {sidebar_static_item(theme, "icons/credit-card.svg", "Cards")}
                     {sidebar_link("sidebar-secure-notes", "icons/file-lock.svg", "Secure notes", active == ActiveView::SecureNotes, move |_, _window, app| {
                         locker_notes.update(app, |locker, cx| locker.set_active_view(ActiveView::SecureNotes, cx));
                     }, cx)}
-                    {sidebar_static_item("icons/contact.svg", "Identities")}
+                    {sidebar_static_item(theme, "icons/contact.svg", "Identities")}
                 </div>
                 // The Pencil frame positions the Tools group 92px below the end
                 // of the Vault group (y 442 vs 350).
                 <div h={px(92.)} flex_shrink_0 />
                 <div flex flex_col gap={px(SIDEBAR_ROW_GAP)}>
-                    {sidebar_section_label("TOOLS")}
-                    {sidebar_static_item("icons/shield-check.svg", "Security report")}
-                    {sidebar_static_item("icons/wand-sparkles.svg", "Password generator")}
+                    {sidebar_section_label(theme, "TOOLS")}
+                    {sidebar_static_item(theme, "icons/shield-check.svg", "Security report")}
+                    {sidebar_static_item(theme, "icons/wand-sparkles.svg", "Password generator")}
                 </div>
                 <div flex_1 />
                 {sidebar_link("open-settings", "icons/settings.svg", "Settings", false, move |_, window, app| {
@@ -120,13 +122,13 @@ const SIDEBAR_ICON_SIZE: f32 = 17.;
 const SIDEBAR_LABEL_SIZE: f32 = 13.;
 const SIDEBAR_SECTION_LABEL_SIZE: f32 = 9.;
 
-fn sidebar_section_label(label: &'static str) -> AnyElement {
+fn sidebar_section_label(theme: Theme, label: &'static str) -> AnyElement {
     // ponytail: the design also specifies 0.8px letter-spacing, which GPUI has
     // no API for; drop it rather than fake it with per-character elements.
     div()
         .text_size(px(SIDEBAR_SECTION_LABEL_SIZE))
         .font_weight(FontWeight(700.))
-        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
+        .text_color(theme.text_muted)
         .child(label)
         .into_any_element()
 }
@@ -136,16 +138,17 @@ fn sidebar_section_label(label: &'static str) -> AnyElement {
 /// stays sized to its content, leaving room for a trailing badge
 /// (`sidebar_static_item`).
 fn sidebar_row_content(
+    theme: Theme,
     icon_path: &'static str,
     label: &'static str,
     active: bool,
     full_width: bool,
 ) -> AnyElement {
-    let color = rgb(if active {
-        crate::theme::CIPHER_FOREGROUND_SECONDARY
+    let color = if active {
+        theme.text_secondary
     } else {
-        crate::theme::CIPHER_FOREGROUND_MUTED
-    });
+        theme.text_muted
+    };
     div()
         .flex()
         .items_center()
@@ -200,23 +203,20 @@ fn sidebar_link(
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &mut Context<Nox>,
 ) -> AnyElement {
-    let resting_bg = if active {
-        crate::theme::CIPHER_SURFACE_RAISED
-    } else {
-        crate::theme::CIPHER_BACKGROUND
-    };
+    let theme = Theme::current(cx);
+    let resting_bg = if active { theme.raised } else { theme.canvas };
     let foreground = if active {
-        crate::theme::CIPHER_FOREGROUND_SECONDARY
+        theme.text_secondary
     } else {
-        crate::theme::CIPHER_FOREGROUND_MUTED
+        theme.text_muted
     };
     // The user asked for hover to look exactly like the active state, so the
     // hover/active colors are the active background regardless of `active`.
     let variant = ButtonCustomVariant::new(cx)
-        .color(rgb(resting_bg).into())
-        .hover(rgb(crate::theme::CIPHER_SURFACE_RAISED).into())
-        .active(rgb(crate::theme::CIPHER_SURFACE_RAISED).into())
-        .foreground(rgb(foreground).into());
+        .color(resting_bg)
+        .hover(theme.raised)
+        .active(theme.raised)
+        .foreground(foreground);
     Button::new(id)
         .custom(variant)
         .w_full()
@@ -224,14 +224,14 @@ fn sidebar_link(
         .px(px(SIDEBAR_ROW_PADDING_X))
         .rounded(px(SIDEBAR_ROW_RADIUS))
         .on_click(on_click)
-        .child(sidebar_row_content(icon_path, label, active, true))
+        .child(sidebar_row_content(theme, icon_path, label, active, true))
         .into_any_element()
 }
 
 /// A row for a nav destination that doesn't exist yet (Favorites, Cards,
 /// Identities, Security report, Password generator): same look as an inactive
 /// link plus a "Soon" badge, and not clickable.
-fn sidebar_static_item(icon_path: &'static str, label: &'static str) -> AnyElement {
+fn sidebar_static_item(theme: Theme, icon_path: &'static str, label: &'static str) -> AnyElement {
     div()
         .w_full()
         .h(px(SIDEBAR_ROW_HEIGHT))
@@ -240,15 +240,15 @@ fn sidebar_static_item(icon_path: &'static str, label: &'static str) -> AnyEleme
         .flex()
         .items_center()
         .justify_between()
-        .child(sidebar_row_content(icon_path, label, false, false))
+        .child(sidebar_row_content(theme, icon_path, label, false, false))
         .child(
             div()
                 .flex_shrink_0()
                 .ml(px(8.))
                 .text_size(px(10.))
                 .font_weight(FontWeight(600.))
-                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
-                .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
+                .text_color(theme.text_muted)
+                .bg(theme.raised)
                 .rounded(px(4.))
                 .px(px(6.))
                 .py(px(2.))

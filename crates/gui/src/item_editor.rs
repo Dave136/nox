@@ -1,8 +1,7 @@
 use crate::app::{AppState, Nox};
 use crate::nav::ActiveView;
-use gpui::{
-    AnyElement, Context, Entity, FontWeight, SharedString, Window, div, prelude::*, px, rgb,
-};
+use crate::theme::Theme;
+use gpui::{AnyElement, Context, Entity, FontWeight, SharedString, Window, div, prelude::*, px};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -565,11 +564,12 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (SharedString, AnyElement) {
-        let theme = cx.theme();
-        let border = theme.border;
-        let foreground = theme.foreground;
-        let muted_foreground = theme.muted_foreground;
-        let danger = theme.danger;
+        let _theme = Theme::current(cx);
+        let component_theme = cx.theme();
+        let border = component_theme.border;
+        let foreground = component_theme.foreground;
+        let muted_foreground = component_theme.muted_foreground;
+        let danger = component_theme.danger;
 
         let Some(editor) = self.item_editor.as_ref() else {
             return (
@@ -900,6 +900,7 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = Theme::current(cx);
         let Some(editor) = self.item_editor.as_ref() else {
             return div().into_any_element();
         };
@@ -914,9 +915,9 @@ impl Nox {
             .h(px(38.))
             .px(px(14.))
             .rounded(px(8.))
-            .bg(rgb(crate::theme::CIPHER_SURFACE))
+            .bg(theme.surface)
             .border_1()
-            .border_color(rgb(0x353C47))
+            .border_color(theme.field_border)
             .on_click(move |_, window, app| {
                 cancel_locker.update(app, |locker, cx| locker.cancel_item_editor(window, cx));
             })
@@ -924,7 +925,7 @@ impl Nox {
                 div()
                     .text_size(px(12.))
                     .font_weight(FontWeight(500.))
-                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT))
+                    .text_color(theme.text_soft)
                     .child("Cancel"),
             );
         let save_locker = locker.clone();
@@ -932,7 +933,7 @@ impl Nox {
             .h(px(38.))
             .px(px(16.))
             .rounded(px(8.))
-            .bg(rgb(crate::theme::CIPHER_PRIMARY))
+            .bg(theme.inverse)
             .on_click(move |_, window, app| {
                 save_locker.update(app, |locker, cx| locker.save_item(window, cx));
             })
@@ -945,13 +946,13 @@ impl Nox {
                         Icon::empty()
                             .path("icons/check.svg")
                             .size(px(14.))
-                            .text_color(rgb(crate::theme::CIPHER_BACKGROUND)),
+                            .text_color(theme.canvas),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
                             .font_weight(FontWeight(600.))
-                            .text_color(rgb(crate::theme::CIPHER_BACKGROUND))
+                            .text_color(theme.canvas)
                             .child("Save note"),
                     ),
             );
@@ -973,13 +974,13 @@ impl Nox {
                         Icon::empty()
                             .path("icons/arrow-left.svg")
                             .size(px(14.))
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
+                            .text_color(theme.text_secondary),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
                             .font_weight(FontWeight(500.))
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT))
+                            .text_color(theme.text_soft)
                             .child("Back to secure notes"),
                     ),
             );
@@ -996,14 +997,14 @@ impl Nox {
                             div()
                                 .text_size(px(9.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(0x737E8D))
+                                .text_color(theme.icon_muted)
                                 .child(label),
                         )
                         .when(required, |row| {
                             row.child(
                                 div()
                                     .text_size(px(9.))
-                                    .text_color(rgb(crate::theme::CIPHER_DISABLED))
+                                    .text_color(theme.text_ghost)
                                     .child("Required"),
                             )
                         }),
@@ -1015,7 +1016,7 @@ impl Nox {
                 Icon::empty()
                     .path(icon)
                     .size(px(14.))
-                    .text_color(rgb(0x737E8D)),
+                    .text_color(theme.icon_muted),
             )
         };
         let note_editor = div()
@@ -1023,9 +1024,9 @@ impl Nox {
             .flex_col()
             .h(px(220.))
             .rounded(px(7.))
-            .bg(rgb(0x20242A))
+            .bg(theme.field)
             .border_1()
-            .border_color(rgb(0x353C47))
+            .border_color(theme.field_border)
             .overflow_hidden()
             .child(
                 div()
@@ -1036,16 +1037,16 @@ impl Nox {
                     .gap(px(4.))
                     .flex_shrink_0()
                     .border_b_1()
-                    .border_color(rgb(0x353C47))
+                    .border_color(theme.field_border)
                     .child(tool("note-format-bold", "icons/bold.svg"))
                     .child(tool("note-format-italic", "icons/italic.svg"))
                     .child(tool("note-format-list", "icons/list.svg"))
                     .child(tool("note-format-code", "icons/code.svg"))
-                    .child(div().w(px(1.)).h(px(16.)).mx(px(4.)).bg(rgb(0x353C47)))
+                    .child(div().w(px(1.)).h(px(16.)).mx(px(4.)).bg(theme.field_border))
                     .child(
                         div()
                             .text_size(px(9.))
-                            .text_color(rgb(crate::theme::CIPHER_DISABLED))
+                            .text_color(theme.text_ghost)
                             .child("Markdown supported"),
                     ),
             )
@@ -1056,7 +1057,7 @@ impl Nox {
                     .flex_1()
                     .min_h(px(0.))
                     .p(px(12.))
-                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT)),
+                    .text_color(theme.text_soft),
             )
             .child(
                 div()
@@ -1067,17 +1068,17 @@ impl Nox {
                     .px(px(12.))
                     .flex_shrink_0()
                     .border_t_1()
-                    .border_color(rgb(0x353C47))
+                    .border_color(theme.field_border)
                     .child(
                         div()
                             .text_size(px(9.))
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                            .text_color(theme.text_subtle)
                             .child("Draft saved locally"),
                     )
                     .child(
                         div()
                             .text_size(px(9.))
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))
+                            .text_color(theme.text_secondary)
                             .child(format!("{character_count} characters")),
                     ),
             )
@@ -1091,7 +1092,7 @@ impl Nox {
                         .size(px(28.))
                         .flex_shrink_0()
                         .rounded(px(6.))
-                        .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
+                        .bg(theme.raised)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1099,7 +1100,7 @@ impl Nox {
                             Icon::empty()
                                 .path(icon)
                                 .size(px(13.))
-                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
+                                .text_color(theme.text_secondary),
                         ),
                 )
                 .child(
@@ -1111,13 +1112,13 @@ impl Nox {
                             div()
                                 .text_size(px(10.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT))
+                                .text_color(theme.text_soft)
                                 .child(heading),
                         )
                         .child(
                             div()
                                 .text_size(px(9.))
-                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                                .text_color(theme.text_subtle)
                                 .child(detail),
                         ),
                 )
@@ -1127,18 +1128,18 @@ impl Nox {
             |message| {
                 div()
                     .text_size(px(11.))
-                    .text_color(rgb(crate::theme::CIPHER_DANGER))
+                    .text_color(theme.danger)
                     .child(message)
                     .into_any_element()
             },
         );
 
         rsx! {
-            <div id="secure-note-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={rgb(crate::theme::CIPHER_BACKGROUND)}>
-                <div flex items_center justify_between h={px(88.)} px={px(32.)} flex_shrink_0 border_b_1 borderColor={rgb(0x292D35)}>
+            <div id="secure-note-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
+                <div flex items_center justify_between h={px(88.)} px={px(32.)} flex_shrink_0 border_b_1 borderColor={theme.border}>
                     <div flex flex_col gap={px(3.)}>
-                        <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={rgb(crate::theme::CIPHER_FOREGROUND)}>{"Create secure note"}</div>
-                        <div text_xs textColor={rgb(crate::theme::CIPHER_FOREGROUND_MUTED)}>{"Add an encrypted note to your vault"}</div>
+                        <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Create secure note"}</div>
+                        <div text_xs textColor={theme.text_muted}>{"Add an encrypted note to your vault"}</div>
                     </div>
                     <div flex items_center gap={px(10.)}>{cancel}{save}</div>
                 </div>
@@ -1146,58 +1147,58 @@ impl Nox {
                     <div flex items_center justify_between h={px(40.)} flex_shrink_0>
                         {back}
                         <div flex items_center gap={px(8.)}>
-                            {Icon::empty().path("icons/shield-check.svg").size(px(14.)).text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))}
-                            <div text_size={px(9.)} textColor={rgb(0x737E8D)}>{"Encrypted locally · not saved yet"}</div>
+                            {Icon::empty().path("icons/shield-check.svg").size(px(14.)).text_color(theme.text_subtle)}
+                            <div text_size={px(9.)} textColor={theme.icon_muted}>{"Encrypted locally · not saved yet"}</div>
                         </div>
                     </div>
                     <div flex flex_1 min_h={px(0.)} gap={px(16.)}>
-                        <div flex flex_col w={px(760.)} flex_shrink_0 h_full p={px(24.)} gap={px(14.)} rounded={px(9.)} bg={rgb(crate::theme::CIPHER_SURFACE)} border_1 borderColor={rgb(crate::theme::CIPHER_BORDER)}>
+                        <div flex flex_col w={px(760.)} flex_shrink_0 h_full p={px(24.)} gap={px(14.)} rounded={px(9.)} bg={theme.surface} border_1 borderColor={theme.border}>
                             <div flex items_center justify_between h={px(44.)} flex_shrink_0>
                                 <div flex flex_col gap={px(4.)}>
-                                    <div text_size={px(14.)} fontWeight={FontWeight::SEMIBOLD} textColor={rgb(crate::theme::CIPHER_FOREGROUND)}>{"Note details"}</div>
-                                    <div text_size={px(10.)} textColor={rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE)}>{"Store sensitive text securely, end-to-end encrypted."}</div>
+                                    <div text_size={px(14.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Note details"}</div>
+                                    <div text_size={px(10.)} textColor={theme.text_subtle}>{"Store sensitive text securely, end-to-end encrypted."}</div>
                                 </div>
-                                <div flex items_center h={px(26.)} px={px(8.)} gap={px(6.)} rounded={px(6.)} bg={rgb(crate::theme::CIPHER_SURFACE_RAISED)} border_1 borderColor={rgb(0x353C47)}>
-                                    {Icon::empty().path("icons/file-lock.svg").size(px(12.)).text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))}
-                                    <div text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)}>{"NOTE"}</div>
+                                <div flex items_center h={px(26.)} px={px(8.)} gap={px(6.)} rounded={px(6.)} bg={theme.raised} border_1 borderColor={theme.field_border}>
+                                    {Icon::empty().path("icons/file-lock.svg").size(px(12.)).text_color(theme.text_secondary)}
+                                    <div text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{"NOTE"}</div>
                                 </div>
                             </div>
-                            {field("TITLE", true, Input::new(&title).h(px(42.)).px(px(11.)).bg(rgb(0x20242A)).border_color(rgb(0x353C47)).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(rgb(0x737E8D))).into_any_element())}
+                            {field("TITLE", true, Input::new(&title).h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
                             {field("CONTENT", true, note_editor)}
                             {error}
                             <div flex_1 />
-                            <div flex items_center h={px(42.)} px={px(11.)} rounded={px(7.)} bg={rgb(0x191C21)} border_1 borderColor={rgb(0x2B3039)}>
-                                {Icon::empty().path("icons/lock-keyhole.svg").size(px(13.)).text_color(rgb(0x8DB49D))}
-                                <div ml={px(8.)} text_size={px(9.)} textColor={rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE)}>{"Encrypted before it leaves this device"}</div>
-                                <div ml_auto text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)}>{"⌘ ↵  Save note"}</div>
+                            <div flex items_center h={px(42.)} px={px(11.)} rounded={px(7.)} bg={theme.inset} border_1 borderColor={theme.border}>
+                                {Icon::empty().path("icons/lock-keyhole.svg").size(px(13.)).text_color(theme.success)}
+                                <div ml={px(8.)} text_size={px(9.)} textColor={theme.text_subtle}>{"Encrypted before it leaves this device"}</div>
+                                <div ml_auto text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{"⌘ ↵  Save note"}</div>
                             </div>
                         </div>
                         <div flex flex_col flex_1 min_w={px(0.)} h_full gap={px(14.)}>
-                            <div flex flex_col p={px(20.)} gap={px(14.)} rounded={px(9.)} bg={rgb(crate::theme::CIPHER_SURFACE)} border_1 borderColor={rgb(crate::theme::CIPHER_BORDER)}>
+                            <div flex flex_col p={px(20.)} gap={px(14.)} rounded={px(9.)} bg={theme.surface} border_1 borderColor={theme.border}>
                                 <div flex items_center justify_between>
                                     <div flex items_center gap={px(9.)}>
-                                        <div size={px(30.)} flex items_center justify_center rounded={px(7.)} bg={rgb(crate::theme::CIPHER_SURFACE_RAISED)}>{Icon::empty().path("icons/shield-check.svg").size(px(15.)).text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))}</div>
-                                        <div flex flex_col gap={px(2.)}><div text_size={px(12.)} fontWeight={FontWeight::SEMIBOLD} textColor={rgb(crate::theme::CIPHER_FOREGROUND)}>{"Note privacy"}</div><div text_size={px(9.)} textColor={rgb(crate::theme::CIPHER_DISABLED)}>{"Encrypted the moment you type"}</div></div>
+                                        <div size={px(30.)} flex items_center justify_center rounded={px(7.)} bg={theme.raised}>{Icon::empty().path("icons/shield-check.svg").size(px(15.)).text_color(theme.text_secondary)}</div>
+                                        <div flex flex_col gap={px(2.)}><div text_size={px(12.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Note privacy"}</div><div text_size={px(9.)} textColor={theme.text_ghost}>{"Encrypted the moment you type"}</div></div>
                                     </div>
-                                    <div h={px(24.)} px={px(8.)} flex items_center rounded={px(6.)} bg={rgb(crate::theme::CIPHER_SURFACE_RAISED)} text_size={px(8.)} fontWeight={FontWeight::SEMIBOLD} textColor={rgb(0x8FBF9A)}>{"ENCRYPTED"}</div>
+                                    <div h={px(24.)} px={px(8.)} flex items_center rounded={px(6.)} bg={theme.raised} text_size={px(8.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.success_bright}>{"ENCRYPTED"}</div>
                                 </div>
-                                <div text_size={px(10.)} textColor={rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE)}>{"Notes are encrypted locally before they ever leave this device, and stay unreadable without your master password."}</div>
-                                <div flex flex_col gap={px(9.)} text_size={px(10.)} textColor={rgb(crate::theme::CIPHER_FOREGROUND_MUTED)}>
-                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/key-round.svg").size(px(13.)).text_color(rgb(crate::theme::CIPHER_DISABLED))}{"Wi-Fi passwords and PINs"}</div>
-                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/key-round.svg").size(px(13.)).text_color(rgb(crate::theme::CIPHER_DISABLED))}{"Recovery and backup codes"}</div>
-                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/shield-check.svg").size(px(13.)).text_color(rgb(crate::theme::CIPHER_DISABLED))}{"Security question answers"}</div>
+                                <div text_size={px(10.)} textColor={theme.text_subtle}>{"Notes are encrypted locally before they ever leave this device, and stay unreadable without your master password."}</div>
+                                <div flex flex_col gap={px(9.)} text_size={px(10.)} textColor={theme.text_muted}>
+                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/key-round.svg").size(px(13.)).text_color(theme.text_ghost)}{"Wi-Fi passwords and PINs"}</div>
+                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/key-round.svg").size(px(13.)).text_color(theme.text_ghost)}{"Recovery and backup codes"}</div>
+                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/shield-check.svg").size(px(13.)).text_color(theme.text_ghost)}{"Security question answers"}</div>
                                 </div>
                             </div>
-                            <div flex flex_col p={px(20.)} gap={px(13.)} rounded={px(9.)} bg={rgb(crate::theme::CIPHER_SURFACE)} border_1 borderColor={rgb(crate::theme::CIPHER_BORDER)}>
-                                <div text_size={px(12.)} fontWeight={FontWeight::SEMIBOLD} textColor={rgb(crate::theme::CIPHER_FOREGROUND)}>{"After saving"}</div>
+                            <div flex flex_col p={px(20.)} gap={px(13.)} rounded={px(9.)} bg={theme.surface} border_1 borderColor={theme.border}>
+                                <div text_size={px(12.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"After saving"}</div>
                                 {outcome("icons/copy-plus.svg", "Quick copy", "The note content becomes a quick copy target.")}
                                 {outcome("icons/search.svg", "Full-text search", "Find this note instantly across your vault.")}
                                 {outcome("icons/refresh-cw.svg", "Sync securely", "The encrypted note syncs with your vault devices.")}
                             </div>
                             <div flex_1 />
-                            <div flex items_center justify_between h={px(70.)} px={px(16.)} rounded={px(9.)} bg={rgb(0x191C21)} border_1 borderColor={rgb(crate::theme::CIPHER_BORDER)}>
-                                <div flex flex_col gap={px(3.)}><div text_size={px(10.)} fontWeight={FontWeight::SEMIBOLD} textColor={rgb(crate::theme::CIPHER_FOREGROUND_SOFT)}>{"Keyboard friendly"}</div><div text_size={px(9.)} textColor={rgb(crate::theme::CIPHER_DISABLED)}>{"Tab between fields · Esc to cancel"}</div></div>
-                                <div text_size={px(11.)} fontWeight={FontWeight::SEMIBOLD} textColor={rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)}>{"⌘ ↵"}</div>
+                            <div flex items_center justify_between h={px(70.)} px={px(16.)} rounded={px(9.)} bg={theme.inset} border_1 borderColor={theme.border}>
+                                <div flex flex_col gap={px(3.)}><div text_size={px(10.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_soft}>{"Keyboard friendly"}</div><div text_size={px(9.)} textColor={theme.text_ghost}>{"Tab between fields · Esc to cancel"}</div></div>
+                                <div text_size={px(11.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{"⌘ ↵"}</div>
                             </div>
                         </div>
                     </div>
@@ -1222,6 +1223,7 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = Theme::current(cx);
         let Some(editor) = self.item_editor.as_ref() else {
             return div().into_any_element();
         };
@@ -1266,7 +1268,7 @@ impl Nox {
                     .items_center()
                     .gap(px(6.))
                     .text_size(px(13.))
-                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT))
+                    .text_color(theme.text_soft)
                     .child("‹")
                     .child("Back to logins"),
             );
@@ -1276,7 +1278,7 @@ impl Nox {
             .h(px(38.))
             .px(px(16.))
             .rounded(px(8.))
-            .bg(rgb(crate::theme::CIPHER_SURFACE))
+            .bg(theme.surface)
             .on_click(move |_, window, app| {
                 cancel_locker.update(app, |locker, cx| locker.cancel_item_editor(window, cx));
             })
@@ -1284,7 +1286,7 @@ impl Nox {
                 div()
                     .text_size(px(14.))
                     .font_weight(FontWeight(500.))
-                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT))
+                    .text_color(theme.text_soft)
                     .child("Cancel"),
             );
 
@@ -1305,13 +1307,13 @@ impl Nox {
                         gpui_component::Icon::empty()
                             .path("icons/check.svg")
                             .size(px(14.))
-                            .text_color(rgb(crate::theme::CIPHER_BACKGROUND)),
+                            .text_color(theme.canvas),
                     )
                     .child(
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight(500.))
-                            .text_color(rgb(crate::theme::CIPHER_BACKGROUND))
+                            .text_color(theme.canvas)
                             .child("Save login"),
                     ),
             );
@@ -1320,10 +1322,10 @@ impl Nox {
             save_button_base,
             self.auth_hovered.get("save-create-login").copied(),
             (
-                crate::theme::CIPHER_PRIMARY,
-                0xF0F2F6,
-                0xCDD2DC,
-                crate::theme::CIPHER_BACKGROUND,
+                theme.inverse,
+                theme.inverse_bright,
+                theme.inverse_press,
+                theme.canvas,
             ),
             cx,
         );
@@ -1345,19 +1347,19 @@ impl Nox {
                             div()
                                 .text_size(px(10.))
                                 .font_weight(FontWeight(600.))
-                                .text_color(rgb(0x737E8D))
+                                .text_color(theme.icon_muted)
                                 .child(label),
                         )
                         .child(if required {
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(crate::theme::CIPHER_DISABLED))
+                                .text_color(theme.text_ghost)
                                 .child("Required")
                                 .into_any_element()
                         } else if let Some(helper) = helper {
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(crate::theme::CIPHER_DISABLED))
+                                .text_color(theme.text_ghost)
                                 .child(helper)
                                 .into_any_element()
                         } else {
@@ -1370,8 +1372,8 @@ impl Nox {
         let dark_input_style = |input: Input| {
             input
                 .h(px(42.))
-                .bg(rgb(0x20242A))
-                .border_color(rgb(0x20242A))
+                .bg(theme.field)
+                .border_color(theme.field)
                 .rounded(px(8.))
         };
 
@@ -1394,7 +1396,7 @@ impl Nox {
             .h(px(28.))
             .px(px(10.))
             .rounded(px(6.))
-            .bg(rgb(crate::theme::CIPHER_FOREGROUND))
+            .bg(theme.text)
             .child(
                 div()
                     .flex()
@@ -1404,13 +1406,13 @@ impl Nox {
                         gpui_component::Icon::empty()
                             .path("icons/wand-sparkles.svg")
                             .size(px(12.))
-                            .text_color(rgb(crate::theme::CIPHER_BACKGROUND)),
+                            .text_color(theme.canvas),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
                             .font_weight(FontWeight(500.))
-                            .text_color(rgb(crate::theme::CIPHER_BACKGROUND))
+                            .text_color(theme.canvas)
                             .child("Generate"),
                     ),
             );
@@ -1509,7 +1511,11 @@ impl Nox {
                 .flex_1()
                 .h(px(5.))
                 .rounded(px(3.))
-                .bg(rgb(if index < strength { 0x525B69 } else { 0x282D35 }))
+                .bg(if index < strength {
+                    theme.border_strong
+                } else {
+                    theme.item_icon
+                })
         }));
         let requirement = |met: bool, label: &'static str| {
             div()
@@ -1520,24 +1526,24 @@ impl Nox {
                     gpui_component::Icon::empty()
                         .path("icons/check.svg")
                         .size(px(12.))
-                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))
+                        .text_color(theme.text_secondary)
                         .into_any_element()
                 } else {
                     div()
                         .size(px(12.))
                         .rounded_full()
                         .border_1()
-                        .border_color(rgb(crate::theme::CIPHER_DISABLED))
+                        .border_color(theme.text_ghost)
                         .into_any_element()
                 })
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(rgb(if met {
-                            crate::theme::CIPHER_FOREGROUND_SECONDARY
+                        .text_color(if met {
+                            theme.text_secondary
                         } else {
-                            crate::theme::CIPHER_FOREGROUND_MUTED
-                        }))
+                            theme.text_muted
+                        })
                         .child(label),
                 )
         };
@@ -1552,7 +1558,7 @@ impl Nox {
                             .size(px(28.))
                             .flex_shrink_0()
                             .rounded(px(8.))
-                            .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
+                            .bg(theme.raised)
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1560,7 +1566,7 @@ impl Nox {
                                 gpui_component::Icon::empty()
                                     .path(icon_path)
                                     .size(px(13.))
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
+                                    .text_color(theme.text_secondary),
                             ),
                     )
                     .child(
@@ -1571,24 +1577,20 @@ impl Nox {
                             .child(
                                 div()
                                     .text_size(px(13.))
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT))
+                                    .text_color(theme.text_soft)
                                     .child(title),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                                    .text_color(theme.text_subtle)
                                     .child(description),
                             ),
                     )
             };
 
-        let error = save_error.map(|message| {
-            div()
-                .text_sm()
-                .text_color(rgb(crate::theme::CIPHER_DANGER))
-                .child(message)
-        });
+        let error =
+            save_error.map(|message| div().text_sm().text_color(theme.danger).child(message));
 
         let form_card = div()
             .id("create-login-form")
@@ -1597,7 +1599,7 @@ impl Nox {
             .flex_1()
             .min_h(px(0.))
             .rounded(px(10.))
-            .bg(rgb(crate::theme::CIPHER_SURFACE))
+            .bg(theme.surface)
             .overflow_y_scroll()
             .p(px(24.))
             .gap(px(24.))
@@ -1615,13 +1617,13 @@ impl Nox {
                                 div()
                                     .text_lg()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND))
+                                    .text_color(theme.text)
                                     .child("Account details"),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                                    .text_color(theme.text_subtle)
                                     .child("Store credentials and sign-in information securely."),
                             ),
                     )
@@ -1633,18 +1635,18 @@ impl Nox {
                             .h(px(26.))
                             .px(px(10.))
                             .rounded(px(6.))
-                            .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
+                            .bg(theme.raised)
                             .child(
                                 gpui_component::Icon::empty()
                                     .path("icons/key-square.svg")
                                     .size(px(12.))
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
+                                    .text_color(theme.text_secondary),
                             )
                             .child(
                                 div()
                                     .text_size(px(10.))
                                     .font_weight(FontWeight(700.))
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))
+                                    .text_color(theme.text_secondary)
                                     .child("LOGIN"),
                             ),
                     ),
@@ -1683,8 +1685,8 @@ impl Nox {
                 false,
                 Some("One per line"),
                 Textarea::new(&uris)
-                    .bg(rgb(0x20242A))
-                    .border_color(rgb(0x20242A))
+                    .bg(theme.field)
+                    .border_color(theme.field)
                     .rounded(px(8.))
                     .into_any_element(),
             ))
@@ -1693,8 +1695,8 @@ impl Nox {
                 false,
                 None,
                 Textarea::new(&notes)
-                    .bg(rgb(0x20242A))
-                    .border_color(rgb(0x20242A))
+                    .bg(theme.field)
+                    .border_color(theme.field)
                     .rounded(px(8.))
                     .into_any_element(),
             ))
@@ -1708,17 +1710,17 @@ impl Nox {
                     .h(px(38.))
                     .px(px(14.))
                     .rounded(px(8.))
-                    .bg(rgb(0x191C21))
+                    .bg(theme.inset)
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                            .text_color(theme.text_subtle)
                             .child("Encrypted before it leaves this device"),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))
+                            .text_color(theme.text_secondary)
                             .child("Ctrl + Enter to save"),
                     ),
             )
@@ -1737,7 +1739,7 @@ impl Nox {
                     .gap(px(16.))
                     .p(px(20.))
                     .rounded(px(10.))
-                    .bg(rgb(crate::theme::CIPHER_SURFACE))
+                    .bg(theme.surface)
                     .child(
                         div()
                             .flex()
@@ -1752,7 +1754,7 @@ impl Nox {
                                         div()
                                             .size(px(30.))
                                             .rounded(px(8.))
-                                            .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
+                                            .bg(theme.raised)
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -1760,9 +1762,7 @@ impl Nox {
                                                 gpui_component::Icon::empty()
                                                     .path("icons/shield-check.svg")
                                                     .size(px(15.))
-                                                    .text_color(rgb(
-                                                        crate::theme::CIPHER_FOREGROUND_SECONDARY,
-                                                    )),
+                                                    .text_color(theme.text_secondary),
                                             ),
                                     )
                                     .child(
@@ -1774,15 +1774,13 @@ impl Nox {
                                                 div()
                                                     .text_sm()
                                                     .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(rgb(
-                                                        crate::theme::CIPHER_FOREGROUND,
-                                                    ))
+                                                    .text_color(theme.text)
                                                     .child("Password health"),
                                             )
                                             .child(
                                                 div()
                                                     .text_size(px(11.))
-                                                    .text_color(rgb(crate::theme::CIPHER_DISABLED))
+                                                    .text_color(theme.text_ghost)
                                                     .child("Updates as you type"),
                                             ),
                                     ),
@@ -1792,14 +1790,14 @@ impl Nox {
                                     .h(px(22.))
                                     .px(px(9.))
                                     .rounded(px(6.))
-                                    .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
+                                    .bg(theme.raised)
                                     .flex()
                                     .items_center()
                                     .child(
                                         div()
                                             .text_size(px(9.))
                                             .font_weight(FontWeight(700.))
-                                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                                            .text_color(theme.text_subtle)
                                             .child(if has_password { "LIVE" } else { "PENDING" }),
                                     ),
                             ),
@@ -1810,7 +1808,7 @@ impl Nox {
                     } else {
                         div()
                             .text_size(px(12.))
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
+                            .text_color(theme.text_subtle)
                             .child("Enter a password or generate one to check its strength.")
                             .into_any_element()
                     })
@@ -1837,12 +1835,12 @@ impl Nox {
                                             .size(px(12.))
                                             .rounded_full()
                                             .border_1()
-                                            .border_color(rgb(crate::theme::CIPHER_DISABLED)),
+                                            .border_color(theme.text_ghost),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(13.))
-                                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
+                                            .text_color(theme.text_muted)
                                             .child("Breach check unavailable offline"),
                                     ),
                             ),
@@ -1855,12 +1853,12 @@ impl Nox {
                     .gap(px(16.))
                     .p(px(20.))
                     .rounded(px(10.))
-                    .bg(rgb(crate::theme::CIPHER_SURFACE))
+                    .bg(theme.surface)
                     .child(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND))
+                            .text_color(theme.text)
                             .child("After saving"),
                     )
                     .child(after_saving_row(
@@ -1888,7 +1886,7 @@ impl Nox {
             .flex_1()
             .min_w(px(0.))
             .h_full()
-            .bg(rgb(crate::theme::CIPHER_BACKGROUND))
+            .bg(theme.canvas)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "escape" => this.cancel_item_editor(window, cx),
@@ -1910,7 +1908,7 @@ impl Nox {
                     .px(px(32.))
                     .flex_shrink_0()
                     .border_b_1()
-                    .border_color(rgb(crate::theme::CIPHER_BORDER))
+                    .border_color(theme.border)
                     .child(
                         div()
                             .flex()
@@ -1920,13 +1918,13 @@ impl Nox {
                                 div()
                                     .text_xl()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND))
+                                    .text_color(theme.text)
                                     .child("Create login"),
                             )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
+                                    .text_color(theme.text_muted)
                                     .child("Add a secure account to your vault"),
                             ),
                     )
@@ -1963,14 +1961,12 @@ impl Nox {
                                         gpui_component::Icon::empty()
                                             .path("icons/lock-keyhole.svg")
                                             .size(px(14.))
-                                            .text_color(rgb(
-                                                crate::theme::CIPHER_FOREGROUND_SUBTLE,
-                                            )),
+                                            .text_color(theme.text_subtle),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(12.))
-                                            .text_color(rgb(0x737E8D))
+                                            .text_color(theme.icon_muted)
                                             .child("Encrypted locally · not saved yet"),
                                     ),
                             ),
