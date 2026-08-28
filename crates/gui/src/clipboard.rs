@@ -14,6 +14,7 @@ const COPY_FEEDBACK_DURATION: Duration = Duration::from_millis(1200);
 pub(crate) enum CopyField {
     Username,
     Password,
+    Note,
     Uri(usize),
 }
 
@@ -85,6 +86,29 @@ impl Locker {
         };
         self.copy_secret(SecretBytes::new(value.as_bytes()), window, cx);
         self.show_copy_feedback(item_id, CopyField::Password, window, cx);
+    }
+
+    pub(crate) fn copy_note(
+        &mut self,
+        item_id: ItemId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(&self.state, super::AppState::Unlocked(_)) {
+            return;
+        }
+        let Some(value) = self
+            .vault_list
+            .as_ref()
+            .and_then(|list| list.items.iter().find(|(id, _)| *id == item_id))
+            .filter(|(_, payload)| payload.item_type == locker_core::ItemType::SecureNote)
+            .map(|(_, payload)| payload.notes.clone())
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        self.copy_secret(SecretBytes::new(value.as_bytes()), window, cx);
+        self.show_copy_feedback(item_id, CopyField::Note, window, cx);
     }
 
     /// Websites aren't secrets, so this skips `copy_secret`'s auto-clear

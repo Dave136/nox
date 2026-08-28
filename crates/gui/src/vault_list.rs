@@ -257,9 +257,8 @@ impl VaultListState {
             .collect();
         match self.sort_mode {
             SortMode::Updated => {
-                filtered.sort_by(|&a, &b| {
-                    self.items[b].1.updated_at.cmp(&self.items[a].1.updated_at)
-                });
+                filtered
+                    .sort_by(|&a, &b| self.items[b].1.updated_at.cmp(&self.items[a].1.updated_at));
             }
             SortMode::Name => {
                 filtered.sort_by(|&a, &b| {
@@ -689,7 +688,10 @@ impl Locker {
             .bg(rgb(super::CIPHER_SURFACE))
             .border_1()
             .border_color(rgb(0x353C47))
-            .child(toolbar_button_content("icons/list-filter.svg", "Filter".into()));
+            .child(toolbar_button_content(
+                "icons/list-filter.svg",
+                "Filter".into(),
+            ));
 
         let sort_button = Button::new("vault-list-sort")
             .ghost()
@@ -882,36 +884,6 @@ impl Locker {
                     |_, _, _| {},
                     cx,
                 ))
-                .child(type_filter_pill(
-                    "secure-note-filter-personal",
-                    "Personal",
-                    0,
-                    None,
-                    false,
-                    false,
-                    |_, _, _| {},
-                    cx,
-                ))
-                .child(type_filter_pill(
-                    "secure-note-filter-work",
-                    "Work",
-                    0,
-                    None,
-                    false,
-                    false,
-                    |_, _, _| {},
-                    cx,
-                ))
-                .child(type_filter_pill(
-                    "secure-note-filter-recovery",
-                    "Recovery",
-                    0,
-                    None,
-                    false,
-                    false,
-                    |_, _, _| {},
-                    cx,
-                ))
                 .into_any_element()
         } else {
             div()
@@ -1068,9 +1040,7 @@ impl Locker {
                         .on_click({
                             let locker = row_locker.clone();
                             move |_, _window, app| {
-                                locker.update(app, |locker, cx| {
-                                    locker.select_item(item_id, cx)
-                                });
+                                locker.update(app, |locker, cx| locker.select_item(item_id, cx));
                             }
                         })
                         .child(content)
@@ -1140,7 +1110,15 @@ impl Locker {
                     ))
                     .into_any_element()
             } else {
-                div().into_any_element()
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY))
+                    .child(if is_secure_notes_view {
+                        "All notes encrypted"
+                    } else {
+                        ""
+                    })
+                    .into_any_element()
             });
 
         let body = div()
@@ -1159,21 +1137,19 @@ impl Locker {
             .child(filters_row)
             .child(list_header_row(first_column, third_column))
             .child(error)
-            .child(
-                if item_count == 0 {
-                    div()
-                        .flex_1()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_sm()
-                        .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
-                        .child("No items match this view")
-                        .into_any_element()
-                } else {
-                    div().flex_1().min_h(px(0.)).child(rows).into_any_element()
-                },
-            )
+            .child(if item_count == 0 {
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
+                    .child("No items match this view")
+                    .into_any_element()
+            } else {
+                div().flex_1().min_h(px(0.)).child(rows).into_any_element()
+            })
             .child(if !has_deleted {
                 div().into_any_element()
             } else {
@@ -1257,12 +1233,36 @@ mod tests {
     }
 
     #[test]
+    fn secure_notes_only_show_backed_filters_and_encryption_status() {
+        let source = include_str!("vault_list.rs");
+        let start = source
+            .find("} else if is_secure_notes_view {")
+            .expect("secure-note filter branch");
+        let secure_note_branch = &source[start
+            ..source[start..]
+                .find("} else {")
+                .expect("end of secure-note filter branch")
+                + start];
+
+        assert!(!secure_note_branch.contains("Personal"));
+        assert!(!secure_note_branch.contains("Work"));
+        assert!(!secure_note_branch.contains("Recovery"));
+        assert!(source.contains("All notes encrypted"));
+    }
+
+    #[test]
     fn login_health_prioritizes_reused_over_weak() {
         let dupes = HashSet::from(["short".to_owned()]);
         // Short *and* reused — reused should win, since it's determined first.
         assert_eq!(login_health(&login("short"), &dupes).0, "Reused");
-        assert_eq!(login_health(&login("longenoughpassword"), &dupes).0, "Strong");
-        assert_eq!(login_health(&login("nodupe12"), &HashSet::new()).0, "Strong");
+        assert_eq!(
+            login_health(&login("longenoughpassword"), &dupes).0,
+            "Strong"
+        );
+        assert_eq!(
+            login_health(&login("nodupe12"), &HashSet::new()).0,
+            "Strong"
+        );
         assert_eq!(login_health(&login("short2"), &HashSet::new()).0, "Weak");
         assert_eq!(login_health(&login(""), &HashSet::new()).0, "—");
     }

@@ -13,6 +13,8 @@ gpui-component-assets.workspace = true
 gpui-rsx.workspace = true
 locker-core = { path = "../locker-core" }
 rust-embed = "8.12.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

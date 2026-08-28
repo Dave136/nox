@@ -10,6 +10,8 @@ mod detail;
 mod item_editor;
 #[path = "nav.rs"]
 mod nav;
+#[path = "settings/mod.rs"]
+mod settings;
 #[path = "ui/mod.rs"]
 pub mod ui;
 #[path = "vault_list.rs"]
@@ -21,6 +23,7 @@ pub use clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
 use conflicts::ConflictState;
 use item_editor::ItemEditorState;
 use nav::ActiveView;
+use settings::{Settings, SettingsSection, load_settings, save_settings};
 use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use vault_list::VaultListState;
 
@@ -141,6 +144,23 @@ fn sync_status_pill() -> AnyElement {
 }
 
 impl Locker {
+    pub(crate) fn update_settings(
+        &mut self,
+        mut settings: Settings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        settings.normalize();
+        self.inactivity_timeout = Duration::from_secs(settings.auto_lock_seconds);
+        self.clipboard.timeout = Duration::from_secs(settings.clipboard_seconds);
+        if let Err(error) = save_settings(&self.vault_path, &settings) {
+            eprintln!("settings persistence failed: {error}");
+        }
+        self.settings = settings;
+        self.arm_inactivity_timer(window, cx);
+        cx.notify();
+    }
+
     /// The primary "+ Add item" header button, shared by every workspace
     /// header (Home, All items, Logins, Secure notes): matches the Pencil
     /// "Add Item Button" node exactly (`#E3E6ED` fill, dark icon/label) and
@@ -402,6 +422,9 @@ pub struct Locker {
     pub(crate) conflicts_open: bool,
     pub(crate) backup: BackupState,
     pub(crate) window_controls: Entity<WindowControls>,
+    pub(crate) settings: Settings,
+    pub(crate) settings_section: SettingsSection,
+    pub(crate) settings_open: bool,
     auth_hovered: HashMap<&'static str, bool>,
 }
 
@@ -419,14 +442,12 @@ impl Locker {
         } else {
             AppState::NoVault
         };
-        // Every app state — auth screens and the unlocked workspace alike —
-        // uses the dark Nox theme; there is no light mode in this app.
-        let theme_mode = ThemeMode::Dark;
-        Theme::change(theme_mode, Some(window), cx);
+        Theme::change(ThemeMode::Dark, Some(window), cx);
         let create_password = Self::new_input(window, cx, "Create a strong password");
         let create_confirm = Self::new_input(window, cx, "Re-enter your master password");
         let unlock_password = Self::new_input(window, cx, "Password");
         let locker = cx.weak_entity();
+        let settings = load_settings(&vault_path);
         let window_controls = cx.new(|cx| {
             WindowControls::new(window, cx).with_command_handler(move |command, window, app| {
                 let _ = locker.update(app, |locker, cx| {
@@ -459,6 +480,9 @@ impl Locker {
             conflicts_open: false,
             backup: BackupState::new(),
             window_controls,
+            settings,
+            settings_section: SettingsSection::Appearance,
+            settings_open: false,
             auth_hovered: HashMap::new(),
         };
 
@@ -1538,9 +1562,18 @@ impl Render for Locker {
         };
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let sheet_layer = Root::render_sheet_layer(window, cx);
+        let settings_modal = self.settings_open.then(|| {
+            settings::render_settings_modal(
+                cx.entity(),
+                self.settings.clone(),
+                self.settings_section,
+                self.conflicts.count(),
+            )
+        });
         rsx! {
             <div
                 size_full
+                relative
                 flex
                 flex_col
                 bg={rgb(CIPHER_BACKGROUND)}
@@ -1552,6 +1585,9 @@ impl Render for Locker {
             >
                 {self.window_controls.clone()}
                 <div flex_1 bg={rgb(CIPHER_BACKGROUND)}>{body}</div>
+                {for modal in settings_modal {
+                    {modal}
+                }}
                 {for dialog in dialog_layer {
                     {dialog}
                 }}
@@ -1861,6 +1897,40 @@ mod tests {
         let (_view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
 
         assert_eq!(cx.update(|_, app| app.theme().mode), ThemeMode::Dark);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn settings_dialog_renders_a_full_window_backdrop(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("settings-backdrop");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_settings_dialog(window, locker_cx);
+        });
+        cx.executor().advance_clock(Duration::from_millis(180));
+        cx.run_until_parked();
+
+        let backdrop = cx.debug_bounds("settings-backdrop").unwrap();
+        let dialog = cx.debug_bounds("settings-dialog-shell").unwrap();
+        assert_eq!(dialog.size.width, px(1040.));
+        assert_eq!(dialog.size.height, px(800.));
+        assert!(backdrop.size.width >= dialog.size.width);
+        assert!(backdrop.size.height >= dialog.size.height);
+        assert!(!cx.update(|window, app| window.has_active_dialog(app)));
+        assert!(view.read_with(cx, |locker, _| locker.settings_open));
+
+        cx.simulate_click(dialog.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |locker, _| locker.settings_open));
+
+        cx.simulate_click(
+            gpui::point(backdrop.origin.x + px(8.), backdrop.origin.y + px(8.)),
+            gpui::Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("settings-backdrop").is_none());
+        assert!(!view.read_with(cx, |locker, _| locker.settings_open));
         cleanup(&path);
     }
 
@@ -2331,7 +2401,12 @@ mod tests {
             locker_cx.notify();
         });
         assert_eq!(
-            view.read_with(cx, |locker, _| locker.vault_list.as_ref().unwrap().filtered.len()),
+            view.read_with(cx, |locker, _| locker
+                .vault_list
+                .as_ref()
+                .unwrap()
+                .filtered
+                .len()),
             1
         );
         cleanup(&path);
@@ -2429,11 +2504,8 @@ mod tests {
     #[gpui::test]
     fn login_creation_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
         init(cx);
-        let (view, cx, path, _) = unlocked_view(
-            cx,
-            "login-workspace",
-            &[login_payload("Existing", "alex")],
-        );
+        let (view, cx, path, _) =
+            unlocked_view(cx, "login-workspace", &[login_payload("Existing", "alex")]);
         view.update_in(cx, |locker, window, locker_cx| {
             locker.set_active_view(ActiveView::Logins, locker_cx);
             locker.open_create_editor(window, locker_cx);
@@ -2470,7 +2542,10 @@ mod tests {
         let (view, cx, path, ids) = unlocked_view(
             cx,
             "logins-health",
-            &[login_payload("GitHub", "alex"), login_payload("AWS", "alex")],
+            &[
+                login_payload("GitHub", "alex"),
+                login_payload("AWS", "alex"),
+            ],
         );
         view.update_in(cx, |locker, _window, locker_cx| {
             locker.set_active_view(ActiveView::Logins, locker_cx);
@@ -2576,20 +2651,21 @@ mod tests {
         view.update_in(cx, |locker, _window, locker_cx| {
             locker.duplicate_item(original_id, locker_cx);
         });
-        let (item_count, titles, selected_is_new, persisted_count) = view.read_with(cx, |locker, _| {
-            let list = locker.vault_list.as_ref().unwrap();
-            let titles: Vec<_> = list.items.iter().map(|(_, p)| p.title.clone()).collect();
-            let persisted_count = match &locker.state {
-                AppState::Unlocked(vault) => vault.list_items().unwrap().len(),
-                _ => 0,
-            };
-            (
-                list.items.len(),
-                titles,
-                list.selected.is_some_and(|id| id != original_id),
-                persisted_count,
-            )
-        });
+        let (item_count, titles, selected_is_new, persisted_count) =
+            view.read_with(cx, |locker, _| {
+                let list = locker.vault_list.as_ref().unwrap();
+                let titles: Vec<_> = list.items.iter().map(|(_, p)| p.title.clone()).collect();
+                let persisted_count = match &locker.state {
+                    AppState::Unlocked(vault) => vault.list_items().unwrap().len(),
+                    _ => 0,
+                };
+                (
+                    list.items.len(),
+                    titles,
+                    list.selected.is_some_and(|id| id != original_id),
+                    persisted_count,
+                )
+            });
         assert_eq!(item_count, 2);
         assert_eq!(persisted_count, 2);
         assert!(titles.contains(&"Original".to_owned()));

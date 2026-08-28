@@ -2,10 +2,10 @@
 //! Pencil "Nox — Home" frame carries no brand mark inside the sidebar itself
 //! (only the title bar's small logo), so this doesn't render one either.
 
-use super::Locker;
+use super::{Locker, settings};
 use gpui::{AnyElement, Context, FontWeight, Window, div, prelude::*, px, rgb};
 use gpui_component::{
-    Icon, IconName, Sizable, WindowExt,
+    Icon,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
 };
 use gpui_rsx::rsx;
@@ -45,20 +45,15 @@ impl Locker {
         cx.notify();
     }
 
-    pub(crate) fn open_settings_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let locker = cx.entity();
-        let conflict_count = self.conflicts.count();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            dialog
-                .w(px(1216.))
-                .h(px(872.))
-                .p(px(0.))
-                .gap(px(0.))
-                .rounded(px(10.))
-                .close_button(false)
-                .overlay_closable(true)
-                .child(render_settings_modal(locker.clone(), conflict_count))
-        });
+    pub(crate) fn open_settings_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_section = settings::SettingsSection::Appearance;
+        self.settings_open = true;
+        cx.notify();
+    }
+
+    pub(crate) fn close_settings_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_open = false;
+        cx.notify();
     }
 
     pub(crate) fn render_sidebar_nav(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -261,206 +256,6 @@ fn sidebar_static_item(icon_path: &'static str, label: &'static str) -> AnyEleme
         .into_any_element()
 }
 
-fn settings_nav_item(icon_path: &'static str, label: &'static str, active: bool) -> AnyElement {
-    div()
-        .w_full()
-        .h(px(38.))
-        .px(px(10.))
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .rounded(px(7.))
-        .when(active, |this| {
-            this.bg(rgb(0xE8F3F9))
-                .border_1()
-                .border_color(rgb(0xB9DDF0))
-                .text_color(rgb(0x2878A8))
-        })
-        .when(!active, |this| this.text_color(rgb(0x4F5660)))
-        .child(Icon::empty().path(icon_path).text_color(if active {
-            rgb(0x2878A8)
-        } else {
-            rgb(0x69717B)
-        }))
-        .child(div().text_sm().child(label))
-        .into_any_element()
-}
-
-fn settings_toggle(enabled: bool) -> AnyElement {
-    div()
-        .w(px(36.))
-        .h(px(20.))
-        .px(px(3.))
-        .flex()
-        .items_center()
-        .rounded_full()
-        .when(enabled, |this| this.justify_end().bg(rgb(0x4A9FD8)))
-        .when(!enabled, |this| this.justify_start().bg(rgb(0xDDE0E5)))
-        .child(div().size(px(14.)).rounded_full().bg(if enabled {
-            rgb(0xFFFFFF)
-        } else {
-            rgb(0x9FA8B1)
-        }))
-        .into_any_element()
-}
-
-fn settings_row(label: &'static str, description: &'static str, control: AnyElement) -> AnyElement {
-    rsx! {
-        <div flex items_center justify_between h={px(42.)}>
-            <div flex flex_col gap={px(4.)}>
-                <div text_sm textColor={rgb(0x20242A)}>{label}</div>
-                <div text_xs textColor={rgb(0x69717B)}>{description}</div>
-            </div>
-            {control}
-        </div>
-    }
-    .into_any_element()
-}
-
-fn render_settings_modal(locker: gpui::Entity<Locker>, conflict_count: usize) -> AnyElement {
-    let lock_locker = locker.clone();
-    let restore_locker = locker.clone();
-    let export_locker = locker.clone();
-    let conflicts_locker = locker.clone();
-    // ponytail: appearance controls remain display-only until preferences have durable storage.
-    rsx! {
-        <div id="settings-modal" relative flex size_full overflow_hidden bg={rgb(0xF7F8FA)}>
-            <div id="settings-navigation" w={px(236.)} h_full flex flex_col gap={px(12.)} p={px(16.)} pt={px(24.)} flex_shrink_0 bg={rgb(0xF7F8FA)} border_r_1 borderColor={rgb(0xDDE0E5)}>
-                <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(0x69717B)}>{"SETTINGS"}</div>
-                <div h={px(38.)} px={px(11.)} flex items_center gap={px(9.)} rounded={px(7.)} bg={rgb(0xFFFFFF)} border_1 borderColor={rgb(0xDDE0E5)}>
-                    <Icon base={Icon::empty().path("icons/search.svg").text_color(rgb(0x69717B))} />
-                    <div text_xs textColor={rgb(0x777C85)}>{"Search settings…"}</div>
-                </div>
-                <div flex flex_col gap={px(5.)}>
-                    {settings_nav_item("icons/pencil-sparkles.svg", "Appearance", true)}
-                    {settings_nav_item("icons/shield-check.svg", "Security", false)}
-                    {settings_nav_item("icons/database.svg", "Vault", false)}
-                    {settings_nav_item("icons/key-square.svg", "Autofill", false)}
-                    {settings_nav_item("icons/eye-off.svg", "Privacy", false)}
-                    {settings_nav_item("icons/bell.svg", "Notifications", false)}
-                    {settings_nav_item("icons/arrow-left-right.svg", "Import & export", false)}
-                    {settings_nav_item("icons/circle-user-around.svg", "Account", false)}
-                </div>
-                <div flex_1 />
-                <Button
-                    base={Button::new("settings-lock-vault")
-                        .ghost()
-                        .w_full()
-                        .justify_start()
-                        .icon(Icon::empty().path("icons/lock-keyhole.svg"))
-                        .label("Lock vault now")
-                        .on_click(move |_, window, app| {
-                            lock_locker.update(app, |locker, cx| locker.lock_vault(window, cx));
-                        })}
-                />
-            </div>
-            <div id="settings-appearance" flex flex_col flex_1 min_w={px(0.)} h_full p={px(34.)} pt={px(26.)} gap={px(22.)} bg={rgb(0xF7F8FA)} overflow_y_scroll>
-                <Button
-                    base={Button::new("close-settings")
-                        .ghost()
-                        .absolute()
-                        .top(px(14.))
-                        .right(px(14.))
-                        .icon(IconName::Close)
-                        .on_click(|_, window, cx| window.close_dialog(cx))}
-                />
-                <div flex flex_col gap={px(14.)}>
-                    <div text_xl textColor={rgb(0x20242A)}>{"Theme"}</div>
-                    <div text_xs textColor={rgb(0x69717B)}>{"Choose how Locker looks across your devices."}</div>
-                    {settings_row("Sync with system", "Follow your operating system appearance automatically.", settings_toggle(false))}
-                    {settings_row("Legible bright colors", "Improve contrast for bright accent colors.", settings_toggle(true))}
-                    <div h={px(94.)} p={px(12.)} flex items_center gap={px(16.)} rounded={px(8.)} bg={rgb(0xF5F6F8)} border_1 borderColor={rgb(0xDDE0E5)}>
-                        <div w={px(150.)} h={px(68.)} p={px(11.)} flex flex_col gap={px(7.)} rounded={px(6.)} bg={rgb(0xFFFFFF)}>
-                            <div w={px(66.)} h={px(4.)} rounded={px(2.)} bg={rgb(0x20242A)} />
-                            <div w={px(48.)} h={px(4.)} rounded={px(2.)} bg={rgb(0x4A9FD8)} />
-                            <div w={px(78.)} h={px(4.)} rounded={px(2.)} bg={rgb(0x8AAAC0)} />
-                            <div w={px(30.)} h={px(4.)} rounded={px(2.)} bg={rgb(0x58C99A)} />
-                        </div>
-                        <div flex flex_col flex_1 gap={px(6.)}>
-                            <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(0x69717B)}>{"BUILT-IN · LIGHT"}</div>
-                            <div text_sm textColor={rgb(0x20242A)}>{"Locker Daylight"}</div>
-                            <div flex gap={px(5.)}>
-                                <div size={px(9.)} rounded={px(3.)} bg={rgb(0x4A9FD8)} />
-                                <div size={px(9.)} rounded={px(3.)} bg={rgb(0x58C99A)} />
-                                <div size={px(9.)} rounded={px(3.)} bg={rgb(0xD2B45B)} />
-                                <div size={px(9.)} rounded={px(3.)} bg={rgb(0x9B7BD7)} />
-                                <div size={px(9.)} rounded={px(3.)} bg={rgb(0xD96B76)} />
-                            </div>
-                        </div>
-                        <div flex items_center gap={px(7.)} text_xs textColor={rgb(0x2878A8)}>
-                            <div>{"Change theme"}</div>
-                            <div>{"›"}</div>
-                        </div>
-                    </div>
-                </div>
-                <div h={px(1.)} w_full bg={rgb(0xE4E6EA)} />
-                <div flex flex_col gap={px(13.)}>
-                    <div text_lg textColor={rgb(0x20242A)}>{"Transparency"}</div>
-                    {settings_row("Opacity", "Adjust the background transparency of the vault.", rsx! {
-                        <div flex items_center gap={px(10.)}>
-                            <div w={px(210.)} h={px(4.)} rounded={px(2.)} bg={rgb(0xDDE0E5)}>
-                                <div w={px(14.)} h={px(14.)} rounded_full bg={rgb(0xFFFFFF)} border_1 borderColor={rgb(0x4A9FD8)} />
-                            </div>
-                            <div text_xs textColor={rgb(0x4F5660)}>{"100%"}</div>
-                        </div>
-                    }.into_any_element())}
-                    {settings_row("Background blur", "Blur content behind the vault window.", settings_toggle(true))}
-                    {settings_row("Dim inactive panes", "Reduce contrast in unfocused panels.", settings_toggle(true))}
-                </div>
-                <div h={px(1.)} w_full bg={rgb(0xE4E6EA)} />
-                <div flex flex_col gap={px(12.)}>
-                    <div text_lg textColor={rgb(0x20242A)}>{"Language"}</div>
-                    {settings_row("Interface language", "Choose the language used throughout Locker.", rsx! {
-                        <div w={px(190.)} h={px(36.)} px={px(11.)} flex items_center justify_between rounded={px(7.)} bg={rgb(0xFFFFFF)} border_1 borderColor={rgb(0xDDE0E5)}>
-                            <div text_xs textColor={rgb(0x20242A)}>{"English"}</div>
-                            <div text_xs textColor={rgb(0x69717B)}>{"⌄"}</div>
-                        </div>
-                    }.into_any_element())}
-                </div>
-                <div h={px(1.)} w_full bg={rgb(0xE4E6EA)} />
-                <div flex flex_col gap={px(12.)}>
-                    <div text_lg textColor={rgb(0x20242A)}>{"Vault administration"}</div>
-                    {settings_row("Backups", "Export a recovery copy or restore one safely.", rsx! {
-                        <div flex items_center gap={px(8.)}>
-                            <Button
-                                base={Button::new("settings-restore-backup")
-                                    .outline()
-                                    .small()
-                                    .label("Restore")
-                                    .on_click(move |_, window, app| {
-                                        restore_locker.update(app, |locker, cx| locker.begin_restore(window, cx));
-                                    })}
-                            />
-                            <Button
-                                base={Button::new("settings-export-backup")
-                                    .outline()
-                                    .small()
-                                    .label("Export")
-                                    .on_click(move |_, window, app| {
-                                        export_locker.update(app, |locker, cx| locker.begin_export(window, cx));
-                                    })}
-                            />
-                        </div>
-                    }.into_any_element())}
-                    {settings_row("Conflicts", "Review changes that need your decision.", rsx! {
-                        <Button
-                            base={Button::new("settings-conflicts")
-                                .outline()
-                                .small()
-                                .label(format!("Review ({conflict_count})"))
-                                .on_click(move |_, window, app| {
-                                    conflicts_locker.update(app, |locker, cx| locker.open_conflicts(window, cx));
-                                    window.close_dialog(app);
-                                })}
-                        />
-                    }.into_any_element())}
-                </div>
-            </div>
-        </div>
-    }
-    .into_any_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::ActiveView;
@@ -483,7 +278,10 @@ mod tests {
             include_str!("item_editor.rs"),
         ] {
             for (index, _) in source.match_indices("\"icons/") {
-                let path = source[index + 1..].split('"').next().expect("closing quote");
+                let path = source[index + 1..]
+                    .split('"')
+                    .next()
+                    .expect("closing quote");
                 // Skips this test's own `"icons/` search literal, which has no suffix.
                 if !path.ends_with(".svg") {
                     continue;

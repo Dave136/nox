@@ -31,8 +31,8 @@ impl Locker {
                 .id("item-detail-panel")
                 .flex()
                 .flex_col()
-                .w(px(428.))
-                .flex_shrink_0()
+                .flex_1()
+                .min_w(px(0.))
                 .h_full()
                 .rounded(px(9.))
                 .bg(rgb(super::CIPHER_SURFACE))
@@ -130,6 +130,46 @@ impl Locker {
                     ),
             );
 
+        if payload.item_type == ItemType::SecureNote {
+            let copy_note_locker = locker.clone();
+            let copied = feedback == Some((item_id, CopyField::Note));
+            body = body.child(
+                Button::new("copy-note-contents")
+                    .h(px(40.))
+                    .w_full()
+                    .rounded(px(7.))
+                    .bg(rgb(super::CIPHER_FOREGROUND))
+                    .on_click(move |_, window, app| {
+                        copy_note_locker
+                            .update(app, |locker, cx| locker.copy_note(item_id, window, cx));
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(8.))
+                            .child(
+                                gpui_component::Icon::empty()
+                                    .path("icons/copy.svg")
+                                    .size(px(14.))
+                                    .text_color(rgb(super::CIPHER_BACKGROUND)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .font_weight(FontWeight(650.))
+                                    .text_color(rgb(super::CIPHER_BACKGROUND))
+                                    .child(if copied {
+                                        "Copied!"
+                                    } else {
+                                        "Copy note contents"
+                                    }),
+                            ),
+                    ),
+            );
+        }
+
         if payload.item_type == ItemType::Login {
             if let Some(uri) = payload.uris.first() {
                 let host = uri
@@ -201,13 +241,15 @@ impl Locker {
             let reveal_button = Button::new("toggle-reveal-password")
                 .ghost()
                 .xsmall()
-                .icon(gpui_component::Icon::empty()
-                    .path(if reveal_password {
-                        "icons/eye-off.svg"
-                    } else {
-                        "icons/eye.svg"
-                    })
-                    .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE)))
+                .icon(
+                    gpui_component::Icon::empty()
+                        .path(if reveal_password {
+                            "icons/eye-off.svg"
+                        } else {
+                            "icons/eye.svg"
+                        })
+                        .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE)),
+                )
                 .on_click(move |_, _window, app| {
                     reveal_locker.update(app, |locker, cx| {
                         locker.reveal_password = !locker.reveal_password;
@@ -235,9 +277,11 @@ impl Locker {
                 let open_button = Button::new(SharedString::from(format!("open-uri-{index}")))
                     .ghost()
                     .xsmall()
-                    .icon(gpui_component::Icon::empty()
-                        .path("icons/external-link.svg")
-                        .text_color(rgb(super::CIPHER_FOREGROUND)))
+                    .icon(
+                        gpui_component::Icon::empty()
+                            .path("icons/external-link.svg")
+                            .text_color(rgb(super::CIPHER_FOREGROUND)),
+                    )
                     .on_click(move |_, _window, app| app.open_url(&uri_for_open));
                 let uri_for_copy = uri.clone();
                 let uri_locker = locker.clone();
@@ -368,11 +412,12 @@ impl Locker {
         let edit_locker = cx.entity();
         let duplicate_locker = edit_locker.clone();
         let delete_locker = edit_locker.clone();
-        let (edit_label, duplicate_label, delete_label) = if payload.item_type == ItemType::SecureNote {
-            ("Edit note", "Duplicate note", "Delete note")
-        } else {
-            ("Edit", "Duplicate", "Delete")
-        };
+        let (edit_label, duplicate_label, delete_label) =
+            if payload.item_type == ItemType::SecureNote {
+                ("Edit note", "Duplicate note", "Delete note")
+            } else {
+                ("Edit", "Duplicate", "Delete")
+            };
         body = body.child(div().flex_1()).child(
             div()
                 .flex()
@@ -447,6 +492,31 @@ fn metadata_row_colored(label: &'static str, value: &str, value_color: u32) -> A
                 .child(value.to_owned()),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn detail_card_fills_the_remaining_split_workspace_width() {
+        let source = include_str!("detail.rs");
+        let card_start = source.find("let card = |content").expect("detail card");
+        let card = &source[card_start
+            ..source[card_start..]
+                .find("let Some((item_id, payload))")
+                .expect("detail card end")
+                + card_start];
+
+        assert!(card.contains(".flex_1()"));
+        assert!(card.contains(".min_w(px(0.))"));
+        assert!(!card.contains(".w(px(428.))"));
+    }
+
+    #[test]
+    fn secure_note_detail_renders_a_real_copy_contents_button() {
+        let source = include_str!("detail.rs");
+        assert!(source.contains("Button::new(\"copy-note-contents\")"));
+        assert!(source.contains("locker.copy_note(item_id, window, cx)"));
+    }
 }
 
 /// `12 Jan 2024` — chrono handles the calendar math (leap years, month

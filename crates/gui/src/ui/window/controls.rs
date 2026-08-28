@@ -1,5 +1,6 @@
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, Keystroke, MouseButton, MouseDownEvent, Window, actions, div, hsla, prelude::*, px, rgb,
+    App, Context, Entity, FocusHandle, Focusable, Keystroke, MouseButton, MouseDownEvent, Window,
+    actions, div, hsla, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt,
@@ -11,7 +12,10 @@ use gpui_component::{
 use gpui_rsx::rsx;
 use std::{cell::Cell, rc::Rc};
 
-use crate::{app::{CIPHER_BACKGROUND, CIPHER_FOREGROUND_MUTED}, assets::{IconName, icon, logo}};
+use crate::{
+    app::{CIPHER_BACKGROUND, CIPHER_FOREGROUND_MUTED},
+    assets::{IconName, icon, logo},
+};
 
 const CIPHER_BORDER: u32 = 0x292D35;
 const CIPHER_FOREGROUND: u32 = 0xE5E8F0;

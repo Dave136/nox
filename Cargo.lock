@@ -3003,6 +3003,8 @@ dependencies = [
  "gpui_platform",
  "locker-core",
  "rust-embed",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

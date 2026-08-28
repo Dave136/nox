@@ -264,9 +264,9 @@ fn password_strength_score(password: &str) -> usize {
 /// against the real vault, not a fabricated signal.
 fn password_is_reused(password: &str, items: &[(ItemId, ItemPayload)]) -> bool {
     !password.is_empty()
-        && items
-            .iter()
-            .any(|(_, payload)| payload.item_type == ItemType::Login && payload.password == password)
+        && items.iter().any(|(_, payload)| {
+            payload.item_type == ItemType::Login && payload.password == password
+        })
 }
 
 impl Locker {
@@ -1010,16 +1010,12 @@ impl Locker {
                 .child(body)
         };
         let tool = |id: &'static str, icon: &'static str| {
-            Button::new(id)
-                .ghost()
-                .size(px(26.))
-                .rounded(px(6.))
-                .child(
-                    Icon::empty()
-                        .path(icon)
-                        .size(px(14.))
-                        .text_color(rgb(0x737E8D)),
-                )
+            Button::new(id).ghost().size(px(26.)).rounded(px(6.)).child(
+                Icon::empty()
+                    .path(icon)
+                    .size(px(14.))
+                    .text_color(rgb(0x737E8D)),
+            )
         };
         let note_editor = div()
             .flex()
@@ -1331,7 +1327,10 @@ impl Locker {
             cx,
         );
 
-        let field = |label: &'static str, required: bool, helper: Option<&'static str>, body: AnyElement| {
+        let field = |label: &'static str,
+                     required: bool,
+                     helper: Option<&'static str>,
+                     body: AnyElement| {
             div()
                 .flex()
                 .flex_col()
@@ -1385,7 +1384,9 @@ impl Locker {
                 .label(label)
                 .checked(classes.contains(class))
                 .on_click(move |checked, _, app| {
-                    locker.update(app, |locker, cx| locker.set_generator_class(class, *checked, cx));
+                    locker.update(app, |locker, cx| {
+                        locker.set_generator_class(class, *checked, cx)
+                    });
                 })
         };
         let generate_trigger = Button::new("generate-password-trigger")
@@ -1416,8 +1417,7 @@ impl Locker {
             .trigger(generate_trigger)
             .open(generator_open)
             .on_open_change(move |open, _, app| {
-                generate_open_locker
-                    .update(app, |locker, cx| locker.set_generator_open(*open, cx));
+                generate_open_locker.update(app, |locker, cx| locker.set_generator_open(*open, cx));
             })
             .content(move |_popover, _window, _cx| {
                 let preview = generated.clone().unwrap_or_else(|| "Click Generate".into());
@@ -1437,12 +1437,33 @@ impl Locker {
                             .flex_col()
                             .gap(px(4.))
                             .font_weight(FontWeight::NORMAL)
-                            .child(class_checkbox("cl-generator-lower", "Lowercase", CharClasses::LOWER))
-                            .child(class_checkbox("cl-generator-upper", "Uppercase", CharClasses::UPPER))
-                            .child(class_checkbox("cl-generator-digits", "Digits", CharClasses::DIGITS))
-                            .child(class_checkbox("cl-generator-symbols", "Symbols", CharClasses::SYMBOLS)),
+                            .child(class_checkbox(
+                                "cl-generator-lower",
+                                "Lowercase",
+                                CharClasses::LOWER,
+                            ))
+                            .child(class_checkbox(
+                                "cl-generator-upper",
+                                "Uppercase",
+                                CharClasses::UPPER,
+                            ))
+                            .child(class_checkbox(
+                                "cl-generator-digits",
+                                "Digits",
+                                CharClasses::DIGITS,
+                            ))
+                            .child(class_checkbox(
+                                "cl-generator-symbols",
+                                "Symbols",
+                                CharClasses::SYMBOLS,
+                            )),
                     )
-                    .child(div().font_weight(FontWeight::NORMAL).truncate().child(preview))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::NORMAL)
+                            .truncate()
+                            .child(preview),
+                    )
                     .child(
                         div()
                             .flex()
@@ -1482,20 +1503,13 @@ impl Locker {
 
         // Live segments: neutral fill count, not a red/green judgment — matches
         // the design's understated language rather than an alarming meter.
-        let strength_bars = div()
-            .flex()
-            .gap(px(6.))
-            .children((0..4).map(|index| {
-                div()
-                    .flex_1()
-                    .h(px(5.))
-                    .rounded(px(3.))
-                    .bg(rgb(if index < strength {
-                        0x525B69
-                    } else {
-                        0x282D35
-                    }))
-            }));
+        let strength_bars = div().flex().gap(px(6.)).children((0..4).map(|index| {
+            div()
+                .flex_1()
+                .h(px(5.))
+                .rounded(px(3.))
+                .bg(rgb(if index < strength { 0x525B69 } else { 0x282D35 }))
+        }));
         let requirement = |met: bool, label: &'static str| {
             div()
                 .flex()
@@ -1526,46 +1540,47 @@ impl Locker {
                         .child(label),
                 )
         };
-        let after_saving_row = |icon_path: &'static str, title: &'static str, description: &'static str| {
-            div()
-                .flex()
-                .items_start()
-                .gap(px(12.))
-                .child(
-                    div()
-                        .size(px(28.))
-                        .flex_shrink_0()
-                        .rounded(px(8.))
-                        .bg(rgb(super::CIPHER_SURFACE_RAISED))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            gpui_component::Icon::empty()
-                                .path(icon_path)
-                                .size(px(13.))
-                                .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY)),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .text_color(rgb(super::CIPHER_FOREGROUND_SOFT))
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
-                                .child(description),
-                        ),
-                )
-        };
+        let after_saving_row =
+            |icon_path: &'static str, title: &'static str, description: &'static str| {
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .size(px(28.))
+                            .flex_shrink_0()
+                            .rounded(px(8.))
+                            .bg(rgb(super::CIPHER_SURFACE_RAISED))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                gpui_component::Icon::empty()
+                                    .path(icon_path)
+                                    .size(px(13.))
+                                    .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(super::CIPHER_FOREGROUND_SOFT))
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                                    .child(description),
+                            ),
+                    )
+            };
 
         let error = save_error.map(|message| {
             div()
@@ -1637,15 +1652,13 @@ impl Locker {
                 "NAME",
                 true,
                 None,
-                dark_input_style(Input::new(&title).aria_label("Login name"))
-                    .into_any_element(),
+                dark_input_style(Input::new(&title).aria_label("Login name")).into_any_element(),
             ))
             .child(field(
                 "USERNAME",
                 false,
                 Some("Click row later to copy"),
-                dark_input_style(Input::new(&username).aria_label("Username"))
-                    .into_any_element(),
+                dark_input_style(Input::new(&username).aria_label("Username")).into_any_element(),
             ))
             .child(field(
                 "PASSWORD",
@@ -1656,8 +1669,10 @@ impl Locker {
                     .items_center()
                     .gap(px(8.))
                     .child(
-                        dark_input_style(Input::new(&password).mask_toggle().aria_label("Password"))
-                            .flex_1(),
+                        dark_input_style(
+                            Input::new(&password).mask_toggle().aria_label("Password"),
+                        )
+                        .flex_1(),
                     )
                     .child(generator_popover)
                     .into_any_element(),
@@ -1744,7 +1759,9 @@ impl Locker {
                                                 gpui_component::Icon::empty()
                                                     .path("icons/shield-check.svg")
                                                     .size(px(15.))
-                                                    .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY)),
+                                                    .text_color(rgb(
+                                                        super::CIPHER_FOREGROUND_SECONDARY,
+                                                    )),
                                             ),
                                     )
                                     .child(
@@ -1799,8 +1816,14 @@ impl Locker {
                             .flex()
                             .flex_col()
                             .gap(px(10.))
-                            .child(requirement(has_password && has_min_length, "At least 14 characters"))
-                            .child(requirement(has_password && !is_reused, "Unique and not reused"))
+                            .child(requirement(
+                                has_password && has_min_length,
+                                "At least 14 characters",
+                            ))
+                            .child(requirement(
+                                has_password && !is_reused,
+                                "Unique and not reused",
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -1867,7 +1890,8 @@ impl Locker {
                 match event.keystroke.key.as_str() {
                     "escape" => this.cancel_item_editor(window, cx),
                     "enter"
-                        if event.keystroke.modifiers.control || event.keystroke.modifiers.platform =>
+                        if event.keystroke.modifiers.control
+                            || event.keystroke.modifiers.platform =>
                     {
                         this.save_item(window, cx)
                     }
