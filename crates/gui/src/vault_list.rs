@@ -3,8 +3,8 @@
 //! selected item's detail panel (`detail.rs`) on the right. Matches the
 //! Pencil "Nox — All Items · No Selection" frame.
 
-use super::nav::ActiveView;
-use super::{AppState, Nox};
+use crate::app::{AppState, Nox};
+use crate::nav::ActiveView;
 use gpui::{
     AnyElement, Context, ElementId, Entity, FontWeight, KeyDownEvent, SharedString, Subscription,
     UniformListScrollHandle, Window, div, prelude::*, px, rgb, uniform_list,
@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use crate::assets::{IconName, icon};
 
 /// Colors from the Pencil "All Items Split Workspace" frame that don't
-/// already have a `super::CIPHER_*` equivalent.
+/// already have a `crate::app::CIPHER_*` equivalent.
 const LIST_HEADER_BG: u32 = 0x191C21;
 const ITEM_ICON_BG: u32 = 0x282D35;
 const TYPE_PILL_ACTIVE_BG: u32 = 0x2A2F38;
@@ -99,14 +99,14 @@ pub(crate) fn duplicate_passwords(items: &[(ItemId, ItemPayload)]) -> HashSet<St
 /// has no password set yet.
 pub(crate) fn login_health(payload: &ItemPayload, dupes: &HashSet<String>) -> (&'static str, u32) {
     if payload.password.is_empty() {
-        return ("—", super::CIPHER_FOREGROUND_SUBTLE);
+        return ("—", crate::theme::CIPHER_FOREGROUND_SUBTLE);
     }
     if dupes.contains(&payload.password) {
-        ("Reused", super::CIPHER_DANGER)
+        ("Reused", crate::theme::CIPHER_DANGER)
     } else if is_weak_password(&payload.password) {
-        ("Weak", super::CIPHER_DANGER)
+        ("Weak", crate::theme::CIPHER_DANGER)
     } else {
-        ("Strong", super::CIPHER_FOREGROUND_SECONDARY)
+        ("Strong", crate::theme::CIPHER_FOREGROUND_SECONDARY)
     }
 }
 
@@ -378,9 +378,9 @@ fn type_filter_pill(
     cx: &mut Context<Nox>,
 ) -> AnyElement {
     let label_color = rgb(if active {
-        super::CIPHER_FOREGROUND
+        crate::theme::CIPHER_FOREGROUND
     } else {
-        super::CIPHER_FOREGROUND_MUTED
+        crate::theme::CIPHER_FOREGROUND_MUTED
     });
     let content = div()
         .flex()
@@ -402,7 +402,10 @@ fn type_filter_pill(
     let (bg, hover_bg) = if active {
         (TYPE_PILL_ACTIVE_BG, TYPE_PILL_ACTIVE_BG)
     } else {
-        (super::CIPHER_SURFACE, super::CIPHER_SURFACE_RAISED)
+        (
+            crate::theme::CIPHER_SURFACE,
+            crate::theme::CIPHER_SURFACE_RAISED,
+        )
     };
     let variant = ButtonCustomVariant::new(cx)
         .color(rgb(bg).into())
@@ -456,7 +459,7 @@ fn item_row_content(
                     gpui_component::Icon::empty()
                         .path(icon_path)
                         .size(px(15.))
-                        .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY)),
+                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
                 ),
         )
         .child(
@@ -471,14 +474,14 @@ fn item_row_content(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(super::CIPHER_FOREGROUND))
+                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND))
                         .truncate()
                         .child(title),
                 )
                 .child(
                     div()
                         .text_size(px(12.))
-                        .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
                         .truncate()
                         .child(subtitle),
                 ),
@@ -496,7 +499,7 @@ fn item_row_content(
                 .w(px(COL_UPDATED_W))
                 .flex_shrink_0()
                 .text_size(px(12.))
-                .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
                 .child(updated),
         )
         .child(
@@ -566,7 +569,7 @@ impl Nox {
     }
 
     pub(crate) fn open_create_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut editor = super::item_editor::ItemEditorState::for_create(window, cx);
+        let mut editor = crate::item_editor::ItemEditorState::for_create(window, cx);
         editor.item_type = self.active_view.item_type().unwrap_or(ItemType::Login);
         self.item_editor = Some(editor);
         if self.uses_secure_note_workspace() || self.uses_login_workspace() {
@@ -587,9 +590,9 @@ impl Nox {
             return;
         };
         let result = if restore {
-            super::item_editor::ItemEditorState::for_restore(item_id, vault, window, cx)
+            crate::item_editor::ItemEditorState::for_restore(item_id, vault, window, cx)
         } else {
-            super::item_editor::ItemEditorState::for_edit(item_id, vault, window, cx)
+            crate::item_editor::ItemEditorState::for_edit(item_id, vault, window, cx)
         };
         match result {
             Ok(editor) => {
@@ -649,11 +652,11 @@ impl Nox {
             .prefix(icon(
                 IconName::Search,
                 Some(15.),
-                Some(rgb(super::CIPHER_FOREGROUND_SUBTLE).into()),
+                Some(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE).into()),
             ))
             .h(px(38.))
             .w(px(360.))
-            .bg(rgb(super::CIPHER_SURFACE))
+            .bg(rgb(crate::theme::CIPHER_SURFACE))
             .border_color(rgb(0x353C47))
             .rounded(px(8.));
 
@@ -666,13 +669,13 @@ impl Nox {
                     gpui_component::Icon::empty()
                         .path(icon_path)
                         .size(px(14.))
-                        .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY)),
+                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
                 )
                 .child(
                     div()
                         .text_size(px(13.))
                         .font_weight(FontWeight(500.))
-                        .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY))
+                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))
                         .child(label),
                 )
         };
@@ -685,7 +688,7 @@ impl Nox {
             .h(px(36.))
             .px(px(11.))
             .rounded(px(7.))
-            .bg(rgb(super::CIPHER_SURFACE))
+            .bg(rgb(crate::theme::CIPHER_SURFACE))
             .border_1()
             .border_color(rgb(0x353C47))
             .child(toolbar_button_content(
@@ -698,7 +701,7 @@ impl Nox {
             .h(px(36.))
             .px(px(11.))
             .rounded(px(7.))
-            .bg(rgb(super::CIPHER_SURFACE))
+            .bg(rgb(crate::theme::CIPHER_SURFACE))
             .border_1()
             .border_color(rgb(0x353C47))
             .on_click(move |_, _window, app| {
@@ -749,9 +752,9 @@ impl Nox {
                 .flex_shrink_0()
                 .h_full()
                 .rounded(px(9.))
-                .bg(rgb(super::CIPHER_SURFACE))
+                .bg(rgb(crate::theme::CIPHER_SURFACE))
                 .border_1()
-                .border_color(rgb(super::CIPHER_BORDER))
+                .border_color(rgb(crate::theme::CIPHER_BORDER))
                 .overflow_hidden()
                 .child(content)
         };
@@ -761,7 +764,7 @@ impl Nox {
                 div()
                     .p(px(16.))
                     .text_sm()
-                    .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
+                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
                     .child("No vault loaded")
                     .into_any_element(),
             )
@@ -828,7 +831,7 @@ impl Nox {
                     "login-filter-weak",
                     "Weak",
                     weak_count,
-                    Some(super::CIPHER_DANGER),
+                    Some(crate::theme::CIPHER_DANGER),
                     health_filter == Some(LoginHealth::Weak),
                     true,
                     {
@@ -848,7 +851,7 @@ impl Nox {
                     "login-filter-reused",
                     "Reused",
                     reused_count,
-                    Some(super::CIPHER_DANGER),
+                    Some(crate::theme::CIPHER_DANGER),
                     health_filter == Some(LoginHealth::Reused),
                     true,
                     {
@@ -1002,7 +1005,7 @@ impl Nox {
                         ItemType::Login => "icons/key-square.svg",
                         ItemType::SecureNote => "icons/file-lock.svg",
                     };
-                    let updated = super::relative_time(payload.updated_at);
+                    let updated = crate::app::relative_time(payload.updated_at);
                     let (subtitle, third_column) = if is_logins_view {
                         let (label, color) = login_health(&payload, &dupes_for_rows);
                         (login_row_subtitle(&payload), (label.to_owned(), color))
@@ -1013,7 +1016,7 @@ impl Nox {
                         };
                         (
                             row_subtitle(&payload),
-                            (label.to_owned(), super::CIPHER_FOREGROUND_SECONDARY),
+                            (label.to_owned(), crate::theme::CIPHER_FOREGROUND_SECONDARY),
                         )
                     };
                     let content = item_row_content(
@@ -1025,9 +1028,12 @@ impl Nox {
                         selected,
                     );
                     let (bg, hover_bg) = if selected {
-                        (super::CIPHER_SURFACE_RAISED, super::CIPHER_SURFACE_RAISED)
+                        (
+                            crate::theme::CIPHER_SURFACE_RAISED,
+                            crate::theme::CIPHER_SURFACE_RAISED,
+                        )
                     } else {
-                        (super::CIPHER_SURFACE, 0x20242A)
+                        (crate::theme::CIPHER_SURFACE, 0x20242A)
                     };
                     let variant = ButtonCustomVariant::new(app)
                         .color(rgb(bg).into())
@@ -1056,7 +1062,7 @@ impl Nox {
                 .small()
                 .w_full()
                 .justify_start()
-                .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
+                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
                 .label(format!("Preview & Restore — Deleted item {}", index + 1))
                 .on_click({
                     let locker = locker.clone();
@@ -1072,7 +1078,7 @@ impl Nox {
             ListLoadState::Failed(message) => div()
                 .p(px(12.))
                 .text_sm()
-                .text_color(rgb(super::CIPHER_DANGER))
+                .text_color(rgb(crate::theme::CIPHER_DANGER))
                 .child(message),
         };
 
@@ -1098,13 +1104,13 @@ impl Nox {
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
                     .child(format!("{item_count} of {scope_total} {scope_noun} shown")),
             )
             .child(if is_logins_view {
                 div()
                     .text_size(px(10.))
-                    .text_color(rgb(super::CIPHER_DANGER))
+                    .text_color(rgb(crate::theme::CIPHER_DANGER))
                     .child(format!(
                         "{weak_count} weak · {reused_count} reused passwords"
                     ))
@@ -1112,7 +1118,7 @@ impl Nox {
             } else {
                 div()
                     .text_size(px(10.))
-                    .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY))
+                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY))
                     .child(if is_secure_notes_view {
                         "All notes encrypted"
                     } else {
@@ -1144,7 +1150,7 @@ impl Nox {
                     .items_center()
                     .justify_center()
                     .text_sm()
-                    .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
+                    .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
                     .child("No items match this view")
                     .into_any_element()
             } else {
@@ -1160,14 +1166,14 @@ impl Nox {
                     .gap(px(2.))
                     .p(px(8.))
                     .border_t_1()
-                    .border_color(rgb(super::CIPHER_BORDER))
+                    .border_color(rgb(crate::theme::CIPHER_BORDER))
                     .child(
                         Button::new("deleted-section-toggle")
                             .ghost()
                             .small()
                             .w_full()
                             .justify_start()
-                            .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
+                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
                             .label(format!("Deleted ({deleted_count})"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(list) = this.vault_list.as_mut() {

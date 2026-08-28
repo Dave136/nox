@@ -1,40 +1,30 @@
-#[path = "backup.rs"]
-mod backup;
-#[path = "clipboard.rs"]
-mod clipboard;
-#[path = "conflicts.rs"]
-mod conflicts;
-#[path = "detail.rs"]
-mod detail;
-#[path = "item_editor.rs"]
-mod item_editor;
-#[path = "nav.rs"]
-mod nav;
-#[path = "settings/mod.rs"]
-mod settings;
-#[path = "ui/mod.rs"]
-pub mod ui;
-#[path = "vault_list.rs"]
-mod vault_list;
-
+use crate::backup::{self, BackupState};
+use crate::clipboard::ClipboardState;
+pub use crate::clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
+use crate::conflicts::ConflictState;
+use crate::item_editor::{self, ItemEditorState};
+use crate::nav::ActiveView;
+use crate::settings::{self, Settings, SettingsSection, load_settings, save_settings};
+use crate::theme::{
+    self, CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_BORDER_STRONG, CIPHER_DANGER, CIPHER_DISABLED,
+    CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED, CIPHER_FOREGROUND_SECONDARY,
+    CIPHER_FOREGROUND_SOFT, CIPHER_FOREGROUND_SUBTLE, CIPHER_ICON_MUTED, CIPHER_PRIMARY,
+    CIPHER_PRIMARY_AUTH, CIPHER_PRIMARY_AUTH_ACTIVE, CIPHER_PRIMARY_AUTH_HOVER,
+    CIPHER_PRIMARY_FOREGROUND, CIPHER_SURFACE, CIPHER_SURFACE_RAISED,
+};
+use crate::ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
+use crate::vault_list::VaultListState;
 use crate::vaults::{
     VaultEntry, VaultRegistry, adopt_legacy_vault, load_registry, save_registry, slug_for,
 };
-use backup::BackupState;
-use clipboard::ClipboardState;
-pub use clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
-use conflicts::ConflictState;
-use item_editor::ItemEditorState;
-use nav::ActiveView;
-use settings::{Settings, SettingsSection, load_settings, save_settings};
-use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
-use vault_list::VaultListState;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FontWeight, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString, Subscription, Task, Window, div, ease_out_quint, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, rgba,
+    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FontWeight, KeyBinding,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString,
+    Subscription, Task, Window, div, ease_out_quint, point, prelude::*, px, rgb, rgba,
 };
 use gpui_component::{
-    Disableable, IndexPath, Root, Sizable, Theme, ThemeMode, WindowExt,
+    Disableable, IndexPath, Root, Sizable, ThemeMode, WindowExt,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputState},
     popover::Popover,
@@ -57,30 +47,6 @@ pub const DEFAULT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(300);
 
 const UNLOCK_ERROR_MESSAGE: &str = "Incorrect password or corrupted vault.";
 const AUTH_HOVER_DURATION: Duration = Duration::from_millis(140);
-pub(crate) const CIPHER_BACKGROUND: u32 = 0x1A1D22;
-const CIPHER_SURFACE: u32 = 0x1E2126;
-pub(crate) const CIPHER_SURFACE_RAISED: u32 = 0x252A33;
-pub(crate) const CIPHER_BORDER: u32 = 0x2B3039;
-const CIPHER_BORDER_STRONG: u32 = 0x525B69;
-const CIPHER_FOREGROUND: u32 = 0xE5E8F0;
-const CIPHER_FOREGROUND_SOFT: u32 = 0xD9DEE7;
-pub(crate) const CIPHER_FOREGROUND_SECONDARY: u32 = 0xAEB7C5;
-pub(crate) const CIPHER_FOREGROUND_MUTED: u32 = 0x8F98A8;
-const CIPHER_FOREGROUND_SUBTLE: u32 = 0x7F8998;
-const CIPHER_DISABLED: u32 = 0x626B78;
-const CIPHER_PRIMARY: u32 = 0xE3E6ED;
-const CIPHER_PRIMARY_AUTH: u32 = CIPHER_PRIMARY;
-const CIPHER_PRIMARY_AUTH_HOVER: u32 = 0xF5F6F8;
-const CIPHER_PRIMARY_AUTH_ACTIVE: u32 = CIPHER_PRIMARY;
-const CIPHER_DANGER: u32 = 0xA9787D;
-const CIPHER_ICON_MUTED: u32 = 0x737E8D;
-const CIPHER_PRIMARY_FOREGROUND: u32 = 0x1A1D22;
-// Mirrors the Pencil frame's `--cipher-accent-blue` token, which the design
-// file itself doesn't currently render onscreen (an inert key-badge layer
-// behind the header logo). Kept for parity with the design's token set.
-#[allow(dead_code)]
-const CIPHER_ACCENT_BLUE: u32 = 0x2D87B9;
-
 fn auth_hover_color(from: u32, to: u32, amount: f32) -> Rgba {
     let from = rgb(from);
     let to = rgb(to);
@@ -391,7 +357,7 @@ fn recent_item_subtitle(payload: &nox_core::ItemPayload) -> String {
 
 // ponytail: coarse relative-time buckets, no calendar-aware "Yesterday"/weekday
 // labels; add if that granularity is ever requested.
-fn relative_time(updated_at_ms: u64) -> String {
+pub(crate) fn relative_time(updated_at_ms: u64) -> String {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
@@ -558,7 +524,7 @@ enum FormState {
 
 /// Root Nox view for vault creation, unlock, and lock lifecycle actions.
 pub struct Nox {
-    state: AppState,
+    pub(crate) state: AppState,
     pub(crate) data_dir: PathBuf,
     pub(crate) vaults: VaultRegistry,
     pub(crate) active_vault: Option<VaultEntry>,
@@ -567,12 +533,12 @@ pub struct Nox {
     _vault_select_subscription: Subscription,
 
     create_name: Entity<InputState>,
-    create_password: Entity<InputState>,
+    pub(crate) create_password: Entity<InputState>,
     create_confirm: Entity<InputState>,
     create_state: FormState,
     _create_task: Task<()>,
 
-    unlock_password: Entity<InputState>,
+    pub(crate) unlock_password: Entity<InputState>,
     unlock_state: FormState,
     _unlock_task: Task<()>,
 
@@ -586,8 +552,8 @@ pub struct Nox {
     /// Freshly rendered (title, body) for the open item-editor Sheet, refreshed
     /// every `render_unlocked` pass. See `open_item_editor_sheet` for why this
     /// indirection exists instead of the Sheet reading `Nox` directly.
-    item_editor_sheet_cell: Rc<RefCell<Option<(SharedString, AnyElement)>>>,
-    active_view: ActiveView,
+    pub(crate) item_editor_sheet_cell: Rc<RefCell<Option<(SharedString, AnyElement)>>>,
+    pub(crate) active_view: ActiveView,
     /// Whether the selected item's password is shown in plaintext in the detail panel.
     pub(crate) reveal_password: bool,
     pub(crate) clipboard: ClipboardState,
@@ -598,7 +564,7 @@ pub struct Nox {
     pub(crate) settings: Settings,
     pub(crate) settings_section: SettingsSection,
     pub(crate) settings_open: bool,
-    auth_hovered: HashMap<&'static str, bool>,
+    pub(crate) auth_hovered: HashMap<&'static str, bool>,
 }
 
 impl Nox {
@@ -667,7 +633,7 @@ impl Nox {
                 cx.notify();
             },
         );
-        Theme::change(ThemeMode::Dark, Some(window), cx);
+        theme::apply(ThemeMode::Dark, Some(window), cx);
         let create_name = Self::new_input(window, cx, "Personal vault", false);
         let create_password = Self::new_input(window, cx, "Create a strong password", true);
         let create_confirm = Self::new_input(window, cx, "Re-enter your master password", true);
@@ -742,17 +708,21 @@ impl Nox {
         })
     }
 
-    fn focus_input(input: &Entity<InputState>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_input(
+        input: &Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         input.update(cx, |input, cx| input.focus(window, cx));
     }
 
-    fn reset_create_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn reset_create_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.create_name = Self::new_input(window, cx, "Personal vault", false);
         self.create_password = Self::new_input(window, cx, "Create a strong password", true);
         self.create_confirm = Self::new_input(window, cx, "Re-enter your master password", true);
     }
 
-    fn reset_unlock_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn reset_unlock_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.unlock_password = Self::new_input(window, cx, "Password", true);
     }
 
@@ -856,7 +826,7 @@ impl Nox {
                                 eprintln!("vault registry persistence failed: {error}");
                             }
                             this.state = AppState::Unlocked(vault);
-                            Theme::change(ThemeMode::Dark, Some(window), cx);
+                            theme::apply(ThemeMode::Dark, Some(window), cx);
                             this.vault_list = Some(VaultListState::from_initial_load(
                                 items, deleted, window, cx,
                             ));
@@ -925,7 +895,7 @@ impl Nox {
                                 }
                             }
                             this.state = AppState::Unlocked(vault);
-                            Theme::change(ThemeMode::Dark, Some(window), cx);
+                            theme::apply(ThemeMode::Dark, Some(window), cx);
                             this.vault_list = Some(VaultListState::from_initial_load(
                                 items, deleted, window, cx,
                             ));
@@ -952,7 +922,7 @@ impl Nox {
         });
     }
 
-    fn note_activity(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn note_activity(&mut self, cx: &mut Context<Self>) {
         if matches!(&self.state, AppState::Unlocked(_)) {
             self.last_activity = cx.background_executor().now();
         }
@@ -1027,7 +997,7 @@ impl Nox {
         if let AppState::Unlocked(vault) = std::mem::replace(&mut self.state, AppState::Locked) {
             vault.lock();
         }
-        Theme::change(ThemeMode::Dark, Some(window), cx);
+        theme::apply(ThemeMode::Dark, Some(window), cx);
         Self::focus_input(&self.unlock_password, window, cx);
         cx.notify();
     }
@@ -2095,7 +2065,7 @@ impl Render for Nox {
                 {for sheet in sheet_layer {
                     {sheet}
                 }}
-                {ui::window::controls::resize_handles()}
+                {crate::ui::window::controls::resize_handles()}
             </div>
         }
     }
@@ -2127,9 +2097,10 @@ impl Render for FatalStartupError {
 
 #[cfg(test)]
 mod tests {
-    use super::item_editor::EditorMode;
     use super::*;
-    use super::{backup, conflicts};
+    use crate::item_editor::EditorMode;
+    use crate::{conflicts, vault_list};
+
     use crate::vaults::{VaultEntry, VaultRegistry, registry_path, save_registry};
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use gpui_component::{ActiveTheme, Root, Theme, ThemeMode, WindowExt};

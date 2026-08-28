@@ -13,14 +13,11 @@ use gpui_rsx::rsx;
 use std::{cell::Cell, rc::Rc};
 
 use crate::{
-    app::{CIPHER_BACKGROUND, CIPHER_FOREGROUND_MUTED},
     assets::{IconName, icon, logo},
+    theme::{
+        CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_DANGER, CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED,
+    },
 };
-
-const CIPHER_BORDER: u32 = 0x292D35;
-const CIPHER_FOREGROUND: u32 = 0xE5E8F0;
-const CIPHER_MUTED: u32 = 0x8F98A8;
-const CIPHER_DANGER: u32 = 0xA9787D;
 
 // use crate::assets::{IconName};
 
@@ -228,7 +225,7 @@ impl WindowControls {
                 base={Button::new("window-file-menu")}
                 label={"File"}
                 bg={cx.theme().transparent}
-                textColor={rgb(CIPHER_MUTED)}
+                textColor={rgb(CIPHER_FOREGROUND_MUTED)}
                 border_0
                 // Keep title-bar controls out of the vault form's tab order; Ctrl+P
                 // provides the keyboard route to every native window command.
@@ -285,7 +282,7 @@ impl WindowControls {
                 base={Button::new("window-help-menu")}
                 label={"Help"}
                 bg={cx.theme().transparent}
-                textColor={rgb(CIPHER_MUTED)}
+                textColor={rgb(CIPHER_FOREGROUND_MUTED)}
                 border_0
                 // Keep title-bar controls out of the vault form's tab order; Ctrl+P
                 // provides the keyboard route to every native window command.
@@ -378,7 +375,7 @@ impl WindowControls {
                         bg={cx.theme().transparent}
                         border_0
                     >
-                        {icon(IconName::WindowMinimize, Some(12.), Some(rgb(CIPHER_MUTED).into()))}
+                        {icon(IconName::WindowMinimize, Some(12.), Some(rgb(CIPHER_FOREGROUND_MUTED).into()))}
                     </Button>
                     <Button
                         base={Button::new("window-maximize")}
@@ -387,7 +384,7 @@ impl WindowControls {
                         border_0
                         onClick={self.command_callback(WindowCommand::ToggleMaximize, cx)}
                     >
-                        {icon(IconName::WindowMaximize, Some(12.), Some(rgb(CIPHER_MUTED).into()))}
+                        {icon(IconName::WindowMaximize, Some(12.), Some(rgb(CIPHER_FOREGROUND_MUTED).into()))}
                     </Button>
                     <Button
                         base={Button::new("window-close")}

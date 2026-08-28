@@ -2,7 +2,8 @@
 //! Pencil "Nox — Home" frame carries no brand mark inside the sidebar itself
 //! (only the title bar's small logo), so this doesn't render one either.
 
-use super::{Nox, settings};
+use crate::app::Nox;
+use crate::settings;
 use gpui::{AnyElement, Context, FontWeight, Window, div, prelude::*, px, rgb};
 use gpui_component::{
     Icon,
@@ -70,8 +71,8 @@ impl Nox {
                 id="app-sidebar"
                 flex flex_col
                 w={px(224.)} h_full flex_shrink_0
-                bg={rgb(super::CIPHER_BACKGROUND)}
-                border_r_1 borderColor={rgb(super::CIPHER_BORDER)}
+                bg={rgb(crate::theme::CIPHER_BACKGROUND)}
+                border_r_1 borderColor={rgb(crate::theme::CIPHER_BORDER)}
                 px={px(14.)} pt={px(16.)} pb={px(16.)}
             >
                 <div flex flex_col gap={px(SIDEBAR_ROW_GAP)}>
@@ -125,7 +126,7 @@ fn sidebar_section_label(label: &'static str) -> AnyElement {
     div()
         .text_size(px(SIDEBAR_SECTION_LABEL_SIZE))
         .font_weight(FontWeight(700.))
-        .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
+        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
         .child(label)
         .into_any_element()
 }
@@ -141,9 +142,9 @@ fn sidebar_row_content(
     full_width: bool,
 ) -> AnyElement {
     let color = rgb(if active {
-        super::CIPHER_FOREGROUND_SECONDARY
+        crate::theme::CIPHER_FOREGROUND_SECONDARY
     } else {
-        super::CIPHER_FOREGROUND_MUTED
+        crate::theme::CIPHER_FOREGROUND_MUTED
     });
     div()
         .flex()
@@ -200,21 +201,21 @@ fn sidebar_link(
     cx: &mut Context<Nox>,
 ) -> AnyElement {
     let resting_bg = if active {
-        super::CIPHER_SURFACE_RAISED
+        crate::theme::CIPHER_SURFACE_RAISED
     } else {
-        super::CIPHER_BACKGROUND
+        crate::theme::CIPHER_BACKGROUND
     };
     let foreground = if active {
-        super::CIPHER_FOREGROUND_SECONDARY
+        crate::theme::CIPHER_FOREGROUND_SECONDARY
     } else {
-        super::CIPHER_FOREGROUND_MUTED
+        crate::theme::CIPHER_FOREGROUND_MUTED
     };
     // The user asked for hover to look exactly like the active state, so the
     // hover/active colors are the active background regardless of `active`.
     let variant = ButtonCustomVariant::new(cx)
         .color(rgb(resting_bg).into())
-        .hover(rgb(super::CIPHER_SURFACE_RAISED).into())
-        .active(rgb(super::CIPHER_SURFACE_RAISED).into())
+        .hover(rgb(crate::theme::CIPHER_SURFACE_RAISED).into())
+        .active(rgb(crate::theme::CIPHER_SURFACE_RAISED).into())
         .foreground(rgb(foreground).into());
     Button::new(id)
         .custom(variant)
@@ -246,8 +247,8 @@ fn sidebar_static_item(icon_path: &'static str, label: &'static str) -> AnyEleme
                 .ml(px(8.))
                 .text_size(px(10.))
                 .font_weight(FontWeight(600.))
-                .text_color(rgb(super::CIPHER_FOREGROUND_MUTED))
-                .bg(rgb(super::CIPHER_SURFACE_RAISED))
+                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_MUTED))
+                .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
                 .rounded(px(4.))
                 .px(px(6.))
                 .py(px(2.))

@@ -1,5 +1,5 @@
-use super::super::Nox;
 use super::Settings;
+use crate::app::Nox;
 use gpui::{
     Animation, AnimationExt, AnyElement, App, BoxShadow, Entity, FontWeight, MouseButton, Window,
     div, ease_out_quint, point, prelude::*, px, rgb, rgba,

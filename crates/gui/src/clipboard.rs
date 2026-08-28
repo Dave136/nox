@@ -1,4 +1,4 @@
-use super::Nox;
+use crate::app::Nox;
 use gpui::{ClipboardItem, Context, Task, Window};
 use nox_core::{ItemId, SecretBytes};
 use std::time::Duration;
@@ -50,7 +50,7 @@ impl Nox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(&self.state, super::AppState::Unlocked(_)) {
+        if !matches!(&self.state, crate::app::AppState::Unlocked(_)) {
             return;
         }
         let Some(value) = self
@@ -72,7 +72,7 @@ impl Nox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(&self.state, super::AppState::Unlocked(_)) {
+        if !matches!(&self.state, crate::app::AppState::Unlocked(_)) {
             return;
         }
         let Some(value) = self
@@ -94,7 +94,7 @@ impl Nox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(&self.state, super::AppState::Unlocked(_)) {
+        if !matches!(&self.state, crate::app::AppState::Unlocked(_)) {
             return;
         }
         let Some(value) = self

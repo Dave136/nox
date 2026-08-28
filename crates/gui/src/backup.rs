@@ -1,15 +1,16 @@
-use super::{
-    AppState, CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_BORDER_STRONG, CIPHER_DANGER,
-    CIPHER_DISABLED, CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED, CIPHER_FOREGROUND_SECONDARY,
+use crate::app::{AppState, Nox, animated_auth_button};
+use crate::theme::{
+    self, CIPHER_BACKGROUND, CIPHER_BORDER, CIPHER_BORDER_STRONG, CIPHER_DANGER, CIPHER_DISABLED,
+    CIPHER_FOREGROUND, CIPHER_FOREGROUND_MUTED, CIPHER_FOREGROUND_SECONDARY,
     CIPHER_FOREGROUND_SOFT, CIPHER_FOREGROUND_SUBTLE, CIPHER_PRIMARY, CIPHER_SURFACE,
-    CIPHER_SURFACE_RAISED, Nox, animated_auth_button,
+    CIPHER_SURFACE_RAISED,
 };
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent,
     PathPromptOptions, SharedString, Task, Window, div, ease_out_quint, prelude::*, px, rgb,
 };
 use gpui_component::{
-    Disableable, Theme, ThemeMode, WindowExt,
+    Disableable, ThemeMode, WindowExt,
     button::Button,
     input::{Input, InputState},
 };
@@ -147,7 +148,7 @@ impl Nox {
             AppState::NoVault | AppState::RegistryError | AppState::Locked => ThemeMode::Dark,
             AppState::Unlocked(_) => ThemeMode::Light,
         };
-        Theme::change(mode, Some(window), cx);
+        theme::apply(mode, Some(window), cx);
         if let Some(focus) = self.backup.restore_prior_focus.take() {
             focus.focus(window, cx);
         }
@@ -433,7 +434,7 @@ impl Nox {
             new_master_confirmation: new_master_confirmation.clone(),
             archive_path: archive_path.clone(),
         });
-        Theme::change(ThemeMode::Dark, Some(window), cx);
+        theme::apply(ThemeMode::Dark, Some(window), cx);
         Self::focus_input(&backup_password, window, cx);
         cx.notify();
     }
@@ -489,7 +490,7 @@ impl Nox {
         self.discard_clipboard_state(cx);
         self.vault_list = None;
         self.item_editor = None;
-        self.conflicts = super::conflicts::ConflictState::Closed;
+        self.conflicts = crate::conflicts::ConflictState::Closed;
         self.conflicts_open = false;
         if let AppState::Unlocked(vault) = std::mem::replace(&mut self.state, AppState::Locked) {
             vault.lock();
@@ -579,7 +580,7 @@ impl Nox {
             AppState::NoVault | AppState::RegistryError | AppState::Locked => ThemeMode::Dark,
             AppState::Unlocked(_) => ThemeMode::Light,
         };
-        Theme::change(mode, Some(window), cx);
+        theme::apply(mode, Some(window), cx);
         self.backup.task = Task::ready(());
         cx.notify();
     }

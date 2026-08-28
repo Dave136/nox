@@ -1,4 +1,4 @@
-use super::{AppState, Nox};
+use crate::app::{AppState, Nox};
 use gpui::{AnyElement, Context, FontWeight, SharedString, Window, div, prelude::*, px};
 use gpui_component::{
     ActiveTheme, Disableable, Sizable,
@@ -205,7 +205,7 @@ impl Nox {
                 list.add_deleted(item_id);
                 list.selected = None;
                 if let Some(editor) = self.item_editor.as_ref()
-                    && matches!(editor.mode, super::item_editor::EditorMode::Edit(id) | super::item_editor::EditorMode::Restore(id) if id == item_id)
+                    && matches!(editor.mode, crate::item_editor::EditorMode::Edit(id) | crate::item_editor::EditorMode::Restore(id) if id == item_id)
                 {
                     self.item_editor = None;
                 }

@@ -1,5 +1,15 @@
 mod app;
 mod assets;
+mod backup;
+mod clipboard;
+mod conflicts;
+mod detail;
+mod item_editor;
+mod nav;
+mod settings;
+mod theme;
+mod ui;
+mod vault_list;
 mod vaults;
 
 use gpui::{AppContext, WindowDecorations, WindowOptions};

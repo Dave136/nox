@@ -3,9 +3,9 @@
 //! Matches the Pencil "All Items Detail Pane" frame — both states: "No
 //! Selection" (nothing picked yet) and the filled layout below.
 
-use super::Nox;
-use super::clipboard::CopyField;
-use super::vault_list;
+use crate::app::Nox;
+use crate::clipboard::CopyField;
+use crate::vault_list;
 use gpui::{
     AnyElement, App, ClickEvent, Context, FontWeight, Hsla, SharedString, Window, div, prelude::*,
     px, rgb,
@@ -22,9 +22,9 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let foreground: Hsla = rgb(super::CIPHER_FOREGROUND).into();
-        let muted_foreground: Hsla = rgb(super::CIPHER_FOREGROUND_SUBTLE).into();
-        let accent: Hsla = rgb(super::CIPHER_FOREGROUND_SECONDARY).into();
+        let foreground: Hsla = rgb(crate::theme::CIPHER_FOREGROUND).into();
+        let muted_foreground: Hsla = rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE).into();
+        let accent: Hsla = rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY).into();
 
         let card = |content: AnyElement| {
             div()
@@ -35,9 +35,9 @@ impl Nox {
                 .min_w(px(0.))
                 .h_full()
                 .rounded(px(9.))
-                .bg(rgb(super::CIPHER_SURFACE))
+                .bg(rgb(crate::theme::CIPHER_SURFACE))
                 .border_1()
-                .border_color(rgb(super::CIPHER_BORDER))
+                .border_color(rgb(crate::theme::CIPHER_BORDER))
                 .overflow_hidden()
                 .child(content)
         };
@@ -87,7 +87,7 @@ impl Nox {
                             .bg(rgb(if payload.item_type == ItemType::SecureNote {
                                 0x282D35
                             } else {
-                                super::CIPHER_SURFACE_RAISED
+                                crate::theme::CIPHER_SURFACE_RAISED
                             }))
                             .flex()
                             .items_center()
@@ -138,7 +138,7 @@ impl Nox {
                     .h(px(40.))
                     .w_full()
                     .rounded(px(7.))
-                    .bg(rgb(super::CIPHER_FOREGROUND))
+                    .bg(rgb(crate::theme::CIPHER_FOREGROUND))
                     .on_click(move |_, window, app| {
                         copy_note_locker
                             .update(app, |locker, cx| locker.copy_note(item_id, window, cx));
@@ -153,13 +153,13 @@ impl Nox {
                                 gpui_component::Icon::empty()
                                     .path("icons/copy.svg")
                                     .size(px(14.))
-                                    .text_color(rgb(super::CIPHER_BACKGROUND)),
+                                    .text_color(rgb(crate::theme::CIPHER_BACKGROUND)),
                             )
                             .child(
                                 div()
                                     .text_size(px(10.))
                                     .font_weight(FontWeight(650.))
-                                    .text_color(rgb(super::CIPHER_BACKGROUND))
+                                    .text_color(rgb(crate::theme::CIPHER_BACKGROUND))
                                     .child(if copied {
                                         "Copied!"
                                     } else {
@@ -185,7 +185,7 @@ impl Nox {
                         .h(px(38.))
                         .w_full()
                         .rounded(px(7.))
-                        .bg(rgb(super::CIPHER_PRIMARY))
+                        .bg(rgb(crate::theme::CIPHER_PRIMARY))
                         .on_click(move |_, _window, app| app.open_url(&open_uri))
                         .child(
                             div()
@@ -197,13 +197,13 @@ impl Nox {
                                     gpui_component::Icon::empty()
                                         .path("icons/external-link.svg")
                                         .size(px(14.))
-                                        .text_color(rgb(super::CIPHER_BACKGROUND)),
+                                        .text_color(rgb(crate::theme::CIPHER_BACKGROUND)),
                                 )
                                 .child(
                                     div()
                                         .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(rgb(super::CIPHER_BACKGROUND))
+                                        .text_color(rgb(crate::theme::CIPHER_BACKGROUND))
                                         .child(format!("Open {host}")),
                                 ),
                         ),
@@ -222,7 +222,7 @@ impl Nox {
                 feedback == Some((item_id, CopyField::Username)),
                 foreground,
                 accent,
-                super::CIPHER_FOREGROUND, // bright: copy is the only action here
+                crate::theme::CIPHER_FOREGROUND, // bright: copy is the only action here
                 move |_, window, app| {
                     username_locker
                         .update(app, |locker, cx| locker.copy_username(item_id, window, cx));
@@ -248,7 +248,7 @@ impl Nox {
                         } else {
                             "icons/eye.svg"
                         })
-                        .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE)),
+                        .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE)),
                 )
                 .on_click(move |_, _window, app| {
                     reveal_locker.update(app, |locker, cx| {
@@ -264,7 +264,7 @@ impl Nox {
                 feedback == Some((item_id, CopyField::Password)),
                 foreground,
                 accent,
-                super::CIPHER_FOREGROUND, // bright: copy is the primary action, reveal is secondary
+                crate::theme::CIPHER_FOREGROUND, // bright: copy is the primary action, reveal is secondary
                 move |_, window, app| {
                     password_locker
                         .update(app, |locker, cx| locker.copy_password(item_id, window, cx));
@@ -280,7 +280,7 @@ impl Nox {
                     .icon(
                         gpui_component::Icon::empty()
                             .path("icons/external-link.svg")
-                            .text_color(rgb(super::CIPHER_FOREGROUND)),
+                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND)),
                     )
                     .on_click(move |_, _window, app| app.open_url(&uri_for_open));
                 let uri_for_copy = uri.clone();
@@ -292,7 +292,7 @@ impl Nox {
                     feedback == Some((item_id, CopyField::Uri(index))),
                     foreground,
                     accent,
-                    super::CIPHER_FOREGROUND_SUBTLE, // muted: opening is the primary action here
+                    crate::theme::CIPHER_FOREGROUND_SUBTLE, // muted: opening is the primary action here
                     move |_, window, app| {
                         let uri = uri_for_copy.clone();
                         uri_locker.update(app, |locker, cx| {
@@ -347,9 +347,9 @@ impl Nox {
                             .rounded(px(8.))
                             .bg(rgb(0x20242A))
                             .border_1()
-                            .border_color(rgb(super::CIPHER_BORDER))
+                            .border_color(rgb(crate::theme::CIPHER_BORDER))
                             .text_size(px(12.))
-                            .text_color(rgb(super::CIPHER_FOREGROUND_SOFT))
+                            .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SOFT))
                             .child(if payload.notes.is_empty() {
                                 "No note contents".to_owned()
                             } else {
@@ -387,10 +387,10 @@ impl Nox {
             .gap(px(10.))
             .pt(px(4.))
             .border_t_1()
-            .border_color(rgb(super::CIPHER_BORDER))
+            .border_color(rgb(crate::theme::CIPHER_BORDER))
             .child(metadata_row(
                 "Last modified",
-                super::relative_time(payload.updated_at),
+                crate::app::relative_time(payload.updated_at),
             ))
             .child(metadata_row("Created", absolute_date(payload.created_at)));
         if payload.item_type == ItemType::Login {
@@ -426,7 +426,7 @@ impl Nox {
                     "detail-edit-item",
                     "icons/pencil.svg",
                     edit_label,
-                    super::CIPHER_FOREGROUND_SECONDARY,
+                    crate::theme::CIPHER_FOREGROUND_SECONDARY,
                     move |_, window, app| {
                         edit_locker.update(app, |locker, cx| {
                             locker.open_editor_for_item(item_id, false, window, cx)
@@ -437,7 +437,7 @@ impl Nox {
                     "detail-duplicate-item",
                     "icons/copy-plus.svg",
                     duplicate_label,
-                    super::CIPHER_FOREGROUND_SECONDARY,
+                    crate::theme::CIPHER_FOREGROUND_SECONDARY,
                     move |_, _window, app| {
                         duplicate_locker
                             .update(app, |locker, cx| locker.duplicate_item(item_id, cx));
@@ -447,7 +447,7 @@ impl Nox {
                     "detail-delete-item",
                     "icons/trash-2.svg",
                     delete_label,
-                    super::CIPHER_DANGER,
+                    crate::theme::CIPHER_DANGER,
                     move |_, window, app| {
                         delete_locker.update(app, |locker, cx| {
                             locker.open_delete_confirmation(item_id, window, cx)
@@ -471,7 +471,7 @@ fn field_label(text: &'static str) -> impl IntoElement {
 }
 
 fn metadata_row(label: &'static str, value: String) -> AnyElement {
-    metadata_row_colored(label, &value, super::CIPHER_FOREGROUND_SECONDARY)
+    metadata_row_colored(label, &value, crate::theme::CIPHER_FOREGROUND_SECONDARY)
 }
 
 fn metadata_row_colored(label: &'static str, value: &str, value_color: u32) -> AnyElement {
@@ -482,7 +482,7 @@ fn metadata_row_colored(label: &'static str, value: &str, value_color: u32) -> A
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
                 .child(label),
         )
         .child(
@@ -517,7 +517,7 @@ fn footer_button(
         .flex_1()
         .h(px(34.))
         .rounded(px(7.))
-        .bg(rgb(super::CIPHER_SURFACE_RAISED))
+        .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
         .on_click(on_click)
         .child(
             div()
@@ -559,7 +559,7 @@ fn empty_panel() -> AnyElement {
                         .size(px(52.))
                         .flex_shrink_0()
                         .rounded(px(12.))
-                        .bg(rgb(super::CIPHER_SURFACE_RAISED))
+                        .bg(rgb(crate::theme::CIPHER_SURFACE_RAISED))
                         .border_1()
                         .border_color(rgb(0x353C47))
                         .flex()
@@ -569,7 +569,7 @@ fn empty_panel() -> AnyElement {
                             gpui_component::Icon::empty()
                                 .path("icons/mouse-pointer-2.svg")
                                 .size(px(22.))
-                                .text_color(rgb(super::CIPHER_FOREGROUND_SECONDARY)),
+                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SECONDARY)),
                         ),
                 )
                 .child(
@@ -582,14 +582,14 @@ fn empty_panel() -> AnyElement {
                             div()
                                 .text_lg()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(super::CIPHER_FOREGROUND))
+                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND))
                                 .child("Select an item"),
                         )
                         .child(
                             div()
                                 .text_sm()
                                 .text_center()
-                                .text_color(rgb(super::CIPHER_FOREGROUND_SUBTLE))
+                                .text_color(rgb(crate::theme::CIPHER_FOREGROUND_SUBTLE))
                                 .child(
                                     "Choose an item from the list to view its details, reveal fields, or copy credentials.",
                                 ),
@@ -628,12 +628,12 @@ fn empty_panel() -> AnyElement {
                             gpui_component::Icon::empty()
                                 .path("icons/search.svg")
                                 .size(px(13.))
-                                .text_color(rgb(super::CIPHER_DISABLED)),
+                                .text_color(rgb(crate::theme::CIPHER_DISABLED)),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(rgb(super::CIPHER_DISABLED))
+                                .text_color(rgb(crate::theme::CIPHER_DISABLED))
                                 .child("Press Ctrl+P to search your vault"),
                         ),
                 ),
@@ -694,7 +694,7 @@ fn copy_row(
                 .rounded(px(7.))
                 .bg(rgb(0x20242A))
                 .border_1()
-                .border_color(rgb(super::CIPHER_BORDER))
+                .border_color(rgb(crate::theme::CIPHER_BORDER))
                 .on_click(on_click)
                 .child(
                     div()
