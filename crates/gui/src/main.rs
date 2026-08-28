@@ -16,6 +16,11 @@ fn window_options() -> WindowOptions {
     WindowOptions {
         titlebar: None,
         window_decorations: Some(WindowDecorations::Client),
+        // Identifies the window to the desktop environment (X11 WM_CLASS /
+        // Wayland xdg_toplevel app_id). Without this, DEs can't match the
+        // window to a .desktop entry and show a generic icon + "Unknown".
+        // Must match the `.desktop` file's name (see packaging/nox.desktop).
+        app_id: Some("nox".into()),
         ..Default::default()
     }
 }

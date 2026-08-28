@@ -494,31 +494,6 @@ fn metadata_row_colored(label: &'static str, value: &str, value_color: u32) -> A
         .into_any_element()
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn detail_card_fills_the_remaining_split_workspace_width() {
-        let source = include_str!("detail.rs");
-        let card_start = source.find("let card = |content").expect("detail card");
-        let card = &source[card_start
-            ..source[card_start..]
-                .find("let Some((item_id, payload))")
-                .expect("detail card end")
-                + card_start];
-
-        assert!(card.contains(".flex_1()"));
-        assert!(card.contains(".min_w(px(0.))"));
-        assert!(!card.contains(".w(px(428.))"));
-    }
-
-    #[test]
-    fn secure_note_detail_renders_a_real_copy_contents_button() {
-        let source = include_str!("detail.rs");
-        assert!(source.contains("Button::new(\"copy-note-contents\")"));
-        assert!(source.contains("locker.copy_note(item_id, window, cx)"));
-    }
-}
-
 /// `12 Jan 2024` — chrono handles the calendar math (leap years, month
 /// lengths) correctly rather than hand-rolling it.
 fn absolute_date(created_at_ms: u64) -> String {
@@ -749,4 +724,29 @@ fn copy_row(
                 ),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn detail_card_fills_the_remaining_split_workspace_width() {
+        let source = include_str!("detail.rs");
+        let card_start = source.find("let card = |content").expect("detail card");
+        let card = &source[card_start
+            ..source[card_start..]
+                .find("let Some((item_id, payload))")
+                .expect("detail card end")
+                + card_start];
+
+        assert!(card.contains(".flex_1()"));
+        assert!(card.contains(".min_w(px(0.))"));
+        assert!(!card.contains(".w(px(428.))"));
+    }
+
+    #[test]
+    fn secure_note_detail_renders_a_real_copy_contents_button() {
+        let source = include_str!("detail.rs");
+        assert!(source.contains("Button::new(\"copy-note-contents\")"));
+        assert!(source.contains("locker.copy_note(item_id, window, cx)"));
+    }
 }

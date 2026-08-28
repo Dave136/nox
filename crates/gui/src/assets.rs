@@ -109,7 +109,7 @@ pub fn icon(name: IconName, size: Option<f32>, color: Option<Hsla>) -> Svg {
         .h(size
             .map(|s| rems(s / DEFAULT_FONT_SIZE))
             .unwrap_or(rems(16.0 / DEFAULT_FONT_SIZE)))
-        .text_color(color.map_or(hsla(0., 0., 0., 1.), |c| c.into()))
+        .text_color(color.map_or(hsla(0., 0., 0., 1.), |c| c))
 }
 
 pub fn logo(size: f32, color: Hsla) -> Svg {

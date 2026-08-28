@@ -44,7 +44,7 @@ pub(crate) fn render_settings_modal(
         .justify_center()
         .bg(rgba(MODAL_BACKDROP))
         .on_mouse_down(MouseButton::Left, move |_, window, app| {
-            let _ = close_locker.update(app, |locker, cx| {
+            close_locker.update(app, |locker, cx| {
                 locker.close_settings_dialog(window, cx);
             });
         })
@@ -186,7 +186,7 @@ pub(crate) fn render_settings_dialog(
                         .text_color(rgb(MUTED)),
                 )
                 .on_click(move |_, window, cx| {
-                    let _ = close_locker.update(cx, |locker, cx| {
+                    close_locker.update(cx, |locker, cx| {
                         locker.close_settings_dialog(window, cx);
                     });
                 })
@@ -296,7 +296,7 @@ fn navigation_item(
                 .child(label),
         )
         .on_click(move |_, _, app| {
-            let _ = locker.update(app, |locker, cx| {
+            locker.update(app, |locker, cx| {
                 locker.settings_section = section;
                 cx.notify();
             });
@@ -440,7 +440,7 @@ fn update_settings<F>(locker: Entity<Locker>, window: &mut Window, app: &mut App
 where
     F: FnOnce(&mut Settings),
 {
-    let _ = locker.update(app, |locker, cx| {
+    locker.update(app, |locker, cx| {
         let mut settings = locker.settings.clone();
         change(&mut settings);
         locker.update_settings(settings, window, cx);
@@ -833,14 +833,14 @@ fn vault_section(locker: Entity<Locker>, conflict_count: usize) -> AnyElement {
                     "settings-restore-backup",
                     "Restore",
                     move |window, app| {
-                        let _ = restore.update(app, |locker, cx| locker.begin_restore(window, cx));
+                        restore.update(app, |locker, cx| locker.begin_restore(window, cx));
                     },
                 ))
                 .child(action_button(
                     "settings-export-backup",
                     "Export",
                     move |window, app| {
-                        let _ = export.update(app, |locker, cx| locker.begin_export(window, cx));
+                        export.update(app, |locker, cx| locker.begin_export(window, cx));
                     },
                 ))
                 .into_any_element(),
@@ -853,7 +853,7 @@ fn vault_section(locker: Entity<Locker>, conflict_count: usize) -> AnyElement {
                 "settings-conflicts",
                 &format!("Review ({conflict_count})"),
                 move |window, app| {
-                    let _ = conflicts.update(app, |locker, cx| {
+                    conflicts.update(app, |locker, cx| {
                         locker.open_conflicts(window, cx);
                         locker.close_settings_dialog(window, cx);
                     });
@@ -881,7 +881,7 @@ fn import_export_section(locker: Entity<Locker>) -> AnyElement {
                 "settings-export-archive",
                 "Export backup",
                 move |window, app| {
-                    let _ = export.update(app, |locker, cx| locker.begin_export(window, cx));
+                    export.update(app, |locker, cx| locker.begin_export(window, cx));
                 },
             ),
         ))
@@ -893,7 +893,7 @@ fn import_export_section(locker: Entity<Locker>) -> AnyElement {
                 "settings-restore-archive",
                 "Restore backup",
                 move |window, app| {
-                    let _ = restore.update(app, |locker, cx| locker.begin_restore(window, cx));
+                    restore.update(app, |locker, cx| locker.begin_restore(window, cx));
                 },
             ),
         ))

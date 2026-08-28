@@ -1,6 +1,6 @@
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Keystroke, MouseButton, MouseDownEvent, Window,
-    actions, div, hsla, prelude::*, px, rgb,
+    actions, div, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt,

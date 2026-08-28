@@ -3,6 +3,10 @@ name = "gui"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "nox"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
