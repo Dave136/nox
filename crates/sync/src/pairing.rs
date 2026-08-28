@@ -1,7 +1,7 @@
 //! Bounded SPAKE2 pairing and one-shot device onboarding.
 //!
 //! The module intentionally owns the wire codec and crypto session.  SQLite
-//! work stays behind `locker_core::PairingStoreHandle` and is run in a
+//! work stays behind `nox_core::PairingStoreHandle` and is run in a
 //! blocking task by the state machines below.
 
 use chacha20poly1305::{
@@ -10,7 +10,7 @@ use chacha20poly1305::{
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-use locker_core::{
+use nox_core::{
     DeviceId, DeviceIdentity, Hlc, MAX_MEMBERSHIP_RECORD_BYTES, MAX_MEMBERSHIP_RECORDS,
     MembershipAcceptance, MembershipRecord, MembershipRecordHash, PairingStore,
     PairingVaultPackage, SecretBytes, Vault, VaultError, VaultId,
@@ -318,7 +318,7 @@ impl From<VaultError> for PairingError {
 #[must_use]
 pub fn locator_for(instance: PairingInstanceId) -> [u8; 5] {
     let mut h = Sha256::new();
-    h.update(b"LOCKER-PAIR-LOCATOR\0");
+    h.update(b"NOX-PAIR-LOCATOR\0");
     h.update(instance.0);
     let digest = h.finalize();
     let value = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) >> 7;
@@ -369,9 +369,9 @@ fn clear_offer_secrets(offer: &mut PairingOffer) {
 fn id_bytes(role: u8, instance: PairingInstanceId) -> Vec<u8> {
     let mut out = Vec::with_capacity(16 + 2 + 16);
     out.extend_from_slice(if role == 0 {
-        b"LOCKER-PAIR-A\0"
+        b"NOX-PAIR-A\0"
     } else {
-        b"LOCKER-PAIR-B\0"
+        b"NOX-PAIR-B\0"
     });
     out.extend_from_slice(&VERSION.to_le_bytes());
     out.extend_from_slice(&instance.0);
@@ -379,7 +379,7 @@ fn id_bytes(role: u8, instance: PairingInstanceId) -> Vec<u8> {
 }
 fn transcript(instance: PairingInstanceId, a: &[u8], b: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();
-    h.update(b"LOCKER-PAIR-TRANSCRIPT\0");
+    h.update(b"NOX-PAIR-TRANSCRIPT\0");
     h.update(VERSION.to_le_bytes());
     h.update(instance.0);
     let id_a = id_bytes(0, instance);
@@ -406,7 +406,7 @@ fn derive_keys(
     let hk = Hkdf::<Sha256>::new(Some(&transcript_hash), shared);
     let get = |label: &[u8], n: usize| -> Result<Vec<u8>, PairingError> {
         let mut info = Vec::with_capacity(32);
-        info.extend_from_slice(b"LOCKER-PAIR-KEYS\0");
+        info.extend_from_slice(b"NOX-PAIR-KEYS\0");
         info.extend_from_slice(&VERSION.to_le_bytes());
         info.extend_from_slice(&instance.0);
         info.extend_from_slice(label);
@@ -507,7 +507,7 @@ fn nonce(prefix: &[u8; 16], seq: u64) -> [u8; 24] {
 }
 fn aad(instance: PairingInstanceId, direction: u8, seq: u64, tag: u8) -> Vec<u8> {
     let mut out = Vec::with_capacity(40);
-    out.extend_from_slice(b"LOCKER-PAIR-AEAD\0");
+    out.extend_from_slice(b"NOX-PAIR-AEAD\0");
     out.extend_from_slice(&VERSION.to_le_bytes());
     out.extend_from_slice(&instance.0);
     out.push(direction);
@@ -1329,7 +1329,7 @@ where
     }
     let package = PairingVaultPackage {
         vault_id,
-        dek: locker_core::Dek::from_bytes(*dek),
+        dek: nox_core::Dek::from_bytes(*dek),
         records,
         admission_hash,
         inviter_device_id,
@@ -1429,7 +1429,7 @@ mod tests {
             PairingInstanceId::from_bytes([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
         let hash = transcript(instance, &[1, 2, 3], &[4, 5]);
         let expected_hash: [u8; 32] =
-            hex_bytes("2a6df87c9d94e9e8a9c5c2a461ad0bc751e110dd8377b6baa69ed8462149ed39")
+            hex_bytes("e44549c8020745a7a5d3c51b061a672b58a5b12881e00d8c934695a3703d54f6")
                 .try_into()
                 .unwrap();
         assert_eq!(hash, expected_hash);
@@ -1438,27 +1438,27 @@ mod tests {
         let keys = derive_keys(instance, hash, &shared).unwrap();
         assert_eq!(
             &keys.confirm_a[..],
-            hex_bytes("c277efe3f39497a7dcde232b7bce3af3d28116436d1f091e864b6a064282f4db")
+            hex_bytes("0098a7e6290815913c04c38177bc38f7fb019ee0e4122414f194fcd06082e437")
         );
         assert_eq!(
             &keys.confirm_b[..],
-            hex_bytes("9199a340e5618ab8b4f8afca12e9de0d36e0ec5b6004fc16685b949a7c0ad797")
+            hex_bytes("ab040f2b7b03059abc54757e9ad2999c41642ab855925e5f87d2009c603d26cb")
         );
         assert_eq!(
             &keys.a_to_b[..],
-            hex_bytes("417a932def5af08a3297e6d1b891eab0332fdd68479eaccbbeb0ce771c4ac7d0")
+            hex_bytes("37d3ea40efa1397fb040d5623ad9c2d25288a9f435ea8a9a8f04a428e7113656")
         );
         assert_eq!(
             &keys.b_to_a[..],
-            hex_bytes("fbd19ebd8501f9db40125014e80cb98d792d040396320348c354016b59cffaf4")
+            hex_bytes("cfc9742e26701e73f2ce873562bcada5615905691148b46ea0c0b23c189cbf53")
         );
         assert_eq!(
             &keys.nonce_a_to_b[..],
-            hex_bytes("a70caa06ae64c7c0c99a1221d8afdebc")
+            hex_bytes("5877875700152cf4ff2a11a283f60bac")
         );
         assert_eq!(
             &keys.nonce_b_to_a[..],
-            hex_bytes("9af709c4636fa268c8a22334f0ccb650")
+            hex_bytes("0647cc38f0b27cdfa5dee37c4d3fd9eb")
         );
 
         let expected_nonce: [u8; 24] =
@@ -1477,7 +1477,7 @@ mod tests {
         assert_eq!(
             aad(instance, 1, 0x0102_0304_0506_0708, 9),
             hex_bytes(
-                "4c4f434b45522d504149522d41454144000100000102030405060708090a0b0c0d0e0f01080706050403020109"
+                "4e4f582d504149522d41454144000100000102030405060708090a0b0c0d0e0f01080706050403020109"
             )
         );
     }

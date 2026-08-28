@@ -344,7 +344,7 @@ mod task7_tests {
     fn v1_archive_is_reported_as_unsupported() {
         let archive = path("v1-archive").with_extension("lockbak");
         let destination = path("v1-destination").join("vault.db");
-        let mut bytes = b"LOCKBAK1".to_vec();
+        let mut bytes = b"NOXBACK1".to_vec();
         bytes.resize(64, 0);
         fs::write(&archive, bytes).unwrap();
         assert!(matches!(

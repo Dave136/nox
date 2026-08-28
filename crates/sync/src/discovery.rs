@@ -4,7 +4,7 @@
 //! is untrusted until membership authorization and the authenticated sync
 //! handshakes accept it.
 
-use locker_core::DeviceId;
+use nox_core::DeviceId;
 use mdns_sd::{
     DaemonEvent, DaemonStatus, Receiver, ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent,
     ServiceInfo,
@@ -21,7 +21,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-pub const SERVICE_TYPE: &str = "_locker._tcp.local.";
+pub const SERVICE_TYPE: &str = "_nox._tcp.local.";
 pub const MAX_DISCOVERED_ENDPOINTS: usize = 128;
 pub const MAX_TXT_VALUE_BYTES: usize = 128;
 
@@ -557,7 +557,7 @@ impl DiscoveryService {
         let health_receiver = daemon
             .monitor()
             .map_err(|_| DiscoveryError::DaemonUnavailable)?;
-        let host_name = format!("{}.local.", random_label("locker-host")?);
+        let host_name = format!("{}.local.", random_label("nox-host")?);
         Ok(Self {
             daemon,
             host_name,
@@ -588,7 +588,7 @@ impl DiscoveryService {
         {
             return Err(DiscoveryError::InvalidAdvertisement("TXT value length"));
         }
-        let instance_name = random_label("locker")?;
+        let instance_name = random_label("nox")?;
         let service = ServiceInfo::new(
             SERVICE_TYPE,
             &instance_name,
@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn parser_validates_modes_hex_and_addresses() {
         let valid = service(
-            "one._locker._tcp.local.",
+            "one._nox._tcp.local.",
             &[("v", "1"), ("m", "s"), ("d", &"00".repeat(32))],
             &[IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))],
         );
@@ -853,22 +853,22 @@ mod tests {
 
         let invalid_cases = [
             service(
-                "bad._locker._tcp.local.",
+                "bad._nox._tcp.local.",
                 &[("v", "2"), ("m", "s"), ("d", &"00".repeat(32))],
                 &[IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))],
             ),
             service(
-                "bad._locker._tcp.local.",
+                "bad._nox._tcp.local.",
                 &[("v", "1"), ("m", "p"), ("d", &"00".repeat(32))],
                 &[IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))],
             ),
             service(
-                "bad._locker._tcp.local.",
+                "bad._nox._tcp.local.",
                 &[("v", "1"), ("m", "s"), ("d", "00")],
                 &[IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))],
             ),
             service(
-                "bad._locker._tcp.local.",
+                "bad._nox._tcp.local.",
                 &[("v", "1"), ("m", "s"), ("d", &"00".repeat(32))],
                 &[IpAddr::V4(Ipv4Addr::UNSPECIFIED)],
             ),
@@ -898,20 +898,20 @@ mod tests {
         let mut registry = CandidateRegistry::default();
         assert!(matches!(
             registry
-                .resolved(&service("a._locker._tcp.local.", &properties, &[address_a]))
+                .resolved(&service("a._nox._tcp.local.", &properties, &[address_a]))
                 .unwrap()
                 .as_slice(),
             [DiscoveryEvent::Found(_)]
         ));
         assert!(matches!(
             registry
-                .resolved(&service("b._locker._tcp.local.", &properties, &[address_b]))
+                .resolved(&service("b._nox._tcp.local.", &properties, &[address_b]))
                 .unwrap()
                 .as_slice(),
             [DiscoveryEvent::Updated(_)]
         ));
         let updated = registry
-            .resolved(&service("a._locker._tcp.local.", &properties, &[address_b]))
+            .resolved(&service("a._nox._tcp.local.", &properties, &[address_b]))
             .unwrap();
         let DiscoveryEvent::Updated(endpoint) = &updated[0] else {
             panic!("expected update");
@@ -920,11 +920,11 @@ mod tests {
             endpoint.addresses,
             vec!["192.168.1.3:7000".parse().unwrap()]
         );
-        let removed_a = registry.removed(SERVICE_TYPE, "a._locker._tcp.local.");
+        let removed_a = registry.removed(SERVICE_TYPE, "a._nox._tcp.local.");
         assert!(matches!(removed_a.as_slice(), [DiscoveryEvent::Updated(_)]));
         assert!(matches!(
             registry
-                .removed(SERVICE_TYPE, "b._locker._tcp.local.")
+                .removed(SERVICE_TYPE, "b._nox._tcp.local.")
                 .as_slice(),
             [DiscoveryEvent::Removed(DiscoveryKey::Member(_))]
         ));
@@ -937,7 +937,7 @@ mod tests {
         for value in 0..MAX_DISCOVERED_ENDPOINTS {
             let device = format!("{value:064x}");
             let properties = [("v", "1"), ("m", "s"), ("d", device.as_str())];
-            let fullname = format!("{value}._locker._tcp.local.");
+            let fullname = format!("{value}._nox._tcp.local.");
             assert_eq!(
                 registry
                     .resolved(&service(&fullname, &properties, &[address]))
@@ -950,7 +950,7 @@ mod tests {
         assert!(
             registry
                 .resolved(&service(
-                    "overflow._locker._tcp.local.",
+                    "overflow._nox._tcp.local.",
                     &properties,
                     &[address]
                 ))
@@ -969,7 +969,7 @@ mod tests {
         ];
         let properties = [("v", "1"), ("m", "p"), ("i", &"00".repeat(16))];
         let endpoint = parse_resolved_service(&service(
-            "pair._locker._tcp.local.",
+            "pair._nox._tcp.local.",
             &properties,
             &addresses,
         ))
@@ -1004,11 +1004,11 @@ mod tests {
 
         let registry = Arc::new(RegistrationRegistry::new());
         let first = Arc::new(Registration {
-            fullname: Mutex::new("first._locker._tcp.local.".to_owned()),
+            fullname: Mutex::new("first._nox._tcp.local.".to_owned()),
             active: AtomicBool::new(true),
         });
         let second = Arc::new(Registration {
-            fullname: Mutex::new("second._locker._tcp.local.".to_owned()),
+            fullname: Mutex::new("second._nox._tcp.local.".to_owned()),
             active: AtomicBool::new(true),
         });
         registry
@@ -1026,12 +1026,12 @@ mod tests {
         });
         assert_eq!(
             daemon.events.as_slice(),
-            ["unregister:first._locker._tcp.local.".to_owned()].as_slice()
+            ["unregister:first._nox._tcp.local.".to_owned()].as_slice()
         );
         assert!(!first.active.load(Ordering::Acquire));
 
         let names = take_active_registration_names(&registry).unwrap();
-        assert_eq!(names, ["second._locker._tcp.local."]);
+        assert_eq!(names, ["second._nox._tcp.local."]);
         for name in names {
             daemon.unregister(&name);
         }
@@ -1039,8 +1039,8 @@ mod tests {
         assert_eq!(
             daemon.events.as_slice(),
             [
-                "unregister:first._locker._tcp.local.".to_owned(),
-                "unregister:second._locker._tcp.local.".to_owned(),
+                "unregister:first._nox._tcp.local.".to_owned(),
+                "unregister:second._nox._tcp.local.".to_owned(),
                 "shutdown".to_owned(),
             ]
             .as_slice()

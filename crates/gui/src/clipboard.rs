@@ -1,6 +1,6 @@
 use super::Nox;
 use gpui::{ClipboardItem, Context, Task, Window};
-use locker_core::{ItemId, SecretBytes};
+use nox_core::{ItemId, SecretBytes};
 use std::time::Duration;
 
 pub const DEFAULT_CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -101,7 +101,7 @@ impl Nox {
             .vault_list
             .as_ref()
             .and_then(|list| list.items.iter().find(|(id, _)| *id == item_id))
-            .filter(|(_, payload)| payload.item_type == locker_core::ItemType::SecureNote)
+            .filter(|(_, payload)| payload.item_type == nox_core::ItemType::SecureNote)
             .map(|(_, payload)| payload.notes.clone())
             .filter(|value| !value.is_empty())
         else {

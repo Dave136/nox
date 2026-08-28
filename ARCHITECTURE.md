@@ -56,17 +56,17 @@ membership, but never item plaintext or secret keys.
 locker/
   Cargo.toml                 # workspace; Cargo.lock is committed
   crates/
-    locker-core/             # model, crypto, SQLite, revisions, merge rules
+    nox-core/             # model, crypto, SQLite, revisions, merge rules
     sync/                    # discovery, pairing, transport, replication
     gui/                     # GPUI binary and presentation only
 ```
 
-`locker-core` keeps its full name because a bare `core` crate would collide with
+`nox-core` keeps its full name because a bare `core` crate would collide with
 Rust's own `core` crate name; `sync` and `gui` are unambiguous on their own.
 
-### `locker-core`
+### `nox-core`
 
-`locker-core` has no networking. It owns:
+`nox-core` has no networking. It owns:
 
 - vault and item types;
 - key derivation, wrapping, encryption, and secret handling;
@@ -76,12 +76,12 @@ Rust's own `core` crate name; `sync` and `gui` are unambiguous on their own.
 - replication cursor persistence; and
 - encrypted backup and restore.
 
-A local edit or received change is applied through one `locker-core` transaction.
+A local edit or received change is applied through one `nox-core` transaction.
 The GUI and sync crate must not write database tables directly.
 
 ### `sync`
 
-`sync` depends on the public `locker-core` API. It owns:
+`sync` depends on the public `nox-core` API. It owns:
 
 - mDNS discovery;
 - pairing and vault admission;
@@ -586,7 +586,7 @@ inside these phases.
 
 ## Verification
 
-### `locker-core`
+### `nox-core`
 
 - Argon2id known vectors and stored-parameter compatibility.
 - DEK wrap/unwrap, item encryption, wrong-password, tamper, nonce, and AAD swap
@@ -718,9 +718,9 @@ document actually hold once real code is written.
   not as an afterthought.
 - **Batch, don't chat.** Replication sends bounded batches of changes, not
   one round-trip per change (already specified) — keep the same principle
-  inside `locker-core`: bulk-insert a restore/import journal in one
+  inside `nox-core`: bulk-insert a restore/import journal in one
   transaction, not one transaction per change.
-- **Never block the GPUI foreground executor.** Any `locker-core` or `sync`
+- **Never block the GPUI foreground executor.** Any `nox-core` or `sync`
   call that touches disk or network from a GUI callback must go through the
   async channel bridge already specified — no synchronous SQLite call
   directly on a GPUI view callback for anything larger than a single indexed

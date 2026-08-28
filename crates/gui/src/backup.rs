@@ -14,7 +14,7 @@ use gpui_component::{
     input::{Input, InputState},
 };
 use gpui_rsx::rsx;
-use locker_core::{
+use nox_core::{
     BackupError, MAX_BACKUP_PASSWORD_BYTES, RestoreResult, SecretBytes, restore_from_path,
 };
 use std::{
@@ -170,7 +170,7 @@ impl Nox {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        let receiver = cx.prompt_for_new_path(&directory, Some("locker-backup.lockbak"));
+        let receiver = cx.prompt_for_new_path(&directory, Some("nox-backup.lockbak"));
         self.backup.task = cx.spawn_in(window, async move |this, cx| {
             let result = receiver
                 .await

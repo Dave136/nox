@@ -1325,7 +1325,7 @@ pub fn membership_set_hash(
         .collect::<Result<Vec<MembershipRecordHash>, _>>()?;
     hashes.sort_unstable();
     let mut hasher = sha2::Sha256::new();
-    hasher.update(b"LOCKER-REPLICATION-MEMBERSHIP\0");
+    hasher.update(b"NOX-REPLICATION-MEMBERSHIP\0");
     for hash in hashes {
         hasher.update(hash.as_bytes());
     }

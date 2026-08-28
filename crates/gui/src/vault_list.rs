@@ -14,7 +14,7 @@ use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
 };
-use locker_core::{ItemId, ItemPayload, ItemType, VaultError};
+use nox_core::{ItemId, ItemPayload, ItemType, VaultError};
 use std::collections::HashSet;
 
 use crate::assets::{IconName, icon};
@@ -1192,7 +1192,7 @@ mod tests {
 
     fn login(password: &str) -> ItemPayload {
         ItemPayload {
-            schema_version: locker_core::ITEM_SCHEMA_VERSION,
+            schema_version: nox_core::ITEM_SCHEMA_VERSION,
             item_type: ItemType::Login,
             title: "Example".into(),
             username: "alex".into(),

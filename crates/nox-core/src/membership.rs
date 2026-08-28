@@ -18,9 +18,9 @@ pub const MAX_MEMBERSHIP_RECORD_BYTES: usize = 4 * 1024;
 pub const MAX_MEMBERSHIP_RECORDS: usize = 1024;
 pub const MAX_ACTIVE_MEMBERS: usize = 256;
 
-const MEMBERSHIP_DOMAIN: &[u8] = b"LOCKER-MEMBERSHIP\0";
-const IDENTITY_DOMAIN: &[u8] = b"LOCKER-DEVICE-IDENTITY\0";
-const HASH_DOMAIN: &[u8] = b"LOCKER-MEMBERSHIP-HASH\0";
+const MEMBERSHIP_DOMAIN: &[u8] = b"NOX-MEMBERSHIP\0";
+const IDENTITY_DOMAIN: &[u8] = b"NOX-DEVICE-IDENTITY\0";
+const HASH_DOMAIN: &[u8] = b"NOX-MEMBERSHIP-HASH\0";
 
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MembershipRecordHash([u8; 32]);

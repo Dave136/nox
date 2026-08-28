@@ -4,7 +4,7 @@ use crate::{
     frame::{Frame, FrameClass, FrameError, MAX_FRAME_PAYLOAD_BYTES, SYNC_PROTOCOL_VERSION},
     transport::FramedIo,
 };
-use locker_core::{DeviceId, SecretKey, VaultId, X25519Keypair};
+use nox_core::{DeviceId, SecretKey, VaultId, X25519Keypair};
 use snow::error::{Error as SnowError, StateProblem};
 use std::{fmt, sync::OnceLock};
 use tokio::time::{self, Instant};
@@ -18,7 +18,7 @@ pub const MAX_NOISE_MESSAGE_BYTES: usize = MAX_FRAME_PAYLOAD_BYTES;
 /// The largest plaintext that fits in one Noise transport message.
 pub const MAX_NOISE_PLAINTEXT_BYTES: usize = MAX_NOISE_MESSAGE_BYTES - NOISE_TAG_BYTES;
 
-const PROLOGUE_PREFIX: &[u8; 13] = b"LOCKER-NOISE\0";
+const PROLOGUE_PREFIX: &[u8; 13] = b"NOX-NOISE-V1\0";
 
 /// Which side of a Noise handshake this connection drives.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -647,7 +647,7 @@ mod tests {
         assert_eq!(
             encode_noise_prologue(1, vault),
             [
-                b'L', b'O', b'C', b'K', b'E', b'R', b'-', b'N', b'O', b'I', b'S', b'E', 0, 1, 0, 0,
+                b'N', b'O', b'X', b'-', b'N', b'O', b'I', b'S', b'E', b'-', b'V', b'1', 0, 1, 0, 0,
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
             ]
         );

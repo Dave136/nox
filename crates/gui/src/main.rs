@@ -30,7 +30,7 @@ fn main() {
 
     app.run(|cx| {
         init(cx);
-        match locker_core::default_vault_path() {
+        match nox_core::default_vault_path() {
             Ok(path) => {
                 cx.open_window(window_options(), move |window, cx| {
                     let view = cx.new(|cx| {

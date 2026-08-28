@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use locker_core::{
+use nox_core::{
     Ed25519Keypair, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, Operation, SecretKey,
     Vault, VaultId, export_to_path, restore_from_path, storage::Db,
 };
@@ -76,7 +76,7 @@ fn wait_for_regular(path: &Path) {
 }
 
 fn enter_umask_matrix(case_name: &'static str) -> Option<u32> {
-    if let Ok(mode) = std::env::var("LOCKER_UMASK_CHILD") {
+    if let Ok(mode) = std::env::var("NOX_UMASK_CHILD") {
         return Some(u32::from_str_radix(&mode, 8).unwrap());
     }
     let executable = std::env::current_exe().unwrap();
@@ -90,7 +90,7 @@ fn enter_umask_matrix(case_name: &'static str) -> Option<u32> {
             ])
             .arg(&executable)
             .args(["--exact", case_name, "--nocapture"])
-            .env("LOCKER_UMASK_CHILD", mode)
+            .env("NOX_UMASK_CHILD", mode)
             .status()
             .unwrap();
         assert!(status.success(), "umask child {mode} failed");
@@ -221,7 +221,7 @@ fn wal_sidecar_symlinks_are_rejected_without_target_mutation() {
             Err(error) => error,
         };
         assert!(
-            matches!(error, locker_core::storage::DbError::Io(ref error) if error.kind() == io::ErrorKind::InvalidInput)
+            matches!(error, nox_core::storage::DbError::Io(ref error) if error.kind() == io::ErrorKind::InvalidInput)
         );
         assert_eq!(fs::read(&target).unwrap(), b"sentinel");
         assert_eq!(permission_bits(&target).unwrap(), 0o644);
@@ -262,7 +262,7 @@ fn backup_export_is_owner_only_and_encrypted() {
         .run()
         .unwrap();
     let bytes = fs::read(&archive).unwrap();
-    assert!(bytes.starts_with(b"LOCKBAK2"));
+    assert!(bytes.starts_with(b"NOXBACK2"));
     for sentinel in [
         b"permission sentinel title".as_slice(),
         b"permission sentinel user".as_slice(),
@@ -304,7 +304,7 @@ fn legacy_backup_export_is_owner_only_and_encrypted() {
     let key = SecretKey::from_bytes([3; 32]);
     let signing = Ed25519Keypair::from_private_bytes([4; 32]);
     let mut db = Db::open_in_memory().unwrap();
-    locker_core::create_local_change(
+    nox_core::create_local_change(
         &mut db,
         vault_id,
         item_id,
@@ -373,7 +373,7 @@ fn vault_symlinks_are_rejected_without_target_mutation() {
         Err(error) => error,
     };
     assert!(
-        matches!(parent_error, locker_core::storage::DbError::Io(ref error) if error.kind() == io::ErrorKind::InvalidInput)
+        matches!(parent_error, nox_core::storage::DbError::Io(ref error) if error.kind() == io::ErrorKind::InvalidInput)
     );
     assert_eq!(permission_bits(&target).unwrap(), target_mode);
 
@@ -387,7 +387,7 @@ fn vault_symlinks_are_rejected_without_target_mutation() {
         Err(error) => error,
     };
     assert!(
-        matches!(leaf_error, locker_core::storage::DbError::Io(ref error) if error.kind() == io::ErrorKind::InvalidInput)
+        matches!(leaf_error, nox_core::storage::DbError::Io(ref error) if error.kind() == io::ErrorKind::InvalidInput)
     );
     assert_eq!(fs::read(&target_file).unwrap(), b"target");
 }

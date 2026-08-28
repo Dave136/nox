@@ -11,7 +11,7 @@ use gpui_component::{
     radio::{Radio, RadioGroup},
 };
 use gpui_rsx::rsx;
-use locker_core::{
+use nox_core::{
     CharClasses, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, MAX_LENGTH, Password, Vault,
     VaultError, generate_password,
 };

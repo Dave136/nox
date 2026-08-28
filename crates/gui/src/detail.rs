@@ -14,7 +14,7 @@ use gpui_component::{
     Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
 };
-use locker_core::ItemType;
+use nox_core::ItemType;
 
 impl Nox {
     pub(crate) fn render_item_detail(

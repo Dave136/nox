@@ -3001,7 +3001,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui-rsx",
  "gpui_platform",
- "locker-core",
+ "nox-core",
  "rust-embed",
  "serde",
  "serde_json",
@@ -3942,25 +3942,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "locker-core"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "chacha20poly1305",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "hkdf",
- "postcard",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "ulid",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
 name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4397,6 +4378,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "585d3cb5e12e01aed9e8a1f70d5c6b5e86fe2a6e48fc8cd0b3e0b8df6f6eb174"
 dependencies = [
  "instant",
+]
+
+[[package]]
+name = "nox-core"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hkdf",
+ "postcard",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ulid",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -7072,8 +7072,8 @@ dependencies = [
  "getrandom 0.3.4",
  "hkdf",
  "hmac",
- "locker-core",
  "mdns-sd",
+ "nox-core",
  "sha2 0.10.9",
  "snow",
  "spake2",

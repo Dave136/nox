@@ -1,12 +1,12 @@
 //! Bounded cursor-map replication over one authenticated Noise connection.
 
 use crate::noise::{NoiseConnection, NoiseError, preferred_initiator};
-use locker_core::{
+use nox_core::{
     AuthorizationSnapshot, BatchApplyResult, Change, DeviceId, MembershipRecord,
     MembershipRecordHash, ReplicationStore, ReplicationStoreError, VaultId, decode_change,
     encode_change,
 };
-pub use locker_core::{
+pub use nox_core::{
     MAX_BATCH_PLAINTEXT_BYTES, MAX_CHANGE_CIPHERTEXT_BYTES, MAX_CHANGES_PER_BATCH,
     MAX_CURSOR_ENTRIES, MAX_ENCODED_CHANGE_BYTES,
 };
@@ -47,7 +47,7 @@ const TAG_ROUND_COMPLETE: u8 = 12;
 const TAG_SESSION_COMPLETE: u8 = 13;
 const TAG_ABORT: u8 = 14;
 
-pub type CursorMap = locker_core::CursorMap;
+pub type CursorMap = nox_core::CursorMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CursorSummary {
@@ -221,10 +221,10 @@ impl From<ReplicationStoreError> for ReplicationError {
             ReplicationStoreError::UnsupportedStoredChange => {
                 Self::Store(ReplicationStoreError::UnsupportedStoredChange)
             }
-            ReplicationStoreError::Journal(locker_core::JournalError::InvalidSignature) => {
+            ReplicationStoreError::Journal(nox_core::JournalError::InvalidSignature) => {
                 Self::InvalidSignature
             }
-            ReplicationStoreError::Journal(locker_core::JournalError::ConflictingDuplicate) => {
+            ReplicationStoreError::Journal(nox_core::JournalError::ConflictingDuplicate) => {
                 Self::ConflictingDuplicate
             }
             other => Self::Store(other),
@@ -588,7 +588,7 @@ fn decode_body(
         TAG_MEMBERSHIP_SUMMARY => {
             let set_hash = cursor.array()?;
             let record_count = cursor.u16()?;
-            if usize::from(record_count) > locker_core::MAX_MEMBERSHIP_RECORDS {
+            if usize::from(record_count) > nox_core::MAX_MEMBERSHIP_RECORDS {
                 return Err(ReplicationCodecError::BatchTooLarge);
             }
             ReplicationMessage::MembershipSummary {
@@ -712,13 +712,13 @@ fn decode_body(
 }
 
 fn encode_records(out: &mut Vec<u8>, records: &[Vec<u8>]) -> Result<(), ReplicationCodecError> {
-    if records.len() > locker_core::MAX_MEMBERSHIP_RECORDS {
+    if records.len() > nox_core::MAX_MEMBERSHIP_RECORDS {
         return Err(ReplicationCodecError::BatchTooLarge);
     }
     put_u16(out, records.len())?;
     let mut total = 0usize;
     for record in records {
-        if record.len() > locker_core::MAX_MEMBERSHIP_RECORD_BYTES {
+        if record.len() > nox_core::MAX_MEMBERSHIP_RECORD_BYTES {
             return Err(ReplicationCodecError::BatchTooLarge);
         }
         total = total
@@ -735,7 +735,7 @@ fn encode_records(out: &mut Vec<u8>, records: &[Vec<u8>]) -> Result<(), Replicat
 
 fn decode_records(cursor: &mut Cursor<'_>) -> Result<Vec<Vec<u8>>, ReplicationCodecError> {
     let count = usize::from(cursor.u16()?);
-    if count > locker_core::MAX_MEMBERSHIP_RECORDS {
+    if count > nox_core::MAX_MEMBERSHIP_RECORDS {
         return Err(ReplicationCodecError::BatchTooLarge);
     }
     let mut total = 0usize;
@@ -743,7 +743,7 @@ fn decode_records(cursor: &mut Cursor<'_>) -> Result<Vec<Vec<u8>>, ReplicationCo
     for _ in 0..count {
         let length =
             usize::try_from(cursor.u32()?).map_err(|_| ReplicationCodecError::BatchTooLarge)?;
-        if length > locker_core::MAX_MEMBERSHIP_RECORD_BYTES {
+        if length > nox_core::MAX_MEMBERSHIP_RECORD_BYTES {
             return Err(ReplicationCodecError::BatchTooLarge);
         }
         total = total
@@ -896,7 +896,7 @@ fn membership_batches(records: Vec<Vec<u8>>) -> Result<Vec<Vec<Vec<u8>>>, Replic
     let mut raw_bytes = 0usize;
     let mut wire_bytes = HEADER_BYTES + 2;
     for record in records {
-        if record.len() > locker_core::MAX_MEMBERSHIP_RECORD_BYTES {
+        if record.len() > nox_core::MAX_MEMBERSHIP_RECORD_BYTES {
             return Err(ReplicationError::BatchTooLarge);
         }
         let next_raw = raw_bytes
@@ -1072,7 +1072,7 @@ where
     else {
         return Err(ReplicationError::InvalidMessage);
     };
-    if usize::from(remote_count) > locker_core::MAX_MEMBERSHIP_RECORDS {
+    if usize::from(remote_count) > nox_core::MAX_MEMBERSHIP_RECORDS {
         return Err(ReplicationError::InvalidMembership);
     }
     if remote_hash == local_hash && usize::from(remote_count) != local_records.len() {
@@ -1333,7 +1333,7 @@ where
             }
             remote_records.push(record);
         }
-        if remote_records.len() > locker_core::MAX_MEMBERSHIP_RECORDS {
+        if remote_records.len() > nox_core::MAX_MEMBERSHIP_RECORDS {
             return Err(ReplicationError::InvalidMembership);
         }
     }
@@ -1772,7 +1772,7 @@ mod tests {
             assert!(encoded.len() <= crate::noise::MAX_NOISE_PLAINTEXT_BYTES);
         }
         assert!(matches!(
-            membership_batches(vec![vec![0; locker_core::MAX_MEMBERSHIP_RECORD_BYTES + 1]]),
+            membership_batches(vec![vec![0; nox_core::MAX_MEMBERSHIP_RECORD_BYTES + 1]]),
             Err(ReplicationError::BatchTooLarge)
         ));
     }

@@ -5,7 +5,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     radio::{Radio, RadioGroup},
 };
-use locker_core::{ChangeId, ItemId, ItemPayload, ItemType, VaultError};
+use nox_core::{ChangeId, ItemId, ItemPayload, ItemType, VaultError};
 
 use crate::assets::{IconName, icon};
 

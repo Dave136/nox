@@ -1,4 +1,4 @@
-//! Thin SQLite connection boundary for all locker-core mutations.
+//! Thin SQLite connection boundary for all nox-core mutations.
 
 use super::migrations::{self, MigrationError};
 use rusqlite::{Connection, Transaction};

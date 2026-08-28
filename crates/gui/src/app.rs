@@ -38,7 +38,7 @@ use gpui_component::{
     input::{Input, InputState},
 };
 use gpui_rsx::rsx;
-use locker_core::{SecretBytes, Vault, VaultError};
+use nox_core::{SecretBytes, Vault, VaultError};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -206,8 +206,8 @@ impl Nox {
 
 /// Best-effort display label for a recent item's secondary line: the login's
 /// site host if it has one, or "Secure note" / a bare "Login" fallback.
-fn recent_item_subtitle(payload: &locker_core::ItemPayload) -> String {
-    if payload.item_type == locker_core::ItemType::SecureNote {
+fn recent_item_subtitle(payload: &nox_core::ItemPayload) -> String {
+    if payload.item_type == nox_core::ItemType::SecureNote {
         return "Secure note".to_owned();
     }
     match payload.uris.first() {
@@ -1173,12 +1173,12 @@ impl Nox {
             let logins = list
                 .items
                 .iter()
-                .filter(|(_, item)| item.item_type == locker_core::ItemType::Login)
+                .filter(|(_, item)| item.item_type == nox_core::ItemType::Login)
                 .count();
             let notes = list
                 .items
                 .iter()
-                .filter(|(_, item)| item.item_type == locker_core::ItemType::SecureNote)
+                .filter(|(_, item)| item.item_type == nox_core::ItemType::SecureNote)
                 .count();
             (list.items.len(), logins, notes)
         });
@@ -1271,12 +1271,12 @@ impl Nox {
                     let logins = list
                         .items
                         .iter()
-                        .filter(|(_, item)| item.item_type == locker_core::ItemType::Login)
+                        .filter(|(_, item)| item.item_type == nox_core::ItemType::Login)
                         .count();
                     let notes = list
                         .items
                         .iter()
-                        .filter(|(_, item)| item.item_type == locker_core::ItemType::SecureNote)
+                        .filter(|(_, item)| item.item_type == nox_core::ItemType::SecureNote)
                         .count();
                     let recent = list
                         .items
@@ -1305,7 +1305,7 @@ impl Nox {
         let recent_rows: Vec<AnyElement> = recent
             .into_iter()
             .map(|(item_id, item)| {
-                let is_login = item.item_type == locker_core::ItemType::Login;
+                let is_login = item.item_type == nox_core::ItemType::Login;
                 let icon_path = if is_login {
                     "icons/key-square.svg"
                 } else {
@@ -1630,7 +1630,7 @@ mod tests {
     use super::{backup, conflicts};
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use gpui_component::{ActiveTheme, Root, Theme, ThemeMode, WindowExt};
-    use locker_core::{
+    use nox_core::{
         BackupError, ChangeId, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, SecretBytes,
     };
     use std::{

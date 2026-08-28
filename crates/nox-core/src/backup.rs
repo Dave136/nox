@@ -23,13 +23,13 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-const ARCHIVE_MAGIC: &[u8; 8] = b"LOCKBAK1";
+const ARCHIVE_MAGIC: &[u8; 8] = b"NOXBACK1";
 const ARCHIVE_VERSION: u16 = 1;
-const BACKUP_AAD: &[u8] = b"locker/backup/v1";
-const V2_MAGIC: &[u8; 8] = b"LOCKBAK2";
+const BACKUP_AAD: &[u8] = b"nox/backup/v1";
+const V2_MAGIC: &[u8; 8] = b"NOXBACK2";
 const V2_VERSION: u16 = 2;
 const V2_KDF_ARGON2ID: u8 = 1;
-const V2_WRAP_AAD: &[u8] = b"locker/backup/v2/wrap";
+const V2_WRAP_AAD: &[u8] = b"nox/backup/v2/wrap";
 /// Maximum serialized backup size accepted before decryption or allocation.
 pub const MAX_ARCHIVE_BYTES: usize = 32 * 1024 * 1024;
 /// Maximum backup-password input accepted by the v2 recovery container.
@@ -1466,9 +1466,9 @@ mod tests {
         let result = write_owner_only_atomic_candidate_with(
             &destination,
             &temporary,
-            b"LOCKBAK2encrypted",
+            b"NOXBACK2encrypted",
             || {
-                assert_eq!(fs::read(&temporary).unwrap(), b"LOCKBAK2encrypted");
+                assert_eq!(fs::read(&temporary).unwrap(), b"NOXBACK2encrypted");
                 let metadata = fs::symlink_metadata(&temporary).unwrap();
                 assert!(metadata.file_type().is_file());
                 assert_eq!(metadata.uid(), fs::symlink_metadata(&root).unwrap().uid());

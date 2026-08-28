@@ -1,4 +1,4 @@
-//! SQLite schema owned by `locker-core`.
+//! SQLite schema owned by `nox-core`.
 
 /// Current forward-only schema version.
 pub const SCHEMA_VERSION: u32 = 1;

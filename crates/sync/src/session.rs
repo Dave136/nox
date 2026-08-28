@@ -13,7 +13,7 @@ use crate::{
     transport::{ConnectionLimiter, TransportLimits},
 };
 use async_channel::{Receiver, Sender, TrySendError};
-use locker_core::{DeviceId, UnlockedSyncAccess, Vault, X25519Keypair};
+use nox_core::{DeviceId, UnlockedSyncAccess, Vault, X25519Keypair};
 use std::{
     collections::BTreeMap,
     fmt,
@@ -1305,7 +1305,7 @@ async fn sync_now_command(
 async fn sync_peer(
     address: SocketAddr,
     config: SyncConfig,
-    vault_id: locker_core::VaultId,
+    vault_id: nox_core::VaultId,
     local_id: DeviceId,
     remote_id: DeviceId,
     local_noise: X25519Keypair,
@@ -1470,7 +1470,7 @@ async fn stop_state(state: &mut ServiceState, listener: &mut Option<TcpListener>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use locker_core::{ItemPayload, ItemType, SecretBytes, Vault};
+    use nox_core::{ItemPayload, ItemType, SecretBytes, Vault};
     use std::{
         fs,
         path::PathBuf,
@@ -1544,7 +1544,7 @@ mod tests {
 
     fn payload(title: &str, password: &str) -> ItemPayload {
         ItemPayload {
-            schema_version: locker_core::ITEM_SCHEMA_VERSION,
+            schema_version: nox_core::ITEM_SCHEMA_VERSION,
             item_type: ItemType::Login,
             title: title.to_owned(),
             username: "user".to_owned(),
@@ -1668,15 +1668,15 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn candidate_responder_handshake_round_trips() {
-        let left_key = locker_core::X25519Keypair::generate().unwrap();
-        let right_key = locker_core::X25519Keypair::generate().unwrap();
+        let left_key = nox_core::X25519Keypair::generate().unwrap();
+        let right_key = nox_core::X25519Keypair::generate().unwrap();
         let left_key_for_responder =
-            locker_core::X25519Keypair::from_private_bytes(left_key.private_key_bytes());
+            nox_core::X25519Keypair::from_private_bytes(left_key.private_key_bytes());
         let right_key_for_responder =
-            locker_core::X25519Keypair::from_private_bytes(right_key.private_key_bytes());
+            nox_core::X25519Keypair::from_private_bytes(right_key.private_key_bytes());
         let left_id = DeviceId::from_public_key([7; 32]);
         let right_id = DeviceId::from_public_key([8; 32]);
-        let vault_id = locker_core::VaultId::from_bytes([9; 16]);
+        let vault_id = nox_core::VaultId::from_bytes([9; 16]);
         let (left, right) = duplex(4096);
         let left = crate::transport::FramedIo::new(left, TransportLimits::v1()).unwrap();
         let right = crate::transport::FramedIo::new(right, TransportLimits::v1()).unwrap();

@@ -1094,7 +1094,7 @@ pub fn default_vault_path() -> Result<PathBuf, VaultError> {
         }
     };
 
-    Ok(base.join("locker/vault.db"))
+    Ok(base.join("nox/vault.db"))
 }
 
 fn now_millis() -> u64 {

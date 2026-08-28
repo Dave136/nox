@@ -9,7 +9,7 @@ use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
 };
 use gpui_rsx::rsx;
-use locker_core::ItemType;
+use nox_core::ItemType;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ActiveView {
@@ -261,7 +261,7 @@ mod tests {
     use super::ActiveView;
     use crate::assets::Assets;
     use gpui::AssetSource;
-    use locker_core::ItemType;
+    use nox_core::ItemType;
 
     /// Every `icons/…svg` path referenced in the GUI's rendering code must
     /// actually resolve, from our embedded set or gpui-component's bundled

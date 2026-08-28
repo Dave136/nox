@@ -1,4 +1,4 @@
-use locker_core::{ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, Vault, VaultError};
+use nox_core::{ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, Vault, VaultError};
 use std::{
     fs,
     path::PathBuf,
@@ -58,7 +58,7 @@ fn wrong_password_and_wrapped_dek_tampering_are_indistinguishable() {
     vault.lock();
 
     let wrong = Vault::unlock(b"wrong", &path).unwrap_err();
-    let db = locker_core::storage::Db::open(&path).unwrap();
+    let db = nox_core::storage::Db::open(&path).unwrap();
     db.connection()
         .execute(
             "UPDATE vault_meta SET wrapped_dek = zeroblob(length(wrapped_dek))",
@@ -91,7 +91,7 @@ fn unlock_rejects_unsafe_argon2_header_without_deriving() {
     let path = temp_path("header");
     let vault = Vault::create(b"password", &path).unwrap();
     vault.lock();
-    let db = locker_core::storage::Db::open(&path).unwrap();
+    let db = nox_core::storage::Db::open(&path).unwrap();
     db.connection()
         .execute("UPDATE vault_meta SET argon2_memory_kib = ?1", [u32::MAX])
         .unwrap();

@@ -12,8 +12,8 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-const WRAP_AAD: &[u8] = b"locker/dek-wrap/v1";
-pub(crate) const PRIVATE_KEY_AAD: &[u8] = b"locker/local-device/v1";
+const WRAP_AAD: &[u8] = b"nox/dek-wrap/v1";
+pub(crate) const PRIVATE_KEY_AAD: &[u8] = b"nox/local-device/v1";
 
 /// Errors returned by key wrapping and identity-key operations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

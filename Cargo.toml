@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/locker-core", "crates/sync", "crates/gui"]
+members = ["crates/nox-core", "crates/sync", "crates/gui"]
 
 [workspace.package]
 edition = "2024"
