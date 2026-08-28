@@ -22,6 +22,10 @@ fn window_options() -> WindowOptions {
         // window to a .desktop entry and show a generic icon + "Unknown".
         // Must match the `.desktop` file's name (see packaging/nox.desktop).
         app_id: Some("nox".into()),
+        window_min_size: Some(gpui::Size {
+            width: gpui::px(920.),
+            height: gpui::px(740.),
+        }),
         ..Default::default()
     }
 }

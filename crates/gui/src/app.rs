@@ -31,9 +31,7 @@ use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use vault_list::VaultListState;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FontWeight, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString,
-    Subscription, Task, Window, div, ease_out_quint, point, prelude::*, px, rgb, rgba,
+    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FontWeight, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString, Subscription, Task, Window, div, ease_out_quint, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, rgba,
 };
 use gpui_component::{
     Disableable, IndexPath, Root, Sizable, Theme, ThemeMode, WindowExt,
@@ -366,7 +364,7 @@ impl Nox {
             id,
             button,
             self.auth_hovered.get(id).copied(),
-            (CIPHER_PRIMARY, 0xF0F2F6, 0xCDD2DC, CIPHER_BACKGROUND),
+            (0xF0F2F6, CIPHER_PRIMARY, 0xCDD2DC, CIPHER_BACKGROUND),
             cx,
         )
     }
@@ -1965,7 +1963,7 @@ impl Nox {
                     </div>
                 </div>
                 <div id="home-dashboard" flex flex_col gap={px(20.)} p={px(32.)} overflow_y_scroll>
-                    <div id="home-hero" flex items_start justify_between p={px(24.)} rounded={px(10.)} bg={rgb(CIPHER_SURFACE_RAISED)}>
+                    <div id="home-hero" flex items_start justify_between p={px(24.)} bg={rgb(0x1E2126)} rounded={px(10.)} border_1 border_color={rgb(0x353C47)}>
                         <div flex flex_col gap={px(8.)} w={px(360.)}>
                             <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_MUTED)}>{"WELCOME BACK"}</div>
                             <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={rgb(CIPHER_FOREGROUND)}>{"Your vault is secure"}</div>
