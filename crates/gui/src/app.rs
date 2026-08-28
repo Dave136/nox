@@ -31,15 +31,16 @@ use ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use vault_list::VaultListState;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, Entity, FontWeight, KeyBinding, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString, Subscription, Task,
-    Window, div, ease_out_quint, prelude::*, px, rgb,
+    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FontWeight, KeyBinding,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString,
+    Subscription, Task, Window, div, ease_out_quint, point, prelude::*, px, rgb, rgba,
 };
 use gpui_component::{
-    Disableable, IndexPath, Root, Theme, ThemeMode, WindowExt,
+    Disableable, IndexPath, Root, Sizable, Theme, ThemeMode, WindowExt,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputState},
-    select::{Select, SelectDelegate, SelectEvent, SelectItem, SelectState},
+    popover::Popover,
+    select::{SelectDelegate, SelectEvent, SelectItem, SelectState},
 };
 use gpui_rsx::rsx;
 use nox_core::{SecretBytes, Vault, VaultError};
@@ -70,10 +71,7 @@ pub(crate) const CIPHER_FOREGROUND_MUTED: u32 = 0x8F98A8;
 const CIPHER_FOREGROUND_SUBTLE: u32 = 0x7F8998;
 const CIPHER_DISABLED: u32 = 0x626B78;
 const CIPHER_PRIMARY: u32 = 0xE3E6ED;
-// The Pencil frame's own auth-primary-button fill is `--cipher-primary`
-// (#E3E6ED, off-white) — by explicit request the auth flow's primary
-// buttons (Create vault, Unlock vault) read as true white instead.
-const CIPHER_PRIMARY_AUTH: u32 = 0xFFFFFF;
+const CIPHER_PRIMARY_AUTH: u32 = CIPHER_PRIMARY;
 const CIPHER_PRIMARY_AUTH_HOVER: u32 = 0xF5F6F8;
 const CIPHER_PRIMARY_AUTH_ACTIVE: u32 = CIPHER_PRIMARY;
 const CIPHER_DANGER: u32 = 0xA9787D;
@@ -124,6 +122,16 @@ fn vault_initials(name: &str) -> String {
         .to_uppercase()
 }
 
+fn vault_dropdown_trailing(missing: bool, checked: bool) -> (&'static str, u32) {
+    if missing {
+        ("icons/circle-x.svg", CIPHER_DISABLED)
+    } else if checked {
+        ("icons/check.svg", CIPHER_FOREGROUND_SOFT)
+    } else {
+        ("icons/chevron-right.svg", CIPHER_ICON_MUTED)
+    }
+}
+
 /// Shared avatar + name + status row content for the vault Select — used
 /// both as the trigger's `display_title` (no trailing icon; the Select adds
 /// its own caret) and as each dropdown option's `render` (with one).
@@ -149,7 +157,7 @@ fn vault_row_content(vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyEle
                 .bg(rgb(CIPHER_SURFACE_RAISED))
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(px(9.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(rgb(if missing {
                             CIPHER_DISABLED
@@ -167,7 +175,7 @@ fn vault_row_content(vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyEle
                 .gap(px(2.))
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(px(11.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(if missing {
                             CIPHER_DISABLED
@@ -178,7 +186,7 @@ fn vault_row_content(vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyEle
                 )
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(px(9.))
                         .text_color(rgb(if missing {
                             CIPHER_DISABLED
                         } else {
@@ -211,12 +219,8 @@ impl SelectItem for VaultEntry {
     }
 }
 
-/// Delegate for the vault picker's dropdown. A plain `Vec<VaultEntry>` would
-/// work too, but its `SearchableListDelegate::render_item` default falls
-/// through to `SearchableListItem::render` wrapped in the framework's own
-/// "selected" chrome — a check icon plus `cx.theme().tokens.accent` as the
-/// background, neither of which the design uses. Overriding `render_item`
-/// here bypasses that wrapper entirely and renders our own row.
+/// Delegate retained as the picker state/event source; the locked view renders
+/// its exact Pencil chrome through an unstyled `Popover`.
 #[derive(Clone)]
 pub(crate) struct VaultDelegate(pub(crate) Vec<VaultEntry>);
 
@@ -240,42 +244,6 @@ impl SelectDelegate for VaultDelegate {
             .iter()
             .position(|vault| vault.value() == value)
             .map(|ix| IndexPath::default().row(ix))
-    }
-
-    fn render_item(
-        &self,
-        _ix: IndexPath,
-        item: &Self::Item,
-        _checked: bool,
-        _window: &mut Window,
-        _cx: &mut gpui::App,
-    ) -> Option<AnyElement> {
-        let missing = !item.path.is_file();
-        let trailing = gpui_component::Icon::empty()
-            .path(if missing {
-                "icons/circle-x.svg"
-            } else {
-                "icons/chevron-right.svg"
-            })
-            .size(px(14.))
-            .text_color(rgb(if missing {
-                CIPHER_DISABLED
-            } else {
-                CIPHER_ICON_MUTED
-            }))
-            .into_any_element();
-        // The dropdown's own row size (40px/8px inset/6px radius) differs from
-        // the trigger's (48px/12px/8px) — the design's "Select Content" rows
-        // are visibly shorter and tighter than the closed trigger.
-        Some(
-            div()
-                .w_full()
-                .h(px(40.))
-                .px(px(8.))
-                .rounded(px(6.))
-                .child(vault_row_content(item, Some(trailing)))
-                .into_any_element(),
-        )
     }
 }
 
@@ -1245,19 +1213,19 @@ impl Nox {
                         <div text_xs fontWeight={FontWeight::BOLD} textColor={rgb(CIPHER_FOREGROUND_SUBTLE)}>
                             {"VAULT NAME"}
                         </div>
-                        <Input
-                            base={Input::new(&self.create_name)
-                                .prefix(
+                            <Input
+                                base={Input::new(&self.create_name)
+                                    .prefix(
                                     gpui_component::Icon::empty()
                                         .path("icons/database.svg")
                                         .size(px(15.))
                                         .text_color(rgb(CIPHER_ICON_MUTED)),
-                                )
-                                .aria_label("Vault name")}
-                            h={px(44.)}
-                            bg={rgb(CIPHER_SURFACE)}
-                            borderColor={rgb(CIPHER_BORDER_STRONG)}
-                            rounded={px(8.)}
+                                    )
+                                    .aria_label("Vault name")}
+                                h={px(44.)}
+                                bg={rgb(CIPHER_SURFACE)}
+                                borderColor={rgb(CIPHER_BORDER_STRONG)}
+                                rounded={px(8.)}
                         />
                     </div>
                     <div id="create-vault-password" flex flex_col gap={px(7.)}>
@@ -1339,12 +1307,28 @@ impl Nox {
     fn render_locked(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.unlock_state == FormState::Pending;
         let backup_busy = !self.backup.is_idle();
-        // `appearance(true)` (the default) is kept deliberately: it's what
-        // gives the trigger its focus-ring/open-state border out of the box.
-        // Our own bg/border/radius below are applied afterward and win at
-        // rest — see it flip to the theme's ring color while open, which
-        // `appearance(false)` would have thrown away entirely.
-        let vault_select = Select::new(&self.vault_select)
+        let trigger_content = self.active_vault.as_ref().map_or_else(
+            || div().child("Select a vault").into_any_element(),
+            |vault| {
+                vault_row_content(
+                    vault,
+                    Some(
+                        gpui_component::Icon::empty()
+                            .path("icons/chevron-down.svg")
+                            .size(px(14.))
+                            .text_color(rgb(0x748092))
+                            .into_any_element(),
+                    ),
+                )
+            },
+        );
+        let trigger_variant = ButtonCustomVariant::new(cx)
+            .color(rgb(CIPHER_SURFACE).into())
+            .hover(rgb(CIPHER_SURFACE).into())
+            .active(rgb(CIPHER_SURFACE).into())
+            .foreground(rgb(CIPHER_FOREGROUND_SOFT).into());
+        let trigger = Button::new("vault-select-trigger")
+            .custom(trigger_variant)
             .w_full()
             .h(px(48.))
             .px(px(12.))
@@ -1352,16 +1336,70 @@ impl Nox {
             .border_1()
             .border_color(rgb(CIPHER_BORDER))
             .bg(rgb(CIPHER_SURFACE))
-            // The frame's own trailing caret (Ncszp's row uses chevron-right;
-            // the account row this trigger mirrors uses chevron-down) —
-            // pin its color to the design's icon-muted token instead of the
-            // ambient theme's muted_foreground, which isn't guaranteed to match.
-            .icon(
-                gpui_component::Icon::empty()
-                    .path("icons/chevron-down.svg")
-                    .size(px(14.))
-                    .text_color(rgb(CIPHER_ICON_MUTED)),
-            );
+            .child(trigger_content);
+        let vaults = self.vaults.vaults.clone();
+        let selected_id = self.active_vault.as_ref().map(|vault| vault.id.clone());
+        let select = self.vault_select.clone();
+        let vault_select = Popover::new("vault-select-popover")
+            .appearance(false)
+            .trigger(trigger)
+            .content(move |_state, _window, cx| {
+                let popover = cx.entity();
+                let rows = vaults.iter().cloned().enumerate().map(|(index, vault)| {
+                    let missing = !vault.path.is_file();
+                    let checked = selected_id.as_ref() == Some(&vault.id);
+                    let (icon, color) = vault_dropdown_trailing(missing, checked);
+                    let trailing = gpui_component::Icon::empty()
+                        .path(icon)
+                        .size(px(14.))
+                        .text_color(rgb(color))
+                        .into_any_element();
+                    let select = select.clone();
+                    let popover = popover.clone();
+                    let id = vault.id.clone();
+                    div()
+                        .id(("vault-option", index))
+                        .w_full()
+                        .h(px(40.))
+                        .px(px(8.))
+                        .rounded(px(6.))
+                        .bg(rgb(if checked {
+                            CIPHER_SURFACE_RAISED
+                        } else {
+                            CIPHER_SURFACE
+                        }))
+                        .when(!checked && !missing, |row| {
+                            row.hover(|style| style.bg(rgb(CIPHER_SURFACE_RAISED)))
+                        })
+                        .when(!missing, |row| {
+                            row.cursor_pointer().on_click(move |_, window, app| {
+                                select.update(app, |_, cx| {
+                                    cx.emit(SelectEvent::Confirm(Some(id.clone())));
+                                });
+                                popover.update(app, |state, cx| state.dismiss(window, cx));
+                            })
+                        })
+                        .child(vault_row_content(&vault, Some(trailing)))
+                });
+                div()
+                    .w(px(416.))
+                    .p(px(4.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(rgb(CIPHER_BORDER))
+                    .bg(rgb(CIPHER_SURFACE))
+                    .shadow(vec![BoxShadow {
+                        color: rgba(0x00000066).into(),
+                        offset: point(px(0.), px(4.)),
+                        blur_radius: px(12.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+                    .children(rows)
+            });
         let error = match &self.unlock_state {
             FormState::Error(message) => div()
                 .text_sm()
@@ -1399,6 +1437,7 @@ impl Nox {
                     .flex()
                     .items_center()
                     .gap(px(8.))
+                    .text_size(px(12.))
                     .font_weight(FontWeight::BOLD)
                     .child(
                         gpui_component::Icon::empty()
@@ -1531,6 +1570,10 @@ impl Nox {
                         </div>
                         <Input
                             base={Input::new(&self.unlock_password)
+                                .large()
+                                .focus_bordered(false)
+                                .text_size(px(11.))
+                                .gap(px(10.))
                                 .mask_toggle()
                                 .prefix(
                                     gpui_component::Icon::empty()
@@ -2054,6 +2097,7 @@ impl Render for Nox {
                 {for sheet in sheet_layer {
                     {sheet}
                 }}
+                {ui::window::controls::resize_handles()}
             </div>
         }
     }
@@ -2322,6 +2366,22 @@ mod tests {
         assert!(!VaultEntry::new("Personal vault", present).disabled());
         assert!(VaultEntry::new("Gone vault", missing).disabled());
         cleanup(&dir);
+    }
+
+    #[test]
+    fn vault_dropdown_uses_a_check_for_the_selected_vault() {
+        assert_eq!(
+            vault_dropdown_trailing(false, true),
+            ("icons/check.svg", CIPHER_FOREGROUND_SOFT)
+        );
+        assert_eq!(
+            vault_dropdown_trailing(false, false),
+            ("icons/chevron-right.svg", CIPHER_ICON_MUTED)
+        );
+        assert_eq!(
+            vault_dropdown_trailing(true, false),
+            ("icons/circle-x.svg", CIPHER_DISABLED)
+        );
     }
 
     #[gpui::test]

@@ -1,6 +1,6 @@
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, Keystroke, MouseButton, MouseDownEvent, Window,
-    actions, div, prelude::*, px, rgb,
+    AnyElement, App, Context, CursorStyle, Div, Entity, FocusHandle, Focusable, Keystroke,
+    MouseButton, MouseDownEvent, ResizeEdge, Window, actions, div, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt,
@@ -414,6 +414,106 @@ impl Render for WindowControls {
     }
 }
 
+const RESIZE_EDGE_THICKNESS: f32 = 6.;
+const RESIZE_CORNER_SIZE: f32 = 12.;
+
+fn resize_handle(
+    id: &'static str,
+    hitbox: Div,
+    edge: ResizeEdge,
+    cursor: CursorStyle,
+) -> AnyElement {
+    hitbox
+        .id(id)
+        .absolute()
+        .cursor(cursor)
+        .on_mouse_down(MouseButton::Left, move |_, window, _| {
+            window.start_window_resize(edge);
+        })
+        .into_any_element()
+}
+
+/// Thin invisible hit-zones along the window's outer edge and corners.
+///
+/// `WindowDecorations::Client` (main.rs) means the OS/compositor draws no
+/// native chrome — dragging the border to resize is entirely our
+/// responsibility, same as the title bar's own move-by-drag below.
+pub(crate) fn resize_handles() -> impl IntoElement {
+    let edge_span = px(RESIZE_CORNER_SIZE);
+    let edge_thickness = px(RESIZE_EDGE_THICKNESS);
+    let corner = px(RESIZE_CORNER_SIZE);
+    div()
+        .id("window-resize-handles")
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(resize_handle(
+            "resize-top",
+            div()
+                .top_0()
+                .left(edge_span)
+                .right(edge_span)
+                .h(edge_thickness),
+            ResizeEdge::Top,
+            CursorStyle::ResizeUpDown,
+        ))
+        .child(resize_handle(
+            "resize-bottom",
+            div()
+                .bottom_0()
+                .left(edge_span)
+                .right(edge_span)
+                .h(edge_thickness),
+            ResizeEdge::Bottom,
+            CursorStyle::ResizeUpDown,
+        ))
+        .child(resize_handle(
+            "resize-left",
+            div()
+                .left_0()
+                .top(edge_span)
+                .bottom(edge_span)
+                .w(edge_thickness),
+            ResizeEdge::Left,
+            CursorStyle::ResizeLeftRight,
+        ))
+        .child(resize_handle(
+            "resize-right",
+            div()
+                .right_0()
+                .top(edge_span)
+                .bottom(edge_span)
+                .w(edge_thickness),
+            ResizeEdge::Right,
+            CursorStyle::ResizeLeftRight,
+        ))
+        .child(resize_handle(
+            "resize-top-left",
+            div().top_0().left_0().size(corner),
+            ResizeEdge::TopLeft,
+            CursorStyle::ResizeUpLeftDownRight,
+        ))
+        .child(resize_handle(
+            "resize-top-right",
+            div().top_0().right_0().size(corner),
+            ResizeEdge::TopRight,
+            CursorStyle::ResizeUpRightDownLeft,
+        ))
+        .child(resize_handle(
+            "resize-bottom-left",
+            div().bottom_0().left_0().size(corner),
+            ResizeEdge::BottomLeft,
+            CursorStyle::ResizeUpRightDownLeft,
+        ))
+        .child(resize_handle(
+            "resize-bottom-right",
+            div().bottom_0().right_0().size(corner),
+            ResizeEdge::BottomRight,
+            CursorStyle::ResizeUpLeftDownRight,
+        ))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -432,5 +532,35 @@ mod tests {
             2
         );
         assert_eq!(production.matches("window.start_window_move()").count(), 2);
+    }
+
+    #[test]
+    fn resize_handles_cover_all_four_edges_and_corners() {
+        // Same reasoning as the drag test above: the test platform's resize is a
+        // no-op, so this checks the source-level contract instead.
+        let source = include_str!("controls.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for edge in [
+            "Top",
+            "Bottom",
+            "Left",
+            "Right",
+            "TopLeft",
+            "TopRight",
+            "BottomLeft",
+            "BottomRight",
+        ] {
+            assert!(
+                production.contains(&format!("ResizeEdge::{edge}")),
+                "missing a resize handle for {edge}"
+            );
+        }
+        assert_eq!(
+            production
+                .matches("window.start_window_resize(edge)")
+                .count(),
+            1,
+            "all 8 handles should share the one resize_handle() call site"
+        );
     }
 }
