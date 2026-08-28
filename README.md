@@ -1,12 +1,12 @@
 # Nox
 
 Nox is a native desktop password manager for a **single-device** release.
-It stores one local encrypted vault per installation. Synchronization is not
-available yet.
+It supports multiple local encrypted vaults per installation. Synchronization
+remains unshipped.
 
 ## What works now
 
-- One local encrypted vault per installation.
+- Multiple local encrypted vaults per installation.
 - Login and Secure Note items.
 - Create, edit, delete, restore, search, and local password generation.
 - Explicit locking and an inactivity timeout while the unlocked Nox window
@@ -129,7 +129,7 @@ elsewhere.
 - No device pairing or LAN synchronization.
 - No cloud account, hosted service, WAN relay, or telemetry.
 - No browser extension, autofill, or mobile client.
-- One vault per local installation.
+- Multiple local vaults per installation.
 - No multi-user sharing or roles.
 - No Windows support.
 - Only Login and Secure Note items; card, identity, and custom fields are

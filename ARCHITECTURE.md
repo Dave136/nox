@@ -22,8 +22,8 @@ Confirmed product decisions:
   revision retained and shown for manual resolution.
 - **Availability:** v1 unlocks before pairing or syncing. Background sync while the
   vault is locked is out of scope.
-- **Vault scope:** one vault per local install for v1. Multiple vaults on the same
-  device is out of scope until a real need is shown.
+- **Vault scope:** multiple local vaults per local install for v1. Sync remains
+  single-vault and unshipped until that scope is intentionally revisited.
 
 ## Security and Failure Model
 
