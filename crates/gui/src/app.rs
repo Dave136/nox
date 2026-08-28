@@ -39,7 +39,7 @@ use gpui_component::{
     Disableable, IndexPath, Root, Theme, ThemeMode, WindowExt,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputState},
-    select::{Select, SelectEvent, SelectItem, SelectState},
+    select::{Select, SelectDelegate, SelectEvent, SelectItem, SelectState},
 };
 use gpui_rsx::rsx;
 use nox_core::{SecretBytes, Vault, VaultError};
@@ -202,8 +202,55 @@ impl SelectItem for VaultEntry {
         Some(vault_row_content(self, None))
     }
 
-    fn render(&self, _window: &mut Window, _cx: &mut gpui::App) -> impl IntoElement {
-        let missing = !self.path.is_file();
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+
+    fn disabled(&self) -> bool {
+        !self.path.is_file()
+    }
+}
+
+/// Delegate for the vault picker's dropdown. A plain `Vec<VaultEntry>` would
+/// work too, but its `SearchableListDelegate::render_item` default falls
+/// through to `SearchableListItem::render` wrapped in the framework's own
+/// "selected" chrome — a check icon plus `cx.theme().tokens.accent` as the
+/// background, neither of which the design uses. Overriding `render_item`
+/// here bypasses that wrapper entirely and renders our own row.
+#[derive(Clone)]
+pub(crate) struct VaultDelegate(pub(crate) Vec<VaultEntry>);
+
+impl SelectDelegate for VaultDelegate {
+    type Item = VaultEntry;
+
+    fn items_count(&self, _section: usize) -> usize {
+        self.0.len()
+    }
+
+    fn item(&self, ix: IndexPath) -> Option<&Self::Item> {
+        self.0.as_slice().get(ix.row)
+    }
+
+    fn position<V>(&self, value: &V) -> Option<IndexPath>
+    where
+        Self::Item: SelectItem<Value = V>,
+        V: PartialEq,
+    {
+        self.0
+            .iter()
+            .position(|vault| vault.value() == value)
+            .map(|ix| IndexPath::default().row(ix))
+    }
+
+    fn render_item(
+        &self,
+        _ix: IndexPath,
+        item: &Self::Item,
+        _checked: bool,
+        _window: &mut Window,
+        _cx: &mut gpui::App,
+    ) -> Option<AnyElement> {
+        let missing = !item.path.is_file();
         let trailing = gpui_component::Icon::empty()
             .path(if missing {
                 "icons/circle-x.svg"
@@ -220,20 +267,15 @@ impl SelectItem for VaultEntry {
         // The dropdown's own row size (40px/8px inset/6px radius) differs from
         // the trigger's (48px/12px/8px) — the design's "Select Content" rows
         // are visibly shorter and tighter than the closed trigger.
-        div()
-            .w_full()
-            .h(px(40.))
-            .px(px(8.))
-            .rounded(px(6.))
-            .child(vault_row_content(self, Some(trailing)))
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-
-    fn disabled(&self) -> bool {
-        !self.path.is_file()
+        Some(
+            div()
+                .w_full()
+                .h(px(40.))
+                .px(px(8.))
+                .rounded(px(6.))
+                .child(vault_row_content(item, Some(trailing)))
+                .into_any_element(),
+        )
     }
 }
 
@@ -555,7 +597,7 @@ pub struct Nox {
     pub(crate) vaults: VaultRegistry,
     pub(crate) active_vault: Option<VaultEntry>,
     /// Vault picker shown inline on the Locked screen's account row.
-    pub(crate) vault_select: Entity<SelectState<Vec<VaultEntry>>>,
+    pub(crate) vault_select: Entity<SelectState<VaultDelegate>>,
     _vault_select_subscription: Subscription,
 
     create_name: Entity<InputState>,
@@ -635,7 +677,7 @@ impl Nox {
             .and_then(|active| vaults.vaults.iter().position(|vault| vault.id == active.id));
         let vault_select = cx.new(|cx| {
             SelectState::new(
-                vaults.vaults.clone(),
+                VaultDelegate(vaults.vaults.clone()),
                 active_index.map(IndexPath::new),
                 window,
                 cx,
@@ -644,7 +686,7 @@ impl Nox {
         let _vault_select_subscription = cx.subscribe_in(
             &vault_select,
             window,
-            |this: &mut Self, _select, event: &SelectEvent<Vec<VaultEntry>>, window, cx| {
+            |this: &mut Self, _select, event: &SelectEvent<VaultDelegate>, window, cx| {
                 let SelectEvent::Confirm(value) = event;
                 this.active_vault = value.as_ref().and_then(|id| {
                     this.vaults
