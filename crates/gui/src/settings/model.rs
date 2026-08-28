@@ -37,6 +37,10 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub(crate) fn path(data_dir: &Path) -> PathBuf {
+        data_dir.join("settings.json")
+    }
+
     pub(crate) fn sidecar_path(vault_path: &Path) -> PathBuf {
         vault_path.with_extension("settings.json")
     }

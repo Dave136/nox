@@ -1073,8 +1073,8 @@ impl Vault {
     }
 }
 
-/// Return the platform's default Nox vault path without touching the filesystem.
-pub fn default_vault_path() -> Result<PathBuf, VaultError> {
+/// Return the platform's default Nox data directory without touching the filesystem.
+pub fn default_data_dir() -> Result<PathBuf, VaultError> {
     #[cfg(target_os = "macos")]
     let base = {
         let home = std::env::var_os("HOME")
@@ -1094,7 +1094,12 @@ pub fn default_vault_path() -> Result<PathBuf, VaultError> {
         }
     };
 
-    Ok(base.join("nox/vault.db"))
+    Ok(base.join("nox"))
+}
+
+/// Return the platform's default Nox vault path without touching the filesystem.
+pub fn default_vault_path() -> Result<PathBuf, VaultError> {
+    Ok(default_data_dir()?.join("vault.db"))
 }
 
 fn now_millis() -> u64 {
