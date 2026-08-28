@@ -217,7 +217,15 @@ impl SelectItem for VaultEntry {
                 CIPHER_ICON_MUTED
             }))
             .into_any_element();
-        vault_row_content(self, Some(trailing))
+        // The dropdown's own row size (40px/8px inset/6px radius) differs from
+        // the trigger's (48px/12px/8px) — the design's "Select Content" rows
+        // are visibly shorter and tighter than the closed trigger.
+        div()
+            .w_full()
+            .h(px(40.))
+            .px(px(8.))
+            .rounded(px(6.))
+            .child(vault_row_content(self, Some(trailing)))
     }
 
     fn value(&self) -> &Self::Value {
@@ -1106,6 +1114,7 @@ impl Nox {
                 div()
                     .flex()
                     .items_center()
+                    .w_full()
                     .gap(px(7.))
                     .child(
                         gpui_component::Icon::empty()
@@ -1196,6 +1205,12 @@ impl Nox {
                         </div>
                         <Input
                             base={Input::new(&self.create_name)
+                                .prefix(
+                                    gpui_component::Icon::empty()
+                                        .path("icons/database.svg")
+                                        .size(px(15.))
+                                        .text_color(rgb(CIPHER_ICON_MUTED)),
+                                )
                                 .aria_label("Vault name")}
                             h={px(44.)}
                             bg={rgb(CIPHER_SURFACE)}
@@ -1210,6 +1225,12 @@ impl Nox {
                         <Input
                             base={Input::new(&self.create_password)
                                 .mask_toggle()
+                                .prefix(
+                                    gpui_component::Icon::empty()
+                                        .path("icons/lock.svg")
+                                        .size(px(15.))
+                                        .text_color(rgb(CIPHER_ICON_MUTED)),
+                                )
                                 .aria_label("Master password")}
                             h={px(44.)}
                             bg={rgb(CIPHER_SURFACE)}
@@ -1224,6 +1245,12 @@ impl Nox {
                         <Input
                             base={Input::new(&self.create_confirm)
                                 .mask_toggle()
+                                .prefix(
+                                    gpui_component::Icon::empty()
+                                        .path("icons/lock.svg")
+                                        .size(px(15.))
+                                        .text_color(rgb(CIPHER_ICON_MUTED)),
+                                )
                                 .aria_label("Confirm master password")}
                             h={px(44.)}
                             bg={rgb(CIPHER_SURFACE)}
@@ -1278,11 +1305,21 @@ impl Nox {
         let vault_select = Select::new(&self.vault_select)
             .w_full()
             .h(px(48.))
-            .px(px(16.))
+            .px(px(12.))
             .rounded(px(8.))
             .border_1()
             .border_color(rgb(CIPHER_BORDER))
-            .bg(rgb(CIPHER_SURFACE));
+            .bg(rgb(CIPHER_SURFACE))
+            // The frame's own trailing caret (Ncszp's row uses chevron-right;
+            // the account row this trigger mirrors uses chevron-down) —
+            // pin its color to the design's icon-muted token instead of the
+            // ambient theme's muted_foreground, which isn't guaranteed to match.
+            .icon(
+                gpui_component::Icon::empty()
+                    .path("icons/chevron-down.svg")
+                    .size(px(14.))
+                    .text_color(rgb(CIPHER_ICON_MUTED)),
+            );
         let error = match &self.unlock_state {
             FormState::Error(message) => div()
                 .text_sm()
@@ -1354,6 +1391,7 @@ impl Nox {
                 div()
                     .flex()
                     .items_center()
+                    .w_full()
                     .gap(px(7.))
                     .child(
                         gpui_component::Icon::empty()
@@ -1385,6 +1423,7 @@ impl Nox {
                 div()
                     .flex()
                     .items_center()
+                    .w_full()
                     .gap(px(7.))
                     .child(
                         gpui_component::Icon::empty()
@@ -1451,6 +1490,12 @@ impl Nox {
                         <Input
                             base={Input::new(&self.unlock_password)
                                 .mask_toggle()
+                                .prefix(
+                                    gpui_component::Icon::empty()
+                                        .path("icons/lock.svg")
+                                        .size(px(15.))
+                                        .text_color(rgb(CIPHER_ICON_MUTED)),
+                                )
                                 .aria_label("Master password")}
                             h={px(44.)}
                             bg={rgb(CIPHER_SURFACE)}

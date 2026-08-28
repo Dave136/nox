@@ -50,6 +50,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "lightbulb",
     "list",
     "list-filter",
+    "lock",
     "lock-keyhole",
     "lock-keyhole-open",
     "mouse-pointer-2",
