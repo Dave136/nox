@@ -1,12 +1,25 @@
 use super::Settings;
-use crate::app::Nox;
+use crate::app::{Nox, relative_opened_label};
 use crate::theme::Theme;
+use crate::vaults::VaultEntry;
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, BoxShadow, Entity, FontWeight, MouseButton, Window,
-    div, ease_out_quint, point, prelude::*, px, rgb, rgba,
+    Animation, AnimationExt, AnyElement, App, BoxShadow, Entity, FontWeight, MouseButton,
+    SharedString, Window, div, ease_out_quint, point, prelude::*, px, rgb, rgba,
 };
 use gpui_component::{Icon, IconName, Sizable, button::Button};
 use std::time::Duration;
+
+/// The registered-vault list, snapshotted in `Nox::render`.
+///
+/// The section renderers are pure functions over `Entity<Nox>` with no `App`
+/// to read it with, so this follows how `Settings` and the conflict count are
+/// already handed down. One struct rather than two parameters: the chain is
+/// four functions deep and two of them are already at clippy's argument limit.
+#[derive(Clone)]
+pub(crate) struct VaultListModel {
+    pub(crate) entries: Vec<VaultEntry>,
+    pub(crate) active_id: Option<String>,
+}
 
 const BACKGROUND: u32 = 0x1B2029;
 const SURFACE: u32 = 0x202630;
@@ -31,6 +44,7 @@ pub(crate) fn render_settings_modal(
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
+    vault_list: &VaultListModel,
     conflict_count: usize,
 ) -> AnyElement {
     let close_locker = locker.clone();
@@ -74,6 +88,7 @@ pub(crate) fn render_settings_modal(
                     locker,
                     settings,
                     section,
+                    vault_list,
                     conflict_count,
                 )),
         )
@@ -133,6 +148,7 @@ pub(crate) fn render_settings_dialog(
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
+    vault_list: &VaultListModel,
     conflict_count: usize,
 ) -> AnyElement {
     div()
@@ -162,6 +178,7 @@ pub(crate) fn render_settings_dialog(
                     locker.clone(),
                     settings,
                     section,
+                    vault_list,
                     conflict_count,
                 ))
                 .with_animation(
@@ -314,12 +331,13 @@ fn render_section(
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
+    vault_list: &VaultListModel,
     conflict_count: usize,
 ) -> AnyElement {
     match section {
         SettingsSection::Appearance => appearance_section(theme, locker, settings),
         SettingsSection::Security => security_section(theme, locker, settings),
-        SettingsSection::Vault => vault_section(locker, conflict_count),
+        SettingsSection::Vault => vault_section(locker, vault_list, conflict_count),
         SettingsSection::Autofill => availability_section(
             locker,
             settings,
@@ -820,9 +838,183 @@ fn format_duration(seconds: u64) -> String {
     }
 }
 
-fn vault_section(locker: Entity<Nox>, conflict_count: usize) -> AnyElement {
+/// One row of the registered-vault list.
+///
+/// Measurements come from the `wBBRw` Pencil frame: 56 high, radius 8,
+/// 12 padding and gap, a 32px avatar.
+///
+/// Every row rests flat and lifts to `ACTIVE`/`ACTIVE_BORDER` on hover. The
+/// active vault is marked by its badge alone — giving it the lifted fill at
+/// rest made every row read as already hovered, and would now be
+/// indistinguishable from a row under the cursor.
+fn vault_row(
+    locker: Entity<Nox>,
+    index: usize,
+    vault: &VaultEntry,
+    active: bool,
+    conflict_count: usize,
+) -> AnyElement {
+    let _ = conflict_count;
+    let missing = !vault.path.is_file();
+    let group = SharedString::from(format!("settings-vault-row-{index}"));
+    let name_color = if missing {
+        SEARCH_PLACEHOLDER
+    } else {
+        0xE1E5E9
+    };
+    let meta_color = if missing {
+        SEARCH_PLACEHOLDER
+    } else {
+        NAV_LABEL
+    };
+    let initials: String = vault
+        .name
+        .split_whitespace()
+        .filter_map(|part| part.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase();
+    let location = vault
+        .path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_else(|| vault.path.to_string_lossy().into_owned());
+    let meta = if missing {
+        format!("{location} · File not found")
+    } else {
+        format!(
+            "{location} · {}",
+            relative_opened_label(vault.last_opened_ms)
+        )
+    };
+    let name = vault.name.clone();
+
+    div()
+        .id(("settings-vault-row", index))
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .w_full()
+        .h(px(56.))
+        .p(px(12.))
+        .rounded(px(8.))
+        .group(group.clone())
+        .bg(rgb(INPUT))
+        // The 1px box is always there, transparent at rest: revealing a border
+        // on hover would otherwise shift every row by a pixel.
+        .border_1()
+        .border_color(rgba(0x00000000))
+        .hover(|row| row.bg(rgb(ACTIVE)).border_color(rgb(ACTIVE_BORDER)))
+        .child(
+            div()
+                .size(px(32.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(ACTIVE))
+                // Without this the avatar dissolves into the hovered row,
+                // which lifts to the same colour.
+                .group_hover(group.clone(), |avatar| avatar.bg(rgb(ACTIVE_BORDER)))
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .font_weight(FontWeight(700.))
+                        .text_color(rgb(if missing {
+                            SEARCH_PLACEHOLDER
+                        } else {
+                            0xDDE3E8
+                        }))
+                        .child(initials),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight(550.))
+                                .text_color(rgb(name_color))
+                                .child(name.clone()),
+                        )
+                        .when(active, |row| {
+                            row.child(
+                                div()
+                                    .h(px(16.))
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(4.))
+                                    .bg(rgb(ACTIVE))
+                                    .border_1()
+                                    .border_color(rgb(ACTIVE_BORDER))
+                                    .child(
+                                        div()
+                                            .text_size(px(8.))
+                                            .font_weight(FontWeight(700.))
+                                            .text_color(rgb(ACTIVE_TEXT))
+                                            .child("ACTIVE"),
+                                    ),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(meta_color))
+                        .child(meta),
+                ),
+        )
+        .child(
+            // Deliberately not `action_button`: that draws a filled, outlined
+            // box, which reads as a second interactive surface stacked inside
+            // an already-interactive row.
+            div()
+                .id(("settings-vault-remove", index))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .cursor_pointer()
+                .child(
+                    Icon::empty()
+                        .path("icons/circle-x.svg")
+                        .size(px(13.))
+                        .text_color(rgb(MUTED)),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight(550.))
+                        .text_color(rgb(SECONDARY))
+                        .child("Remove"),
+                )
+                .on_click(move |_, window, app| {
+                    locker.update(app, |locker, cx| {
+                        locker.begin_remove_vault(index, window, cx);
+                    });
+                }),
+        )
+        .into_any_element()
+}
+
+fn vault_section(
+    locker: Entity<Nox>,
+    vault_list: &VaultListModel,
+    conflict_count: usize,
+) -> AnyElement {
     let restore = locker.clone();
     let export = locker.clone();
+    let rows_locker = locker.clone();
     let conflicts = locker;
     div()
         .flex()
@@ -830,8 +1022,20 @@ fn vault_section(locker: Entity<Nox>, conflict_count: usize) -> AnyElement {
         .gap(px(22.))
         .child(section_intro(
             "Vault",
-            "Manage encrypted data stored on this device.",
+            "Manage the encrypted vaults stored on this device.",
         ))
+        .child(div().flex().flex_col().gap(px(8.)).w_full().children(
+            vault_list.entries.iter().enumerate().map(|(index, vault)| {
+                vault_row(
+                    rows_locker.clone(),
+                    index,
+                    vault,
+                    vault_list.active_id.as_deref() == Some(vault.id.as_str()),
+                    conflict_count,
+                )
+            }),
+        ))
+        .child(divider())
         .child(settings_row(
             "Backups",
             "Export a recovery copy or restore one safely.",

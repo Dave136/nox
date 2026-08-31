@@ -13,12 +13,13 @@ use crate::vaults::{
 };
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FontWeight, Hsla, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba, SharedString,
-    Subscription, Task, Window, div, ease_out_quint, point, prelude::*, px, rgba,
+    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FocusHandle, FontWeight, Hsla,
+    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba,
+    SharedString, Subscription, Task, Window, div, ease_out_quint, point, prelude::*, px, relative,
+    rgb, rgba,
 };
 use gpui_component::{
-    Disableable, IndexPath, Root, Sizable, ThemeMode, WindowExt,
+    Disableable, FocusTrapElement as _, IndexPath, Root, Sizable, ThemeMode, WindowExt,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputState},
     popover::Popover,
@@ -58,7 +59,7 @@ fn auth_hover_color(from: Hsla, to: Hsla, amount: f32) -> Hsla {
     .into()
 }
 
-fn relative_opened_label(last_opened_ms: Option<u64>) -> SharedString {
+pub(crate) fn relative_opened_label(last_opened_ms: Option<u64>) -> SharedString {
     let Some(last_opened_ms) = last_opened_ms else {
         return "never opened".into();
     };
@@ -532,6 +533,14 @@ enum FormState {
     Error(SharedString),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RemoveVaultDialogState {
+    index: usize,
+    name: SharedString,
+    file_exists: bool,
+    delete_files: bool,
+}
+
 /// Root Nox view for vault creation, unlock, and lock lifecycle actions.
 pub struct Nox {
     pub(crate) state: AppState,
@@ -574,6 +583,12 @@ pub struct Nox {
     pub(crate) settings: Settings,
     pub(crate) settings_section: SettingsSection,
     pub(crate) settings_open: bool,
+    remove_vault_dialog: Option<RemoveVaultDialogState>,
+    remove_vault_dialog_focus: FocusHandle,
+    remove_vault_option_focus: FocusHandle,
+    remove_vault_cancel_focus: FocusHandle,
+    remove_vault_confirm_focus: FocusHandle,
+    remove_vault_prior_focus: Option<FocusHandle>,
     pub(crate) auth_hovered: HashMap<&'static str, bool>,
 }
 
@@ -690,6 +705,12 @@ impl Nox {
             settings,
             settings_section: SettingsSection::Appearance,
             settings_open: false,
+            remove_vault_dialog: None,
+            remove_vault_dialog_focus: cx.focus_handle(),
+            remove_vault_option_focus: cx.focus_handle().tab_stop(true),
+            remove_vault_cancel_focus: cx.focus_handle().tab_stop(true),
+            remove_vault_confirm_focus: cx.focus_handle().tab_stop(true),
+            remove_vault_prior_focus: None,
             auth_hovered: HashMap::new(),
         };
 
@@ -769,6 +790,398 @@ impl Nox {
         self.state = AppState::Locked;
         self.reset_unlock_input(window, cx);
         cx.notify();
+    }
+
+    /// Drop the vault at `index` from the list, optionally deleting its files.
+    ///
+    /// `delete_files` is the confirmation dialog's opt-in modifier, not a
+    /// default: removing is metadata-only unless the user explicitly asked for
+    /// the file to go too.
+    pub(crate) fn remove_vault(
+        &mut self,
+        index: usize,
+        delete_files: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.vaults.vaults.get(index).cloned() else {
+            return;
+        };
+
+        // Lock first when this vault is the one currently open: deleting its
+        // file out from under an unlocked `Vault` would skip the existing
+        // teardown that zeroizes key material, clears the clipboard secret and
+        // disarms the timers.
+        if delete_files
+            && matches!(&self.state, AppState::Unlocked(_))
+            && self.active_vault.as_ref().is_some_and(|v| v.id == entry.id)
+        {
+            self.lock_vault(window, cx);
+        }
+
+        // Before `remove_entry`, while the path is still reachable.
+        if delete_files {
+            crate::vaults::delete_vault_files(&entry.path);
+        }
+        crate::vaults::remove_entry(&mut self.vaults, index);
+        if let Err(error) = save_registry(&self.data_dir, &self.vaults) {
+            eprintln!("vault registry persistence failed: {error}");
+        }
+
+        if self.active_vault.as_ref().is_some_and(|v| v.id == entry.id) {
+            self.active_vault = self
+                .vaults
+                .vaults
+                .iter()
+                .find(|vault| vault.path.is_file())
+                .or_else(|| self.vaults.vaults.first())
+                .cloned();
+        }
+        self.sync_vault_select(window, cx);
+
+        if self.vaults.vaults.is_empty() {
+            self.state = AppState::NoVault;
+            self.active_vault = None;
+            self.create_state = FormState::Idle;
+            self.reset_create_inputs(window, cx);
+            Self::focus_input(&self.create_name, window, cx);
+        } else if !matches!(&self.state, AppState::Unlocked(_)) {
+            self.state = AppState::Locked;
+            self.unlock_state = FormState::Idle;
+            self.reset_unlock_input(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Open the in-app confirmation for removing the vault at `index`.
+    pub(crate) fn begin_remove_vault(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.vaults.vaults.get(index) else {
+            return;
+        };
+        self.remove_vault_prior_focus = window.focused(cx);
+        self.remove_vault_dialog = Some(RemoveVaultDialogState {
+            index,
+            name: entry.name.clone().into(),
+            file_exists: entry.path.is_file(),
+            // Removing only unregisters the vault until the user deliberately
+            // opts into the destructive path.
+            delete_files: false,
+        });
+        self.remove_vault_cancel_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn toggle_remove_vault_files(&mut self, cx: &mut Context<Self>) {
+        if let Some(dialog) = &mut self.remove_vault_dialog
+            && dialog.file_exists
+        {
+            dialog.delete_files = !dialog.delete_files;
+            cx.notify();
+        }
+    }
+
+    fn cancel_remove_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remove_vault_dialog = None;
+        if let Some(focus) = self.remove_vault_prior_focus.take() {
+            focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn confirm_remove_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.remove_vault_dialog.take() else {
+            return;
+        };
+        self.remove_vault_prior_focus = None;
+        self.remove_vault(dialog.index, dialog.delete_files, window, cx);
+    }
+
+    fn render_remove_vault_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.remove_vault_dialog.clone()?;
+        let checked = dialog.delete_files;
+        let warning = if checked {
+            "Every password in this vault is destroyed. Nox has no password recovery and this \
+             cannot be undone."
+        } else {
+            "Leave this off to keep the file — useful for a vault on a drive you unplug."
+        };
+        let option_fill = if checked { 0x2A2024 } else { 0x1B2029 };
+        let option_border = if checked { 0xA9787D } else { 0x343D48 };
+        let option_label = if checked { 0xE9C3C6 } else { 0xDDE3E8 };
+        let option_warning = if checked { 0xC9959A } else { 0x7F8996 };
+        let confirm_fill = if checked { 0xA9787D } else { 0xE3E6ED };
+        let confirm_label = if checked { "Delete vault" } else { "Remove" };
+
+        let option_focus = self.remove_vault_option_focus.clone();
+        let cancel_focus = self.remove_vault_cancel_focus.clone();
+        let confirm_focus = self.remove_vault_confirm_focus.clone();
+        let dialog_focus = self.remove_vault_dialog_focus.clone();
+        let toggle_for_a11y = cx.entity();
+        let cancel_for_a11y = cx.entity();
+        let confirm_for_a11y = cx.entity();
+
+        let delete_option = dialog.file_exists.then(|| {
+            div()
+                .id("remove-vault-delete-files")
+                .debug_selector(|| "remove-vault-delete-files".to_owned())
+                .w_full()
+                .flex()
+                .items_start()
+                .gap(px(10.))
+                .p(px(11.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(rgb(option_border))
+                .bg(rgb(option_fill))
+                .cursor_pointer()
+                .track_focus(&option_focus)
+                .role(gpui::Role::CheckBox)
+                .aria_label("Also delete the vault file permanently")
+                .aria_description(warning)
+                .aria_toggled(if checked {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        window.prevent_default();
+                        this.toggle_remove_vault_files(cx);
+                    }
+                }))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_remove_vault_files(cx)))
+                .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, app| {
+                    toggle_for_a11y.update(app, |this, cx| {
+                        this.toggle_remove_vault_files(cx);
+                    });
+                })
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .size(px(16.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(rgb(if checked { 0xA9787D } else { 0x3A4450 }))
+                        .bg(rgb(if checked { 0xA9787D } else { 0x202630 }))
+                        .when(checked, |checkbox| {
+                            checkbox.child(
+                                gpui_component::Icon::empty()
+                                    .path("icons/check.svg")
+                                    .size(px(11.))
+                                    .text_color(rgb(0x12161C)),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(5.))
+                        .child(
+                            div()
+                                .debug_selector(|| "remove-vault-option-label".to_owned())
+                                .font_family("Inter")
+                                .text_size(px(11.))
+                                .line_height(relative(1.18))
+                                .font_weight(FontWeight(550.))
+                                .text_color(rgb(option_label))
+                                .child("Also delete the vault file permanently"),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "remove-vault-option-warning".to_owned())
+                                .font_family("Inter")
+                                .text_size(px(10.))
+                                .line_height(px(15.))
+                                .whitespace_nowrap()
+                                .text_color(rgb(option_warning))
+                                .child(warning),
+                        ),
+                )
+        });
+
+        let cancel = div()
+            .id("remove-vault-cancel")
+            .debug_selector(|| "remove-vault-cancel".to_owned())
+            .w(px(69.))
+            .h(px(34.))
+            .px(px(16.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.))
+            .border_1()
+            .border_color(rgb(0x3A4450))
+            .bg(rgb(0x222731))
+            .font_family("Inter")
+            .text_size(px(11.))
+            .font_weight(FontWeight(550.))
+            .text_color(rgb(0xDDE3E8))
+            .cursor_pointer()
+            .track_focus(&cancel_focus)
+            .role(gpui::Role::Button)
+            .aria_label("Cancel")
+            .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    window.prevent_default();
+                    this.cancel_remove_vault(window, cx);
+                }
+            }))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.cancel_remove_vault(window, cx);
+            }))
+            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, app| {
+                cancel_for_a11y.update(app, |this, cx| {
+                    this.cancel_remove_vault(window, cx);
+                });
+            })
+            .child("Cancel");
+
+        let confirm = div()
+            .id("remove-vault-confirm")
+            .debug_selector(|| "remove-vault-confirm".to_owned())
+            .w(px(if checked { 94. } else { 74. }))
+            .h(px(34.))
+            .px(px(16.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.))
+            .border_1()
+            .border_color(rgb(confirm_fill))
+            .bg(rgb(confirm_fill))
+            .font_family("Inter")
+            .text_size(px(11.))
+            .font_weight(FontWeight(650.))
+            .text_color(rgb(0x1A1D22))
+            .cursor_pointer()
+            .track_focus(&confirm_focus)
+            .role(gpui::Role::Button)
+            .aria_label(confirm_label)
+            .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    window.prevent_default();
+                    this.confirm_remove_vault(window, cx);
+                }
+            }))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.confirm_remove_vault(window, cx);
+            }))
+            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, app| {
+                confirm_for_a11y.update(app, |this, cx| {
+                    this.confirm_remove_vault(window, cx);
+                });
+            })
+            .child(confirm_label);
+
+        Some(
+            div()
+                .id("remove-vault-modal-layer")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgba(0x0A0C0F99))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.cancel_remove_vault(window, cx);
+                    }),
+                )
+                .child(
+                    div()
+                        .id("remove-vault-dialog")
+                        .debug_selector(|| "remove-vault-dialog".to_owned())
+                        .w(px(440.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.))
+                        .p(px(21.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(rgb(0x3A4450))
+                        .bg(rgb(0x202630))
+                        .track_focus(&dialog_focus)
+                        .role(gpui::Role::Dialog)
+                        .aria_label(format!("Remove {} from the list?", dialog.name))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if event.keystroke.key.as_str() == "escape" {
+                                window.prevent_default();
+                                this.cancel_remove_vault(window, cx);
+                            }
+                        }))
+                        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
+                        .child(
+                            div()
+                                .debug_selector(|| "remove-vault-title".to_owned())
+                                .font_family("Inter")
+                                .text_size(px(15.))
+                                .line_height(relative(1.2))
+                                .font_weight(FontWeight(650.))
+                                .text_color(rgb(0xF3F5F7))
+                                .child(format!("Remove “{}” from the list?", dialog.name)),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "remove-vault-body".to_owned())
+                                .w_full()
+                                .font_family("Inter")
+                                .text_size(px(11.))
+                                .line_height(relative(1.45))
+                                .text_color(rgb(0xB9C0C8))
+                                .child(
+                                    "Nox stops listing this vault. Its file stays on disk, so you \
+                                     can open it again later.",
+                                ),
+                        )
+                        .children(delete_option)
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap(px(8.))
+                                .child(cancel)
+                                .child(confirm),
+                        )
+                        .focus_trap("remove-vault-focus-trap", &dialog_focus),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Rebuild the picker's delegate from the registry.
+    ///
+    /// A stale delegate keeps offering a vault that is no longer registered,
+    /// and its selected index points into the old list.
+    fn sync_vault_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entries = self.vaults.vaults.clone();
+        let selected = self
+            .active_vault
+            .as_ref()
+            .and_then(|active| entries.iter().position(|vault| vault.id == active.id))
+            .map(IndexPath::new);
+        self.vault_select.update(cx, |select, cx| {
+            select.set_items(VaultDelegate(entries), window, cx);
+            select.set_selected_index(selected, window, cx);
+        });
     }
 
     fn begin_create_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2043,9 +2456,14 @@ impl Render for Nox {
                 cx.entity(),
                 self.settings.clone(),
                 self.settings_section,
+                &settings::VaultListModel {
+                    entries: self.vaults.vaults.clone(),
+                    active_id: self.active_vault.as_ref().map(|vault| vault.id.clone()),
+                },
                 self.conflicts.count(),
             )
         });
+        let remove_vault_modal = self.render_remove_vault_dialog(cx);
         rsx! {
             <div
                 size_full
@@ -2062,6 +2480,9 @@ impl Render for Nox {
                 {self.window_controls.clone()}
                 <div flex_1 bg={theme.canvas}>{body}</div>
                 {for modal in settings_modal {
+                    {modal}
+                }}
+                {for modal in remove_vault_modal {
                     {modal}
                 }}
                 {for dialog in dialog_layer {
@@ -2357,6 +2778,122 @@ mod tests {
             vault_dropdown_trailing(theme, true, false),
             ("icons/circle-x.svg", theme.text_ghost)
         );
+    }
+
+    #[gpui::test]
+    fn remove_confirmation_is_an_in_app_modal(cx: &mut TestAppContext) {
+        init(cx);
+        let dir = test_dir("remove-confirmation-modal");
+        register_vaults(&dir, &["Personal vault"]);
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        view.update_in(cx, |nox, window, app| {
+            nox.begin_remove_vault(0, window, app);
+        });
+
+        assert!(!cx.update(|window, app| window.has_active_dialog(app)));
+        assert!(cx.debug_bounds("remove-vault-dialog").is_some());
+        eprintln!(
+            "dialog={:?} title={:?} body={:?} option={:?} label={:?} warning={:?} cancel={:?} confirm={:?}",
+            cx.debug_bounds("remove-vault-dialog"),
+            cx.debug_bounds("remove-vault-title"),
+            cx.debug_bounds("remove-vault-body"),
+            cx.debug_bounds("remove-vault-delete-files"),
+            cx.debug_bounds("remove-vault-option-label"),
+            cx.debug_bounds("remove-vault-option-warning"),
+            cx.debug_bounds("remove-vault-cancel"),
+            cx.debug_bounds("remove-vault-confirm"),
+        );
+        assert!(view.read_with(cx, |nox, _| {
+            nox.remove_vault_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.file_exists && !dialog.delete_files)
+        }));
+        cleanup(&dir);
+    }
+
+    #[gpui::test]
+    fn removing_a_vault_can_keep_or_delete_its_file(cx: &mut TestAppContext) {
+        init(cx);
+        let dir = test_dir("remove-vault");
+        register_vaults(&dir, &["Personal vault", "Work vault"]);
+        let kept = vault_file(&dir, "personal-vault");
+        let deleted = vault_file(&dir, "work-vault");
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        // Removing without the modifier is metadata-only.
+        view.update_in(cx, |nox, window, app| {
+            nox.remove_vault(1, false, window, app)
+        });
+        assert_eq!(view.read_with(cx, |nox, _| nox.vaults.vaults.len()), 1);
+        assert!(deleted.exists());
+
+        // The registry change is durable, not just in memory.
+        assert_eq!(load_registry(&dir).registry.vaults.len(), 1);
+
+        // Removing the last one with the modifier deletes it and empties the app.
+        view.update_in(cx, |nox, window, app| {
+            nox.remove_vault(0, true, window, app)
+        });
+        assert!(!kept.exists());
+        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::NoVault)));
+        assert!(view.read_with(cx, |nox, _| nox.active_vault.is_none()));
+        cleanup(&dir);
+    }
+
+    #[gpui::test]
+    fn removing_the_active_vault_falls_back_to_a_surviving_one(cx: &mut TestAppContext) {
+        init(cx);
+        let dir = test_dir("remove-active");
+        register_vaults(&dir, &["Personal vault", "Work vault"]);
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        // Startup makes the first entry active; removing it must hand the
+        // Locked screen a different vault rather than leave it pointing at a
+        // registry entry that no longer exists.
+        assert_eq!(
+            view.read_with(cx, |nox, _| nox
+                .active_vault
+                .as_ref()
+                .map(|v| v.name.clone())),
+            Some("Personal vault".into())
+        );
+
+        view.update_in(cx, |nox, window, app| {
+            nox.remove_vault(0, true, window, app)
+        });
+
+        assert_eq!(
+            view.read_with(cx, |nox, _| nox
+                .active_vault
+                .as_ref()
+                .map(|v| v.name.clone())),
+            Some("Work vault".into())
+        );
+        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::Locked)));
+        cleanup(&dir);
+    }
+
+    #[gpui::test]
+    fn removing_the_unlocked_vault_locks_it_first(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("remove-unlocked");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let dir = path.parent().unwrap().to_path_buf();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |nox, _window, _cx| {
+            nox.state = AppState::Unlocked(vault);
+        });
+
+        view.update_in(cx, |nox, window, app| {
+            nox.remove_vault(0, true, window, app)
+        });
+
+        // Deleting the file out from under an open vault without running the
+        // existing teardown would leave its key material live in memory.
+        assert!(view.read_with(cx, |nox, _| nox.vault_list.is_none()));
+        assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::NoVault)));
+        assert!(!path.exists());
+        cleanup(&dir);
     }
 
     #[gpui::test]
