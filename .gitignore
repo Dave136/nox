@@ -21,3 +21,6 @@ packaging/appimage/*.AppImage
 packaging/arch/pkg/
 packaging/arch/src/
 packaging/arch/*.pkg.tar.zst
+# Cargo registry tokens — never commit these
+.cargo/credentials
+.cargo/credentials.toml

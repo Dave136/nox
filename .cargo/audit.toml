@@ -1,0 +1,31 @@
+# `cargo audit` policy. Stricter than the default: `deny = ["warnings"]` turns
+# unmaintained/yanked advisories into CI failures, so a NEW one is noticed
+# instead of quietly accumulating. Real vulnerabilities fail by default either
+# way — this file is about the warnings.
+#
+# Everything ignored below is a transitive dependency of gpui/gpui-component,
+# not a direct choice of ours, and every one is "unmaintained" rather than a
+# vulnerability. Re-check when the gpui pin moves.
+
+[advisories]
+ignore = [
+  "RUSTSEC-2023-0089", # atomic-polyfill  <- heapless, via gpui
+  "RUSTSEC-2025-0141", # bincode
+  "RUSTSEC-2024-0384", # instant
+  "RUSTSEC-2024-0436", # paste
+  "RUSTSEC-2025-0134", # rustls-pemfile
+  "RUSTSEC-2026-0206", # rustybuzz       <- gpui text shaping
+  "RUSTSEC-2026-0192", # ttf-parser      <- gpui text shaping
+]
+
+[output]
+deny = ["warnings"]
+quiet = false
+
+# Left on deliberately, with nothing excused: the one yanked crate we hit
+# (chacha20 0.10.1) was fixed by moving the lockfile to 0.10.2 rather than
+# suppressed, so a future yanked crate still fails loudly. That matters most
+# for the crypto path — the vault's own cipher is chacha20 0.9.1 via
+# chacha20poly1305, on a separate branch of the tree from the one that moved.
+[yanked]
+enabled = true

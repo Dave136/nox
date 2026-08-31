@@ -55,7 +55,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             libfontconfig1-dev libwayland-dev libx11-dev libxcb1-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev
 
       - name: Cache Cargo dependencies and build
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
@@ -79,9 +79,26 @@ jobs:
         shell: bash
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # The `gui` crate's view tests cannot run on macOS with the pinned
+      # gpui-component: `Root::new` guards its AppKit accessibility hook with
+      # `cfg(all(target_os = "macos", not(test)))`, but `cfg(test)` only applies
+      # to the crate under test, never to a dependency — so the hook is compiled
+      # into every downstream test binary, and gpui's test window answers
+      # `window_handle()` with `unimplemented!()`. That is a panic, so
+      # gpui-component's own `.ok()?` cannot absorb it. 45 view tests die on the
+      # first line; the other 51 gui tests are platform-independent logic that
+      # the Linux job already covers. nox-core and sync — including the
+      # file-permission tests, which are the platform-sensitive ones — still run
+      # here. Drop the exclusion once gpui-component fixes that guard.
       - name: Test gate
+        if: runner.os != 'macOS'
         shell: bash
         run: cargo test --workspace --all-features
+
+      - name: Test gate (macOS — gui excluded, see note above)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: cargo test --workspace --all-features --exclude gui
 
   dependency-audit:
     name: Dependency audit
