@@ -837,6 +837,7 @@ fn vault_row(
     conflict_count: usize,
 ) -> AnyElement {
     let _ = conflict_count;
+    let rename_locker = locker.clone();
     let missing = !vault.path.is_file();
     let group = SharedString::from(format!("settings-vault-row-{index}"));
     let name_color = if missing {
@@ -957,6 +958,38 @@ fn vault_row(
                         .child(meta),
                 ),
         )
+        // A vault whose file is gone cannot be meaningfully renamed, so the
+        // action is not offered for it — removing it is the only thing left
+        // to do with that row.
+        .when(!missing, |row| {
+            let locker = rename_locker;
+            row.child(
+                div()
+                    .id(("settings-vault-rename", index))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .cursor_pointer()
+                    .child(
+                        Icon::empty()
+                            .path("icons/pencil.svg")
+                            .size(px(13.))
+                            .text_color(rgb(MUTED)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight(550.))
+                            .text_color(rgb(SECONDARY))
+                            .child("Rename"),
+                    )
+                    .on_click(move |_, window, app| {
+                        locker.update(app, |locker, cx| {
+                            locker.begin_rename_vault(index, window, cx);
+                        });
+                    }),
+            )
+        })
         .child(
             // Deliberately not `action_button`: that draws a filled, outlined
             // box, which reads as a second interactive surface stacked inside

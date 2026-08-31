@@ -541,6 +541,16 @@ struct RemoveVaultDialogState {
     delete_files: bool,
 }
 
+#[derive(Clone)]
+struct RenameVaultDialogState {
+    index: usize,
+    original: SharedString,
+    input: Entity<InputState>,
+    /// Set when the user confirms an empty name: the dialog stays open and
+    /// says why, rather than closing on a name that was never applied.
+    error: bool,
+}
+
 /// Root Nox view for vault creation, unlock, and lock lifecycle actions.
 pub struct Nox {
     pub(crate) state: AppState,
@@ -584,6 +594,11 @@ pub struct Nox {
     pub(crate) settings_section: SettingsSection,
     pub(crate) settings_open: bool,
     remove_vault_dialog: Option<RemoveVaultDialogState>,
+    rename_vault_dialog: Option<RenameVaultDialogState>,
+    rename_vault_dialog_focus: FocusHandle,
+    rename_vault_cancel_focus: FocusHandle,
+    rename_vault_confirm_focus: FocusHandle,
+    rename_vault_prior_focus: Option<FocusHandle>,
     remove_vault_dialog_focus: FocusHandle,
     remove_vault_option_focus: FocusHandle,
     remove_vault_cancel_focus: FocusHandle,
@@ -706,6 +721,11 @@ impl Nox {
             settings_section: SettingsSection::Appearance,
             settings_open: false,
             remove_vault_dialog: None,
+            rename_vault_dialog: None,
+            rename_vault_dialog_focus: cx.focus_handle(),
+            rename_vault_cancel_focus: cx.focus_handle().tab_stop(true),
+            rename_vault_confirm_focus: cx.focus_handle().tab_stop(true),
+            rename_vault_prior_focus: None,
             remove_vault_dialog_focus: cx.focus_handle(),
             remove_vault_option_focus: cx.focus_handle().tab_stop(true),
             remove_vault_cancel_focus: cx.focus_handle().tab_stop(true),
@@ -853,6 +873,100 @@ impl Nox {
         cx.notify();
     }
 
+    /// Rename the vault at `index`. Returns whether the name was accepted.
+    ///
+    /// Metadata only: the entry's `path` is untouched, so a vault renamed to
+    /// "Work" keeps living under its original slug directory. Moving an
+    /// encrypted database to match a label is the riskier operation and buys
+    /// nothing the user can see — the row shows the folder as metadata, not
+    /// as identity.
+    pub(crate) fn rename_vault(
+        &mut self,
+        index: usize,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let name = name.trim();
+        // Refused rather than defaulted: silently naming a vault something the
+        // user never typed is worse than making them try again.
+        if name.is_empty() {
+            return false;
+        }
+        let Some(entry) = self.vaults.vaults.get_mut(index) else {
+            return false;
+        };
+        if entry.name != name {
+            entry.name = name.to_owned();
+            let renamed = entry.clone();
+            if self
+                .active_vault
+                .as_ref()
+                .is_some_and(|active| active.id == renamed.id)
+            {
+                self.active_vault = Some(renamed);
+            }
+            if let Err(error) = save_registry(&self.data_dir, &self.vaults) {
+                eprintln!("vault registry persistence failed: {error}");
+            }
+            // Without this the Locked screen's trigger keeps the old label.
+            self.sync_vault_select(window, cx);
+            cx.notify();
+        }
+        true
+    }
+
+    /// Open the in-app rename dialog for the vault at `index`.
+    pub(crate) fn begin_rename_vault(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.vaults.vaults.get(index) else {
+            return;
+        };
+        let original: SharedString = entry.name.clone().into();
+        let input = Self::new_input(window, cx, "Vault name", false);
+        input.update(cx, |input, cx| {
+            input.set_value(original.to_string(), window, cx);
+        });
+        self.rename_vault_prior_focus = window.focused(cx);
+        self.rename_vault_dialog = Some(RenameVaultDialogState {
+            index,
+            original,
+            input: input.clone(),
+            error: false,
+        });
+        // The name is what the user came to change, so the field takes focus.
+        Self::focus_input(&input, window, cx);
+        cx.notify();
+    }
+
+    fn cancel_rename_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rename_vault_dialog = None;
+        if let Some(focus) = self.rename_vault_prior_focus.take() {
+            focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn confirm_rename_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.rename_vault_dialog.clone() else {
+            return;
+        };
+        let name = dialog.input.read(cx).value().to_string();
+        if self.rename_vault(dialog.index, name, window, cx) {
+            self.rename_vault_dialog = None;
+            self.rename_vault_prior_focus = None;
+            cx.notify();
+        } else if let Some(state) = self.rename_vault_dialog.as_mut() {
+            state.error = true;
+            Self::focus_input(&dialog.input, window, cx);
+            cx.notify();
+        }
+    }
+
     /// Open the in-app confirmation for removing the vault at `index`.
     pub(crate) fn begin_remove_vault(
         &mut self,
@@ -899,6 +1013,204 @@ impl Nox {
         };
         self.remove_vault_prior_focus = None;
         self.remove_vault(dialog.index, dialog.delete_files, window, cx);
+    }
+
+    fn render_rename_vault_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.rename_vault_dialog.clone()?;
+        let cancel_focus = self.rename_vault_cancel_focus.clone();
+        let confirm_focus = self.rename_vault_confirm_focus.clone();
+        let dialog_focus = self.rename_vault_dialog_focus.clone();
+        let cancel_for_a11y = cx.entity();
+        let confirm_for_a11y = cx.entity();
+
+        let cancel = div()
+            .id("rename-vault-cancel")
+            .debug_selector(|| "rename-vault-cancel".to_owned())
+            .w(px(69.))
+            .h(px(34.))
+            .px(px(16.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.))
+            .border_1()
+            .border_color(rgb(0x3A4450))
+            .bg(rgb(0x222731))
+            .font_family("Inter")
+            .text_size(px(11.))
+            .font_weight(FontWeight(550.))
+            .text_color(rgb(0xDDE3E8))
+            .cursor_pointer()
+            .track_focus(&cancel_focus)
+            .role(gpui::Role::Button)
+            .aria_label("Cancel")
+            .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    window.prevent_default();
+                    this.cancel_rename_vault(window, cx);
+                }
+            }))
+            .on_click(cx.listener(|this, _, window, cx| this.cancel_rename_vault(window, cx)))
+            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, app| {
+                cancel_for_a11y.update(app, |this, cx| this.cancel_rename_vault(window, cx));
+            })
+            .child("Cancel");
+
+        let confirm = div()
+            .id("rename-vault-confirm")
+            .debug_selector(|| "rename-vault-confirm".to_owned())
+            .w(px(64.))
+            .h(px(34.))
+            .px(px(16.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.))
+            .border_1()
+            .border_color(rgb(0xE3E6ED))
+            .bg(rgb(0xE3E6ED))
+            .font_family("Inter")
+            .text_size(px(11.))
+            .font_weight(FontWeight(650.))
+            .text_color(rgb(0x1A1D22))
+            .cursor_pointer()
+            .track_focus(&confirm_focus)
+            .role(gpui::Role::Button)
+            .aria_label("Save")
+            .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    window.prevent_default();
+                    this.confirm_rename_vault(window, cx);
+                }
+            }))
+            .on_click(cx.listener(|this, _, window, cx| this.confirm_rename_vault(window, cx)))
+            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, app| {
+                confirm_for_a11y.update(app, |this, cx| this.confirm_rename_vault(window, cx));
+            })
+            .child("Save");
+
+        let error = dialog.error.then(|| {
+            div()
+                .debug_selector(|| "rename-vault-error".to_owned())
+                .font_family("Inter")
+                .text_size(px(10.))
+                .line_height(relative(1.45))
+                .text_color(rgb(0xC9959A))
+                .child("A vault needs a name.")
+        });
+
+        Some(
+            div()
+                .id("rename-vault-layer")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgba(0x0A0C0F99))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| this.cancel_rename_vault(window, cx)),
+                )
+                .child(
+                    div()
+                        .id("rename-vault-dialog")
+                        .debug_selector(|| "rename-vault-dialog".to_owned())
+                        .w(px(440.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.))
+                        .p(px(21.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(rgb(0x3A4450))
+                        .bg(rgb(0x202630))
+                        .track_focus(&dialog_focus)
+                        .role(gpui::Role::Dialog)
+                        .aria_label(format!("Rename {}", dialog.original))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            match event.keystroke.key.as_str() {
+                                "escape" => {
+                                    window.prevent_default();
+                                    this.cancel_rename_vault(window, cx);
+                                }
+                                // Enter submits from the field, the way every
+                                // other form in the app behaves.
+                                "enter" => {
+                                    window.prevent_default();
+                                    this.confirm_rename_vault(window, cx);
+                                }
+                                _ => {}
+                            }
+                        }))
+                        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
+                        .child(
+                            div()
+                                .debug_selector(|| "rename-vault-title".to_owned())
+                                .font_family("Inter")
+                                .text_size(px(15.))
+                                .line_height(relative(1.2))
+                                .font_weight(FontWeight(650.))
+                                .text_color(rgb(0xF3F5F7))
+                                .child("Rename vault"),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "rename-vault-body".to_owned())
+                                .w_full()
+                                .font_family("Inter")
+                                .text_size(px(11.))
+                                .line_height(relative(1.45))
+                                .text_color(rgb(0xB9C0C8))
+                                .child(
+                                    "Only the label changes. The vault file stays where it is, \
+                                     so its folder keeps its original name.",
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .gap(px(7.))
+                                .child(
+                                    div()
+                                        .font_family("Inter")
+                                        .text_size(px(9.))
+                                        .font_weight(FontWeight(700.))
+                                        .text_color(rgb(0x7F8996))
+                                        .child("VAULT NAME"),
+                                )
+                                .child(
+                                    Input::new(&dialog.input)
+                                        .prefix(
+                                            gpui_component::Icon::empty()
+                                                .path("icons/database.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(0x737E8D)),
+                                        )
+                                        .aria_label("Vault name"),
+                                )
+                                .children(error),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap(px(8.))
+                                .child(cancel)
+                                .child(confirm),
+                        )
+                        .focus_trap("rename-vault-focus-trap", &dialog_focus),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_remove_vault_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -2464,6 +2776,7 @@ impl Render for Nox {
             )
         });
         let remove_vault_modal = self.render_remove_vault_dialog(cx);
+        let rename_vault_modal = self.render_rename_vault_dialog(cx);
         rsx! {
             <div
                 size_full
@@ -2483,6 +2796,9 @@ impl Render for Nox {
                     {modal}
                 }}
                 {for modal in remove_vault_modal {
+                    {modal}
+                }}
+                {for modal in rename_vault_modal {
                     {modal}
                 }}
                 {for dialog in dialog_layer {
@@ -2818,6 +3134,80 @@ mod tests {
                 .as_ref()
                 .is_some_and(|dialog| dialog.delete_files)
         }));
+        cleanup(&dir);
+    }
+
+    #[gpui::test]
+    fn renaming_a_vault_only_touches_registry_metadata(cx: &mut TestAppContext) {
+        init(cx);
+        let dir = test_dir("rename-vault");
+        register_vaults(&dir, &["Personal vault"]);
+        let before = vault_file(&dir, "personal-vault");
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        view.update_in(cx, |nox, window, app| {
+            nox.rename_vault(0, "Renamed".into(), window, app)
+        });
+
+        assert_eq!(
+            view.read_with(cx, |nox, _| nox.vaults.vaults[0].name.clone()),
+            "Renamed"
+        );
+        // The database must not move: the slug directory keeps its original
+        // name, and the file has to still be there.
+        assert_eq!(
+            view.read_with(cx, |nox, _| nox.vaults.vaults[0].path.clone()),
+            before
+        );
+        assert!(before.exists());
+        assert_eq!(load_registry(&dir).registry.vaults[0].name, "Renamed");
+        cleanup(&dir);
+    }
+
+    #[gpui::test]
+    fn renaming_trims_and_refuses_an_empty_name(cx: &mut TestAppContext) {
+        init(cx);
+        let dir = test_dir("rename-empty");
+        register_vaults(&dir, &["Personal vault"]);
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        let name = |nox: &Nox| nox.vaults.vaults[0].name.clone();
+
+        // Whitespace-only is refused outright rather than silently defaulted
+        // to something the user never typed.
+        assert!(!view.update_in(cx, |nox, window, app| {
+            nox.rename_vault(0, "   ".into(), window, app)
+        }));
+        assert_eq!(view.read_with(cx, |nox, _| name(nox)), "Personal vault");
+
+        // Surrounding whitespace is trimmed, not treated as a rejection.
+        assert!(view.update_in(cx, |nox, window, app| {
+            nox.rename_vault(0, "  Work vault  ".into(), window, app)
+        }));
+        assert_eq!(view.read_with(cx, |nox, _| name(nox)), "Work vault");
+        cleanup(&dir);
+    }
+
+    #[gpui::test]
+    fn renaming_the_active_vault_updates_the_locked_screen_picker(cx: &mut TestAppContext) {
+        init(cx);
+        let dir = test_dir("rename-active");
+        register_vaults(&dir, &["Personal vault", "Work vault"]);
+        let (view, cx) = add_nox_view(cx, dir.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+
+        view.update_in(cx, |nox, window, app| {
+            nox.rename_vault(0, "Renamed".into(), window, app)
+        });
+
+        // A stale delegate would keep the old label on the trigger the user
+        // is looking at while unlocking.
+        let shown = view.read_with(cx, |nox, cx| {
+            nox.vault_select
+                .read(cx)
+                .selected_value()
+                .and_then(|id| nox.vaults.vaults.iter().find(|v| &v.id == id))
+                .map(|v| v.name.clone())
+        });
+        assert_eq!(shown, Some("Renamed".into()));
         cleanup(&dir);
     }
 
