@@ -6,7 +6,6 @@ use nox_core::{
 };
 use std::{
     fs, io,
-    os::unix::ffi::OsStringExt,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
@@ -439,8 +438,19 @@ fn backup_parent_symlink_does_not_change_directory_mode() {
     assert_regular_owner_mode(&target.join("archive.lockbak"), &tree.root, 0o600);
 }
 
+/// Not run on macOS: APFS and HFS+ enforce valid UTF-8 in filenames and answer
+/// `EILSEQ` for anything else, so a vault directory named with a lone `0x80`
+/// cannot be created there at all — `Vault::create` fails before any of the
+/// mode assertions below are reachable. The scenario is unreachable rather
+/// than unchecked; Linux, where filenames are arbitrary byte sequences, still
+/// covers it.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn non_utf8_vault_name_has_correct_sidecar_checks() {
+    // Scoped to this test: it is the only user, and the import would be dead
+    // on macOS where the test is compiled out.
+    use std::os::unix::ffi::OsStringExt;
+
     let Some(_mode) = enter_umask_matrix("non_utf8_vault_name_has_correct_sidecar_checks") else {
         return;
     };

@@ -1763,7 +1763,14 @@ mod tests {
             let _ = sync_round(&service_c).await;
         }
         let mut all_items_present = false;
-        for _ in 0..40 {
+        // 480 x 25ms = 12s, deliberately past `test_config`'s 10s replication
+        // deadline: giving up before the transport itself does turns CPU
+        // contention into a test failure. Three profiles converging here means
+        // Noise handshakes plus Argon2 derivation, so under a saturated
+        // `cargo test --workspace` the old 1s budget expired while the run was
+        // merely slow, not stuck. The loop breaks the moment it converges, so
+        // a larger budget costs nothing when things are healthy.
+        for _ in 0..480 {
             all_items_present = [&profile_a, &profile_b, &profile_c].iter().all(|profile| {
                 let ids = profile
                     .list_items()
