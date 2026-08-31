@@ -360,55 +360,111 @@ fn login_row_subtitle(payload: &ItemPayload) -> String {
     }
 }
 
-/// A type-filter pill in the "All Items Type Filters" row. `count` is always
-/// the real total for that type in the vault (unaffected by search), matching
-/// the design's counts. Cards/Identities pass `enabled: false` since those
-/// item types don't exist in this app's data model yet — shown at 0 rather
-/// than hidden, same as elsewhere in the app.
-fn type_filter_pill(
+type PillClick = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static>;
+
+/// A type-filter pill in the "All Items Type Filters" row.
+///
+/// A builder rather than a wide function: of the nine call sites, seven want
+/// the default colour and seven are enabled, so a flat signature made every
+/// call spell out parameters it did not care about. It also matches how this
+/// file already builds its `Button`s.
+///
+/// `count` is always the real total for that type in the vault (unaffected by
+/// search), matching the design's counts.
+struct TypeFilterPill {
     id: &'static str,
     label: &'static str,
     count: usize,
     count_color: Option<Hsla>,
     active: bool,
     enabled: bool,
-    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    cx: &mut Context<Nox>,
-) -> AnyElement {
-    let theme = Theme::current(cx);
-    let label_color = if active { theme.text } else { theme.text_muted };
-    let content = div()
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .child(
-            div()
-                .text_size(px(13.))
-                .font_weight(FontWeight(500.))
-                .text_color(label_color)
-                .child(label),
-        )
-        .child(
-            div()
-                .text_size(px(10.))
-                .text_color(count_color.unwrap_or(theme.text_count))
-                .child(format!("{count}")),
-        );
-    let (bg, hover_bg) = if active {
-        (theme.pill_active, theme.pill_active)
-    } else {
-        (theme.surface, theme.raised)
-    };
-    let variant = ButtonCustomVariant::new(cx).color(bg).hover(hover_bg);
-    Button::new(id)
-        .disabled(!enabled)
-        .custom(variant)
-        .h(px(28.))
-        .px(px(9.))
-        .rounded(px(6.))
-        .on_click(on_click)
-        .child(content)
-        .into_any_element()
+    on_click: Option<PillClick>,
+}
+
+impl TypeFilterPill {
+    fn new(id: &'static str, label: &'static str, count: usize) -> Self {
+        Self {
+            id,
+            label,
+            count,
+            count_color: None,
+            active: false,
+            enabled: true,
+            on_click: None,
+        }
+    }
+
+    /// A filter for an item type this app does not model yet.
+    ///
+    /// Named because the three things it implies — a zero count, a disabled
+    /// pill, and no click handler — always travel together and mean one thing.
+    /// Shown at a real 0 rather than hidden, the same convention the sidebar
+    /// uses.
+    fn unavailable(id: &'static str, label: &'static str) -> Self {
+        Self {
+            enabled: false,
+            ..Self::new(id, label, 0)
+        }
+    }
+
+    fn count_color(mut self, color: Hsla) -> Self {
+        self.count_color = Some(color);
+        self
+    }
+
+    fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    fn on_click(
+        mut self,
+        handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(handler));
+        self
+    }
+
+    fn render(self, cx: &mut Context<Nox>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let label_color = if self.active {
+            theme.text
+        } else {
+            theme.text_muted
+        };
+        let content = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight(500.))
+                    .text_color(label_color)
+                    .child(self.label),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(self.count_color.unwrap_or(theme.text_count))
+                    .child(format!("{}", self.count)),
+            );
+        let (bg, hover_bg) = if self.active {
+            (theme.pill_active, theme.pill_active)
+        } else {
+            (theme.surface, theme.raised)
+        };
+        let variant = ButtonCustomVariant::new(cx).color(bg).hover(hover_bg);
+        Button::new(self.id)
+            .disabled(!self.enabled)
+            .custom(variant)
+            .h(px(28.))
+            .px(px(9.))
+            .rounded(px(6.))
+            .when_some(self.on_click, |button, handler| button.on_click(handler))
+            .child(content)
+            .into_any_element()
+    }
 }
 
 /// One item row's inner content: icon, title/subtitle, type, updated time,
@@ -804,66 +860,56 @@ impl Nox {
                 .h(px(44.))
                 .px(px(12.))
                 .flex_shrink_0()
-                .child(type_filter_pill(
-                    "login-filter-all",
-                    "All logins",
-                    logins_count,
-                    None,
-                    health_filter.is_none(),
-                    true,
-                    {
-                        let locker = locker.clone();
-                        move |_, _window, app| {
-                            locker.update(app, |locker, cx| {
-                                if let Some(list) = locker.vault_list.as_mut() {
-                                    list.set_login_health_filter(None);
-                                }
-                                cx.notify();
-                            });
-                        }
-                    },
-                    cx,
-                ))
-                .child(type_filter_pill(
-                    "login-filter-weak",
-                    "Weak",
-                    weak_count,
-                    Some(theme.danger),
-                    health_filter == Some(LoginHealth::Weak),
-                    true,
-                    {
-                        let locker = locker.clone();
-                        move |_, _window, app| {
-                            locker.update(app, |locker, cx| {
-                                if let Some(list) = locker.vault_list.as_mut() {
-                                    list.set_login_health_filter(Some(LoginHealth::Weak));
-                                }
-                                cx.notify();
-                            });
-                        }
-                    },
-                    cx,
-                ))
-                .child(type_filter_pill(
-                    "login-filter-reused",
-                    "Reused",
-                    reused_count,
-                    Some(theme.danger),
-                    health_filter == Some(LoginHealth::Reused),
-                    true,
-                    {
-                        let locker = locker.clone();
-                        move |_, _window, app| {
-                            locker.update(app, |locker, cx| {
-                                if let Some(list) = locker.vault_list.as_mut() {
-                                    list.set_login_health_filter(Some(LoginHealth::Reused));
-                                }
-                                cx.notify();
-                            });
-                        }
-                    },
-                    cx,
-                ))
+                .child(
+                    TypeFilterPill::new("login-filter-all", "All logins", logins_count)
+                        .active(health_filter.is_none())
+                        .on_click({
+                            let locker = locker.clone();
+                            move |_, _window, app| {
+                                locker.update(app, |locker, cx| {
+                                    if let Some(list) = locker.vault_list.as_mut() {
+                                        list.set_login_health_filter(None);
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render(cx),
+                )
+                .child(
+                    TypeFilterPill::new("login-filter-weak", "Weak", weak_count)
+                        .count_color(theme.danger)
+                        .active(health_filter == Some(LoginHealth::Weak))
+                        .on_click({
+                            let locker = locker.clone();
+                            move |_, _window, app| {
+                                locker.update(app, |locker, cx| {
+                                    if let Some(list) = locker.vault_list.as_mut() {
+                                        list.set_login_health_filter(Some(LoginHealth::Weak));
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render(cx),
+                )
+                .child(
+                    TypeFilterPill::new("login-filter-reused", "Reused", reused_count)
+                        .count_color(theme.danger)
+                        .active(health_filter == Some(LoginHealth::Reused))
+                        .on_click({
+                            let locker = locker.clone();
+                            move |_, _window, app| {
+                                locker.update(app, |locker, cx| {
+                                    if let Some(list) = locker.vault_list.as_mut() {
+                                        list.set_login_health_filter(Some(LoginHealth::Reused));
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render(cx),
+                )
                 .into_any_element()
         } else if is_secure_notes_view {
             div()
@@ -874,16 +920,12 @@ impl Nox {
                 .h(px(44.))
                 .px(px(12.))
                 .flex_shrink_0()
-                .child(type_filter_pill(
-                    "secure-note-filter-all",
-                    "All notes",
-                    notes_count,
-                    None,
-                    true,
-                    true,
-                    |_, _, _| {},
-                    cx,
-                ))
+                .child(
+                    TypeFilterPill::new("secure-note-filter-all", "All notes", notes_count)
+                        .active(true)
+                        .on_click(|_, _, _| {})
+                        .render(cx),
+                )
                 .into_any_element()
         } else {
             div()
@@ -894,88 +936,58 @@ impl Nox {
                 .h(px(44.))
                 .px(px(12.))
                 .flex_shrink_0()
-                .child(type_filter_pill(
-                    "type-filter-all",
-                    "All",
-                    all_count,
-                    None,
-                    active_type.is_none(),
-                    true,
-                    {
-                        let locker = locker.clone();
-                        move |_, _window, app| {
-                            locker.update(app, |locker, cx| {
-                                if let Some(list) = locker.vault_list.as_mut() {
-                                    list.set_type_filter(None);
-                                }
-                                cx.notify();
-                            });
-                        }
-                    },
-                    cx,
-                ))
-                .child(type_filter_pill(
-                    "type-filter-logins",
-                    "Logins",
-                    logins_count,
-                    None,
-                    active_type == Some(ItemType::Login),
-                    true,
-                    {
-                        let locker = locker.clone();
-                        move |_, _window, app| {
-                            locker.update(app, |locker, cx| {
-                                if let Some(list) = locker.vault_list.as_mut() {
-                                    list.set_type_filter(Some(ItemType::Login));
-                                }
-                                cx.notify();
-                            });
-                        }
-                    },
-                    cx,
-                ))
+                .child(
+                    TypeFilterPill::new("type-filter-all", "All", all_count)
+                        .active(active_type.is_none())
+                        .on_click({
+                            let locker = locker.clone();
+                            move |_, _window, app| {
+                                locker.update(app, |locker, cx| {
+                                    if let Some(list) = locker.vault_list.as_mut() {
+                                        list.set_type_filter(None);
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render(cx),
+                )
+                .child(
+                    TypeFilterPill::new("type-filter-logins", "Logins", logins_count)
+                        .active(active_type == Some(ItemType::Login))
+                        .on_click({
+                            let locker = locker.clone();
+                            move |_, _window, app| {
+                                locker.update(app, |locker, cx| {
+                                    if let Some(list) = locker.vault_list.as_mut() {
+                                        list.set_type_filter(Some(ItemType::Login));
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render(cx),
+                )
                 // ponytail: Cards/IDs have no backing item type yet — shown at
                 // a real 0 rather than hidden, same convention as the sidebar.
-                .child(type_filter_pill(
-                    "type-filter-cards",
-                    "Cards",
-                    0,
-                    None,
-                    false,
-                    false,
-                    |_, _, _| {},
-                    cx,
-                ))
-                .child(type_filter_pill(
-                    "type-filter-notes",
-                    "Notes",
-                    notes_count,
-                    None,
-                    active_type == Some(ItemType::SecureNote),
-                    true,
-                    {
-                        let locker = locker.clone();
-                        move |_, _window, app| {
-                            locker.update(app, |locker, cx| {
-                                if let Some(list) = locker.vault_list.as_mut() {
-                                    list.set_type_filter(Some(ItemType::SecureNote));
-                                }
-                                cx.notify();
-                            });
-                        }
-                    },
-                    cx,
-                ))
-                .child(type_filter_pill(
-                    "type-filter-ids",
-                    "IDs",
-                    0,
-                    None,
-                    false,
-                    false,
-                    |_, _, _| {},
-                    cx,
-                ))
+                .child(TypeFilterPill::unavailable("type-filter-cards", "Cards").render(cx))
+                .child(
+                    TypeFilterPill::new("type-filter-notes", "Notes", notes_count)
+                        .active(active_type == Some(ItemType::SecureNote))
+                        .on_click({
+                            let locker = locker.clone();
+                            move |_, _window, app| {
+                                locker.update(app, |locker, cx| {
+                                    if let Some(list) = locker.vault_list.as_mut() {
+                                        list.set_type_filter(Some(ItemType::SecureNote));
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .render(cx),
+                )
+                .child(TypeFilterPill::unavailable("type-filter-ids", "IDs").render(cx))
                 .into_any_element()
         };
 

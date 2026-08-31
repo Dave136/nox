@@ -338,27 +338,9 @@ fn render_section(
         SettingsSection::Appearance => appearance_section(theme, locker, settings),
         SettingsSection::Security => security_section(theme, locker, settings),
         SettingsSection::Vault => vault_section(locker, vault_list, conflict_count),
-        SettingsSection::Autofill => availability_section(
-            locker,
-            settings,
-            "Autofill",
-            "Fill credentials without revealing them",
-            "Autofill needs the Nox browser extension, which is not installed in this build.",
-            "Enable autofill when the extension is available",
-            |settings| settings.autofill_enabled = !settings.autofill_enabled,
-            |settings| settings.autofill_enabled,
-        ),
+        SettingsSection::Autofill => availability_section(locker, settings, &AUTOFILL),
         SettingsSection::Privacy => privacy_section(theme, locker, settings),
-        SettingsSection::Notifications => availability_section(
-            locker,
-            settings,
-            "Notifications",
-            "Stay informed without exposing vault data",
-            "System notifications are unavailable until Nox has an operating-system notification service.",
-            "Enable desktop notifications when available",
-            |settings| settings.notifications_enabled = !settings.notifications_enabled,
-            |settings| settings.notifications_enabled,
-        ),
+        SettingsSection::Notifications => availability_section(locker, settings, &NOTIFICATIONS),
         SettingsSection::ImportExport => import_export_section(locker),
         SettingsSection::Account => account_section(),
     }
@@ -1152,17 +1134,56 @@ fn privacy_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> Any
         .into_any_element()
 }
 
-fn availability_section(
-    locker: Entity<Nox>,
-    settings: Settings,
+/// A capability this build does not have, described in one place.
+///
+/// The four strings and the two `fn` pointers all describe the same
+/// capability, and every field is `&'static` or a function pointer — so each
+/// one is a `const` rather than six positional arguments. It also makes a bug
+/// class unrepresentable: `read` and `toggle` used to be loose pointers passed
+/// four arguments away from the copy they belong to, so nothing stopped a
+/// caller pairing Autofill's strings with Notifications' toggle.
+struct UnavailableCapability {
     title: &'static str,
     subtitle: &'static str,
     unavailable: &'static str,
     label: &'static str,
-    change: fn(&mut Settings),
-    value: fn(&Settings) -> bool,
+    read: fn(&Settings) -> bool,
+    toggle: fn(&mut Settings),
+}
+
+const AUTOFILL: UnavailableCapability = UnavailableCapability {
+    title: "Autofill",
+    subtitle: "Fill credentials without revealing them",
+    unavailable: "Autofill needs the Nox browser extension, which is not installed in this build.",
+    label: "Enable autofill when the extension is available",
+    read: |settings| settings.autofill_enabled,
+    toggle: |settings| settings.autofill_enabled = !settings.autofill_enabled,
+};
+
+const NOTIFICATIONS: UnavailableCapability = UnavailableCapability {
+    title: "Notifications",
+    subtitle: "Stay informed without exposing vault data",
+    unavailable: "System notifications are unavailable until Nox has an operating-system \
+                  notification service.",
+    label: "Enable desktop notifications when available",
+    read: |settings| settings.notifications_enabled,
+    toggle: |settings| settings.notifications_enabled = !settings.notifications_enabled,
+};
+
+fn availability_section(
+    locker: Entity<Nox>,
+    settings: Settings,
+    capability: &UnavailableCapability,
 ) -> AnyElement {
-    let enabled = value(&settings);
+    let &UnavailableCapability {
+        title,
+        subtitle,
+        unavailable,
+        label,
+        read,
+        toggle: change,
+    } = capability;
+    let enabled = read(&settings);
     div()
         .flex()
         .flex_col()

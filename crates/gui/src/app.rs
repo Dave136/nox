@@ -1004,7 +1004,7 @@ impl Nox {
                                 .font_family("Inter")
                                 .text_size(px(10.))
                                 .line_height(px(15.))
-                                .whitespace_nowrap()
+                                .when(!checked, |text| text.whitespace_nowrap())
                                 .text_color(rgb(option_warning))
                                 .child(warning),
                         ),
@@ -2792,22 +2792,31 @@ mod tests {
         });
 
         assert!(!cx.update(|window, app| window.has_active_dialog(app)));
-        assert!(cx.debug_bounds("remove-vault-dialog").is_some());
-        eprintln!(
-            "dialog={:?} title={:?} body={:?} option={:?} label={:?} warning={:?} cancel={:?} confirm={:?}",
-            cx.debug_bounds("remove-vault-dialog"),
-            cx.debug_bounds("remove-vault-title"),
-            cx.debug_bounds("remove-vault-body"),
-            cx.debug_bounds("remove-vault-delete-files"),
-            cx.debug_bounds("remove-vault-option-label"),
-            cx.debug_bounds("remove-vault-option-warning"),
-            cx.debug_bounds("remove-vault-cancel"),
-            cx.debug_bounds("remove-vault-confirm"),
-        );
+        let dialog = cx.debug_bounds("remove-vault-dialog").unwrap();
+        let option = cx.debug_bounds("remove-vault-delete-files").unwrap();
+        let cancel = cx.debug_bounds("remove-vault-cancel").unwrap();
+        let confirm = cx.debug_bounds("remove-vault-confirm").unwrap();
+        assert_eq!(dialog.size, gpui::size(px(440.), px(233.)));
+        assert_eq!(option.size, gpui::size(px(396.), px(57.)));
+        assert_eq!(cancel.size, gpui::size(px(69.), px(34.)));
+        assert_eq!(confirm.size, gpui::size(px(74.), px(34.)));
         assert!(view.read_with(cx, |nox, _| {
             nox.remove_vault_dialog
                 .as_ref()
                 .is_some_and(|dialog| dialog.file_exists && !dialog.delete_files)
+        }));
+
+        view.update(cx, |nox, app| nox.toggle_remove_vault_files(app));
+        let dialog = cx.debug_bounds("remove-vault-dialog").unwrap();
+        let option = cx.debug_bounds("remove-vault-delete-files").unwrap();
+        let confirm = cx.debug_bounds("remove-vault-confirm").unwrap();
+        assert_eq!(dialog.size, gpui::size(px(440.), px(248.)));
+        assert_eq!(option.size, gpui::size(px(396.), px(72.)));
+        assert_eq!(confirm.size, gpui::size(px(94.), px(34.)));
+        assert!(view.read_with(cx, |nox, _| {
+            nox.remove_vault_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.delete_files)
         }));
         cleanup(&dir);
     }
