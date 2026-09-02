@@ -5,6 +5,7 @@ mod clipboard;
 mod conflicts;
 mod detail;
 mod favicon;
+mod icons;
 mod item_editor;
 mod locked;
 mod nav;
