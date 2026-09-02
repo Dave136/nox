@@ -22,7 +22,9 @@ pub use clock::{
     HlcTimestamp, OrderingKey, Quarantine, SkewClassification, SkewDecision, classify,
 };
 pub use ids::{ChangeId, DeviceId, ItemId, PublicKeyBytes, PublicKeyLengthError, VaultId};
-pub use item::{ITEM_SCHEMA_VERSION, ItemPayload, ItemPayloadError, ItemType};
+pub use item::{
+    ITEM_SCHEMA_VERSION, IconChoice, ItemPayload, ItemPayloadError, ItemType, PresetIcon,
+};
 pub use journal::{
     ApplyResult, BatchApplyResult, Change, CursorMap, JournalError, MAX_BATCH_PLAINTEXT_BYTES,
     MAX_CHANGE_CIPHERTEXT_BYTES, MAX_CHANGES_PER_BATCH, MAX_CURSOR_ENTRIES,
@@ -293,6 +295,7 @@ mod task7_tests {
                 notes: String::new(),
                 created_at: 1,
                 updated_at: 1,
+                icon: IconChoice::Default,
             })
             .unwrap();
         let request = vault
@@ -372,6 +375,7 @@ mod task7_tests {
                 notes: String::new(),
                 created_at: 1,
                 updated_at: 1,
+                icon: IconChoice::Default,
             })
             .unwrap();
         source_vault
@@ -393,6 +397,7 @@ mod task7_tests {
                 notes: String::new(),
                 created_at: 1,
                 updated_at: 1,
+                icon: IconChoice::Default,
             })
             .unwrap();
         destination_vault.lock();

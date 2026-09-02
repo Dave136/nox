@@ -1,4 +1,4 @@
-use nox_core::{ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, Vault, VaultError};
+use nox_core::{ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType, Vault, VaultError};
 use std::{
     fs,
     path::PathBuf,
@@ -33,6 +33,7 @@ fn payload(title: &str, password: &str) -> ItemPayload {
         notes: "notes".into(),
         created_at: 10,
         updated_at: 11,
+        icon: IconChoice::Default,
     }
 }
 

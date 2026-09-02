@@ -1122,7 +1122,7 @@ fn remove_new_database_files(path: &Path) {
 mod tests {
     use super::{Vault, VaultError, now_millis};
     use crate::{
-        Ed25519Keypair, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, Operation,
+        Ed25519Keypair, ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType, Operation,
         ids::ChangeId,
         journal::{self, JournalError},
         merge,
@@ -1163,6 +1163,7 @@ mod tests {
             notes: String::new(),
             created_at: 1,
             updated_at: 2,
+            icon: IconChoice::Default,
         }
     }
 

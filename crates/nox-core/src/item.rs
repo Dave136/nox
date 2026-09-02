@@ -16,6 +16,51 @@ pub enum ItemType {
     SecureNote,
 }
 
+/// The user's choice of icon for an item — a fixed preset, the site's
+/// fetched favicon (Login only), or the item type's built-in default.
+///
+/// Additive field: never gate this on `ITEM_SCHEMA_VERSION`. An item
+/// encrypted before this existed has no `icon` key in its stored JSON;
+/// `#[serde(default)]` on the `ItemPayload` field gives it `Default` without
+/// touching the version, which `to_json_bytes`/`from_json_bytes` check with
+/// hard equality — bumping it would make every existing item unreadable.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconChoice {
+    #[default]
+    Default,
+    Preset(PresetIcon),
+    Favicon,
+}
+
+/// A curated, fixed set of bundled icons the user can pick per item.
+/// `gui` owns the SVG path and label for each variant — this crate only
+/// names the choice.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresetIcon {
+    Globe,
+    House,
+    CreditCard,
+    Database,
+    Code,
+    Contact,
+    ShieldCheck,
+    Landmark,
+    ShoppingCart,
+    Store,
+    Mail,
+    MessagesSquare,
+    Briefcase,
+    Gamepad2,
+    Music,
+    Clapperboard,
+    Cloud,
+    HeartPulse,
+    Plane,
+    GraduationCap,
+}
+
 /// Plaintext item data stored inside an encrypted journal revision.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ItemPayload {
@@ -37,6 +82,9 @@ pub struct ItemPayload {
     pub created_at: u64,
     /// Application update timestamp in milliseconds since Unix epoch.
     pub updated_at: u64,
+    /// The user's chosen icon for this item. Additive — see [`IconChoice`].
+    #[serde(default)]
+    pub icon: IconChoice,
 }
 
 /// Errors returned while encoding or decoding an item payload.
@@ -115,6 +163,7 @@ mod tests {
             notes: "notes".into(),
             created_at: 1_700_000_000_000,
             updated_at: 1_700_000_000_001,
+            icon: IconChoice::Default,
         }
     }
 
@@ -126,6 +175,37 @@ mod tests {
             let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
             assert_eq!(decoded, original);
         }
+    }
+
+    #[test]
+    fn icon_choice_round_trips_through_json_for_every_variant() {
+        let choices = [
+            IconChoice::Default,
+            IconChoice::Preset(PresetIcon::Globe),
+            IconChoice::Preset(PresetIcon::GraduationCap),
+            IconChoice::Favicon,
+        ];
+        for icon in choices {
+            let mut original = payload(ItemType::Login);
+            original.icon = icon;
+            let encoded = original.to_json_bytes().unwrap();
+            let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
+            assert_eq!(decoded, original);
+        }
+    }
+
+    #[test]
+    fn item_json_without_an_icon_key_defaults_to_icon_default() {
+        // Stands in for an item encrypted before this field existed: its
+        // stored JSON has no `icon` key at all, and `schema_version` is
+        // unchanged — ITEM_SCHEMA_VERSION must not bump for this field.
+        let mut value = serde_json::to_value(payload(ItemType::Login)).unwrap();
+        value.as_object_mut().unwrap().remove("icon");
+        let encoded = serde_json::to_vec(&value).unwrap();
+
+        let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
+        assert_eq!(decoded.icon, IconChoice::Default);
+        assert_eq!(decoded.schema_version, ITEM_SCHEMA_VERSION);
     }
 
     #[test]
