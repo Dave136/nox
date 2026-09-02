@@ -2594,6 +2594,54 @@ mod tests {
     }
 
     #[gpui::test]
+    fn choosing_a_preset_updates_the_editors_icon(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-preset", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            locker.choose_item_icon(
+                nox_core::IconChoice::Preset(nox_core::PresetIcon::Briefcase),
+                window,
+                locker_cx,
+            );
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .icon),
+            nox_core::IconChoice::Preset(nox_core::PresetIcon::Briefcase)
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn secure_note_editor_has_no_favicon_option(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-note-no-favicon", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| !locker.icon_picker_offers_favicon()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn login_editor_offers_favicon(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-login-favicon", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.icon_picker_offers_favicon()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn secure_note_creation_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
         init(cx);
         let (view, cx, path, _) = unlocked_view(cx, "secure-note-workspace", &[]);

@@ -1592,6 +1592,7 @@ mod tests {
             notes: String::new(),
             created_at: 1,
             updated_at: 1,
+            icon: nox_core::IconChoice::Default,
         }
     }
 

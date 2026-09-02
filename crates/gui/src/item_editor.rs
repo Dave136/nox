@@ -45,6 +45,7 @@ pub(crate) struct GeneratorPopoverState {
 pub(crate) struct ItemEditorState {
     pub(crate) mode: EditorMode,
     pub(crate) item_type: ItemType,
+    pub(crate) icon: IconChoice,
     pub(crate) title_input: Entity<InputState>,
     pub(crate) username_input: Entity<InputState>,
     pub(crate) password_input: Entity<InputState>,
@@ -112,6 +113,7 @@ impl ItemEditorState {
         Self {
             mode: EditorMode::Create,
             item_type: ItemType::Login,
+            icon: IconChoice::Default,
             title_input,
             username_input,
             password_input,
@@ -170,6 +172,7 @@ impl ItemEditorState {
         let mut editor = Self::for_create(window, cx);
         editor.mode = mode;
         editor.item_type = payload.item_type;
+        editor.icon = payload.icon;
         editor.created_at = payload.created_at;
         editor.title_input.update(cx, |state, input_cx| {
             state.set_value(payload.title, window, input_cx)
@@ -225,7 +228,7 @@ impl ItemEditorState {
             notes: self.notes_input.read(cx).value().to_string(),
             created_at: self.created_at,
             updated_at: now_millis(),
-            icon: IconChoice::Default,
+            icon: self.icon,
         }
     }
 }
@@ -268,6 +271,135 @@ fn password_is_reused(password: &str, items: &[(ItemId, ItemPayload)]) -> bool {
         && items.iter().any(|(_, payload)| {
             payload.item_type == ItemType::Login && payload.password == password
         })
+}
+
+fn icon_picker_row(
+    id: impl Into<gpui::ElementId>,
+    icon_path: &'static str,
+    label: &'static str,
+    theme: Theme,
+    locker: Entity<Nox>,
+    choice: IconChoice,
+) -> AnyElement {
+    Button::new(id)
+        .ghost()
+        .w_full()
+        .h(px(32.))
+        .px(px(8.))
+        .on_click(move |_, window, app| {
+            locker.update(app, |locker, cx| {
+                locker.choose_item_icon(choice, window, cx);
+            });
+        })
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    gpui_component::Icon::empty()
+                        .path(icon_path)
+                        .size(px(14.))
+                        .text_color(theme.text_secondary),
+                )
+                .child(div().text_size(px(13.)).text_color(theme.text).child(label)),
+        )
+        .into_any_element()
+}
+
+/// The favicon row: a plain clickable row when the item already has a
+/// saved URI.
+///
+/// ponytail: with no `uris` yet, this shows a static hint instead of the
+/// agreed inline URL-input-plus-fetch — the row is still never *disabled*,
+/// just not actionable until a URL exists on the item some other way. The
+/// full inline field is the upgrade path if that gap is felt in practice.
+fn favicon_picker_row(
+    theme: Theme,
+    locker: Entity<Nox>,
+    data_dir: std::path::PathBuf,
+    uris: Vec<String>,
+) -> AnyElement {
+    if !uris.is_empty() {
+        return Button::new("icon-favicon")
+            .ghost()
+            .w_full()
+            .h(px(32.))
+            .px(px(8.))
+            .on_click(move |_, window, app| {
+                let uris = uris.clone();
+                let data_dir = data_dir.clone();
+                // Same shape as `create_vault`/`unlock_vault` (app.rs) and
+                // every `backup.rs` task: the blocking fetch runs on
+                // `cx.background_executor()`, off GPUI's foreground
+                // executor; `this: WeakEntity<Nox>` is upgraded before
+                // touching state back on the foreground thread.
+                locker.update(app, |_, cx| {
+                    cx.spawn_in(window, async move |this, cx| {
+                        let uris_for_fetch = uris.clone();
+                        let result = cx
+                            .background_executor()
+                            .spawn(async move { crate::favicon::fetch_favicon(&uris_for_fetch) })
+                            .await;
+                        let Ok(bytes) = result else {
+                            return;
+                        };
+                        let Some(host) = uris
+                            .iter()
+                            .find_map(|uri| crate::favicon::extract_host(uri))
+                        else {
+                            return;
+                        };
+                        if crate::favicon::cache_favicon(&data_dir, &host, &bytes).is_err() {
+                            return;
+                        }
+                        if let Some(this) = this.upgrade() {
+                            let _ = cx.update(|window, app| {
+                                this.update(app, |locker, cx| {
+                                    locker.choose_item_icon(IconChoice::Favicon, window, cx);
+                                });
+                            });
+                        }
+                    })
+                    .detach();
+                });
+            })
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/globe.svg")
+                            .size(px(14.))
+                            .text_color(theme.text_secondary),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(theme.text)
+                            .child("Favicon del sitio"),
+                    ),
+            )
+            .into_any_element();
+    }
+
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .p(px(8.))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(theme.text_subtle)
+                .child("Agregá una URL para poder buscar el favicon"),
+        )
+        .into_any_element()
 }
 
 impl Nox {
@@ -330,6 +462,128 @@ impl Nox {
             ),
             _ => false,
         }
+    }
+
+    /// Applies an icon choice from the picker and marks the field dirty the
+    /// same way any other editor field change does — picking an icon is
+    /// part of editing the item, not a separate save.
+    pub(crate) fn choose_item_icon(
+        &mut self,
+        icon: IconChoice,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(session) = self.session_mut()
+            && let Some(editor) = session.item_editor.as_mut()
+        {
+            editor.icon = icon;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn icon_picker_offers_favicon(&self) -> bool {
+        self.session()
+            .and_then(|session| session.item_editor.as_ref())
+            .is_some_and(|editor| editor.item_type == ItemType::Login)
+    }
+
+    /// The item's icon, clickable to open the picker: Default, the 20
+    /// presets, and — Login only — "Favicon del sitio". Secure Note gets no
+    /// favicon row; it has no site identity to fetch from.
+    fn render_icon_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let data_dir = self.data_dir.clone();
+        let (item_type, current_icon, uris) = self
+            .session()
+            .and_then(|session| session.item_editor.as_ref())
+            .map(|editor| {
+                (
+                    editor.item_type,
+                    editor.icon,
+                    editor
+                        .uris_input
+                        .read(cx)
+                        .value()
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap_or((ItemType::Login, IconChoice::Default, Vec::new()));
+
+        // The trigger is the one spot that actually shows a chosen favicon
+        // as an image — it's the direct feedback for "did my pick work?".
+        // List/detail rows (Task 7) stay SVG-only fixed-size glyph wells.
+        let trigger_child: AnyElement =
+            match crate::icons::resolve_item_icon(item_type, current_icon, &data_dir, &uris) {
+                crate::icons::ResolvedIcon::Svg(path) => gpui_component::Icon::empty()
+                    .path(path)
+                    .size(px(14.))
+                    .text_color(theme.text_secondary)
+                    .into_any_element(),
+                crate::icons::ResolvedIcon::Favicon(path) => gpui::img(path)
+                    .size(px(18.))
+                    .rounded(px(4.))
+                    .into_any_element(),
+            };
+        let trigger = Button::new("item-icon-picker-trigger")
+            .size(px(28.))
+            .rounded(px(8.))
+            .bg(theme.raised)
+            .child(trigger_child);
+
+        let locker = cx.entity();
+        let offers_favicon = self.icon_picker_offers_favicon();
+
+        Popover::new("item-icon-picker")
+            .appearance(false)
+            .trigger(trigger)
+            .content(move |_state, _window, _cx| {
+                let mut rows: Vec<AnyElement> = Vec::new();
+                rows.push(icon_picker_row(
+                    "icon-default",
+                    "icons/key-square.svg",
+                    "Default",
+                    theme,
+                    locker.clone(),
+                    IconChoice::Default,
+                ));
+                for preset in crate::icons::ALL_PRESETS {
+                    rows.push(icon_picker_row(
+                        SharedString::from(format!("icon-preset-{preset:?}")),
+                        crate::icons::preset_icon_path(preset),
+                        crate::icons::preset_icon_label(preset),
+                        theme,
+                        locker.clone(),
+                        IconChoice::Preset(preset),
+                    ));
+                }
+                if offers_favicon {
+                    rows.push(favicon_picker_row(
+                        theme,
+                        locker.clone(),
+                        data_dir.clone(),
+                        uris.clone(),
+                    ));
+                }
+                div()
+                    .id("item-icon-picker-menu")
+                    .w(px(220.))
+                    .max_h(px(360.))
+                    .overflow_y_scroll()
+                    .p(px(4.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface)
+                    .children(rows)
+            })
+            .into_any_element()
     }
 
     pub(crate) fn cancel_item_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1212,6 +1466,7 @@ impl Nox {
                     .into_any_element()
             },
         );
+        let icon_picker = self.render_icon_picker(cx);
 
         rsx! {
             <div id="secure-note-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
@@ -1237,9 +1492,12 @@ impl Nox {
                                     <div text_size={px(14.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Note details"}</div>
                                     <div text_size={px(10.)} textColor={theme.text_subtle}>{"Store sensitive text securely, end-to-end encrypted."}</div>
                                 </div>
-                                <div flex items_center h={px(26.)} px={px(8.)} gap={px(6.)} rounded={px(6.)} bg={theme.raised} border_1 borderColor={theme.field_border}>
-                                    {Icon::empty().path("icons/file-lock.svg").size(px(12.)).text_color(theme.text_secondary)}
-                                    <div text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{"NOTE"}</div>
+                                <div flex items_center gap={px(8.)}>
+                                    {icon_picker}
+                                    <div flex items_center h={px(26.)} px={px(8.)} gap={px(6.)} rounded={px(6.)} bg={theme.raised} border_1 borderColor={theme.field_border}>
+                                        {Icon::empty().path("icons/file-lock.svg").size(px(12.)).text_color(theme.text_secondary)}
+                                        <div text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{"NOTE"}</div>
+                                    </div>
                                 </div>
                             </div>
                             {field("TITLE", true, Input::new(&title).h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
@@ -1711,6 +1969,7 @@ impl Nox {
 
         let error =
             save_error.map(|message| div().text_sm().text_color(theme.danger).child(message));
+        let icon_picker = self.render_icon_picker(cx);
 
         let form_card = div()
             .id("create-login-form")
@@ -1751,23 +2010,30 @@ impl Nox {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.))
-                            .h(px(26.))
-                            .px(px(10.))
-                            .rounded(px(6.))
-                            .bg(theme.raised)
-                            .child(
-                                gpui_component::Icon::empty()
-                                    .path("icons/key-square.svg")
-                                    .size(px(12.))
-                                    .text_color(theme.text_secondary),
-                            )
+                            .gap(px(8.))
+                            .child(icon_picker)
                             .child(
                                 div()
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight(700.))
-                                    .text_color(theme.text_secondary)
-                                    .child("LOGIN"),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .rounded(px(6.))
+                                    .bg(theme.raised)
+                                    .child(
+                                        gpui_component::Icon::empty()
+                                            .path("icons/key-square.svg")
+                                            .size(px(12.))
+                                            .text_color(theme.text_secondary),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .font_weight(FontWeight(700.))
+                                            .text_color(theme.text_secondary)
+                                            .child("LOGIN"),
+                                    ),
                             ),
                     ),
             )

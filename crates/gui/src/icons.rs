@@ -2,10 +2,6 @@
 //! `PresetIcon` <-> bundled-SVG-path/label mapping. `nox_core` only names
 //! the choice (`IconChoice`/`PresetIcon`); rendering is a `gui` concern.
 
-// ponytail: no caller yet (Task 6/7 of the custom-item-icon plan wire the
-// picker UI and the render call-site swap to this) — drop once they do.
-#![allow(dead_code)]
-
 use crate::favicon::favicon_cache_path;
 use nox_core::{IconChoice, ItemType, PresetIcon};
 use std::path::{Path, PathBuf};
@@ -127,6 +123,9 @@ pub(crate) fn resolve_item_icon(
 /// recent-items list): resolves and, for a cache-miss favicon, falls back
 /// to the type default — those spots are a fixed-size glyph well, same as
 /// the picker trigger, not a place for a per-row image variant yet.
+// ponytail: no caller yet — the next task wires this into vault_list.rs,
+// detail.rs, and workspace.rs. Drop this allow once it does.
+#[allow(dead_code)]
 pub(crate) fn resolved_icon_path(data_dir: &Path, item: &nox_core::ItemPayload) -> &'static str {
     match resolve_item_icon(item.item_type, item.icon, data_dir, &item.uris) {
         ResolvedIcon::Svg(path) => path,
