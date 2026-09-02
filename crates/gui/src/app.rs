@@ -2545,6 +2545,51 @@ mod tests {
     }
 
     #[gpui::test]
+    fn home_add_item_menu_creates_the_requested_type(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "home-add-item-menu", &[]);
+        // Home has no active item-type filter — plain `open_create_editor`
+        // would default to Login; the "+ Add item" menu bypasses that guess
+        // with an explicit choice.
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor_as(nox_core::ItemType::SecureNote, window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .item_type),
+            nox_core::ItemType::SecureNote
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn home_add_item_menu_opens_the_dedicated_full_page_workspace(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "home-add-login", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::Home, locker_cx);
+            locker.open_create_editor_as(nox_core::ItemType::Login, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.uses_login_workspace()));
+        assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+        cleanup(&path);
+
+        let (view, cx, path, _) = unlocked_view(cx, "home-add-note", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::Home, locker_cx);
+            locker.open_create_editor_as(nox_core::ItemType::SecureNote, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.uses_secure_note_workspace()));
+        assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn secure_note_creation_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
         init(cx);
         let (view, cx, path, _) = unlocked_view(cx, "secure-note-workspace", &[]);

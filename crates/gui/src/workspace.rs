@@ -8,8 +8,32 @@ use gpui::{
     AnyElement, Context, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
     SharedString, Window, div, prelude::*, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
+use gpui_component::popover::Popover;
 use gpui_rsx::rsx;
+
+/// Left-aligned icon + label for one "+ Add item" menu row.
+///
+/// A `Button`'s built-in `.label()` content wrapper always centers its
+/// children (gpui-component hardcodes `justify_center` there); handing it
+/// this `w_full` row instead — same trick as `vault_row_content` — leaves no
+/// spare width for that centering to act on, so the icon and text land at
+/// the start, and the text matches the trigger's own 14px label size.
+fn add_item_row(icon_path: &'static str, label: &'static str, theme: Theme) -> AnyElement {
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(
+            gpui_component::Icon::empty()
+                .path(icon_path)
+                .size(px(14.))
+                .text_color(theme.text_secondary),
+        )
+        .child(div().text_size(px(14.)).text_color(theme.text).child(label))
+        .into_any_element()
+}
 
 impl Nox {
     /// The primary "+ Add item" header button, shared by every workspace
@@ -68,6 +92,102 @@ impl Nox {
         )
     }
 
+    /// Home's "+ Add item" trigger: a dropdown for the two item types,
+    /// instead of always creating a Login (Home has no active item-type
+    /// filter to guess from, unlike the Logins/Secure notes views).
+    pub(crate) fn render_add_item_menu(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let trigger = Button::new("home-add-item")
+            .h(px(38.))
+            .px(px(16.))
+            .rounded(px(8.))
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(theme.inverse)
+                    .hover(theme.inverse_hover)
+                    .active(theme.inverse_press)
+                    .foreground(theme.on_inverse),
+            )
+            .bg(theme.inverse)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/plus.svg")
+                            .size(px(16.))
+                            .text_color(theme.canvas),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight(500.))
+                            .text_color(theme.canvas)
+                            .child("Add item"),
+                    ),
+            );
+        let locker = cx.entity();
+        Popover::new("home-add-item-menu")
+            .appearance(false)
+            .trigger(trigger)
+            .content(move |_state, _window, cx| {
+                let popover = cx.entity();
+                let login_locker = locker.clone();
+                let login_popover = popover.clone();
+                let note_locker = locker.clone();
+                let note_popover = popover.clone();
+                div()
+                    .w(px(168.))
+                    .p(px(4.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface)
+                    .child(
+                        Button::new("add-login")
+                            .ghost()
+                            .w_full()
+                            .h(px(36.))
+                            .px(px(10.))
+                            .child(add_item_row("icons/key-square.svg", "Add Login", theme))
+                            .on_click(move |_, window, app| {
+                                login_locker.update(app, |locker, cx| {
+                                    locker.open_create_editor_as(
+                                        nox_core::ItemType::Login,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                                login_popover.update(app, |state, cx| state.dismiss(window, cx));
+                            }),
+                    )
+                    .child(
+                        Button::new("add-note")
+                            .ghost()
+                            .w_full()
+                            .h(px(36.))
+                            .px(px(10.))
+                            .child(add_item_row("icons/file-lock.svg", "Add Note", theme))
+                            .on_click(move |_, window, app| {
+                                note_locker.update(app, |locker, cx| {
+                                    locker.open_create_editor_as(
+                                        nox_core::ItemType::SecureNote,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                                note_popover.update(app, |state, cx| state.dismiss(window, cx));
+                            }),
+                    )
+            })
+            .into_any_element()
+    }
+
     pub(crate) fn render_unlocked(
         &mut self,
         window: &mut Window,
@@ -77,11 +197,9 @@ impl Nox {
         let active_view = self
             .session()
             .map_or(ActiveView::AllItems, |session| session.active_view);
-        if active_view == ActiveView::Home {
-            let nav = self.render_sidebar_nav(cx);
-            let home = self.render_home(window, cx);
-            return rsx! { <div id="home-shell" size_full flex bg={theme.canvas}>{nav}{home}</div> };
-        }
+        // Checked before the Home early-return: the "+ Add item" menu opens
+        // a create editor while `active_view` is still `Home`, and that
+        // editor must win over Home's own empty-state layout.
         if self.uses_secure_note_workspace() {
             let nav = self.render_sidebar_nav(cx);
             let workspace = self.render_secure_note_workspace(window, cx);
@@ -101,6 +219,11 @@ impl Nox {
                     {workspace}
                 </div>
             };
+        }
+        if active_view == ActiveView::Home {
+            let nav = self.render_sidebar_nav(cx);
+            let home = self.render_home(window, cx);
+            return rsx! { <div id="home-shell" size_full flex bg={theme.canvas}>{nav}{home}</div> };
         }
         if self
             .session()
@@ -251,7 +374,7 @@ impl Nox {
                     (list.items.len(), logins, notes, recent)
                 });
         let locker = cx.entity();
-        let add = self.render_add_item_button("home-add-item", cx);
+        let add = self.render_add_item_menu(cx);
         let view_all = Button::new("home-view-all")
             .ghost()
             .h(px(26.))

@@ -275,7 +275,10 @@ impl Nox {
             return false;
         };
         match session.active_view {
-            ActiveView::SecureNotes => matches!(
+            // Home has no type filter of its own — its "+ Add item" menu
+            // opens a create editor directly and expects the same full-page
+            // workspace Secure Notes gives its own creation flow.
+            ActiveView::SecureNotes | ActiveView::Home => matches!(
                 session.item_editor,
                 Some(ItemEditorState {
                     mode: EditorMode::Create | EditorMode::Edit(_),
@@ -303,7 +306,10 @@ impl Nox {
             return false;
         };
         match session.active_view {
-            ActiveView::Logins => matches!(
+            // Home has no type filter of its own — its "+ Add item" menu
+            // opens a create editor directly and expects the same full-page
+            // workspace Logins gives its own creation flow.
+            ActiveView::Logins | ActiveView::Home => matches!(
                 session.item_editor,
                 Some(ItemEditorState {
                     mode: EditorMode::Create | EditorMode::Edit(_),

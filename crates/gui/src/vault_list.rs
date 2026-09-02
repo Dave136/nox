@@ -625,11 +625,23 @@ impl Nox {
     }
 
     pub(crate) fn open_create_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut editor = crate::item_editor::ItemEditorState::for_create(window, cx);
         let active_view = self
             .session()
             .map_or(ActiveView::AllItems, |session| session.active_view);
-        editor.item_type = active_view.item_type().unwrap_or(ItemType::Login);
+        let item_type = active_view.item_type().unwrap_or(ItemType::Login);
+        self.open_create_editor_as(item_type, window, cx);
+    }
+
+    /// Same as [`Self::open_create_editor`] but with an explicit type,
+    /// bypassing the active-view guess — used by the Home "Add item" menu.
+    pub(crate) fn open_create_editor_as(
+        &mut self,
+        item_type: ItemType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut editor = crate::item_editor::ItemEditorState::for_create(window, cx);
+        editor.item_type = item_type;
         if let Some(session) = self.session_mut() {
             session.item_editor = Some(editor);
         }
