@@ -12,8 +12,8 @@ use gpui_component::{
 };
 use gpui_rsx::rsx;
 use nox_core::{
-    CharClasses, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, MAX_LENGTH, Password, Vault,
-    VaultError, generate_password,
+    CharClasses, ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType, MAX_LENGTH,
+    Password, Vault, VaultError, generate_password,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -225,6 +225,7 @@ impl ItemEditorState {
             notes: self.notes_input.read(cx).value().to_string(),
             created_at: self.created_at,
             updated_at: now_millis(),
+            icon: IconChoice::Default,
         }
     }
 }
@@ -2120,6 +2121,7 @@ mod tests {
             notes: String::new(),
             created_at: 1,
             updated_at: 1,
+            icon: IconChoice::Default,
         }
     }
 

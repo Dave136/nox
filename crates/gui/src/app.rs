@@ -1311,7 +1311,8 @@ mod tests {
     use gpui::{Focusable, TestAppContext, VisualTestContext};
     use gpui_component::{ActiveTheme, Root, Theme, ThemeMode, WindowExt};
     use nox_core::{
-        BackupError, ChangeId, ITEM_SCHEMA_VERSION, ItemId, ItemPayload, ItemType, SecretBytes,
+        BackupError, ChangeId, ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType,
+        SecretBytes,
     };
     use std::{
         cell::RefCell,
@@ -2311,6 +2312,7 @@ mod tests {
             notes: String::new(),
             created_at: 1,
             updated_at: 1,
+            icon: IconChoice::Default,
         };
         view.update_in(cx, |locker, window, locker_cx| {
             locker.state = unlocked_state(vault, window, locker_cx);
@@ -2346,6 +2348,7 @@ mod tests {
             notes: "notes".into(),
             created_at: 1,
             updated_at: 1,
+            icon: IconChoice::Default,
         }
     }
 
@@ -2488,6 +2491,7 @@ mod tests {
             notes: "Use the vault phrase amber-galaxy to recover access.".into(),
             created_at: 1,
             updated_at: 1,
+            icon: IconChoice::Default,
         }];
         let (view, cx, path, _) = unlocked_view(cx, "secure-note-content-search", &payloads);
         view.update_in(cx, |locker, _window, locker_cx| {
@@ -2765,6 +2769,7 @@ mod tests {
             notes: "amber-galaxy".into(),
             created_at: 1,
             updated_at: 1,
+            icon: IconChoice::Default,
         };
         let (view, cx, path, ids) = unlocked_view(cx, "note-edit-workspace", &[payload]);
         let item_id = ids[0];
