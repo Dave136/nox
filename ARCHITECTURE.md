@@ -1,4 +1,4 @@
-# Nox — Local-Sync Password Manager Architecture
+# Nox — Local-Sync Credential Manager Architecture
 
 ## Status
 
