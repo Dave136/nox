@@ -237,6 +237,11 @@ pub(crate) fn animated_auth_button(
     let Some(hovered) = hovered else {
         return button
             .custom(variant.color(base).hover(base))
+            // gpui-component's Custom variant mixes the *resting* bg 20% toward
+            // transparent (button.rs `bg_color`), which washes any color out
+            // against a dark canvas. An explicit `.bg()` wins over that
+            // variant-computed style and keeps the resting fill solid.
+            .bg(base)
             .into_any_element();
     };
     button
@@ -248,6 +253,7 @@ pub(crate) fn animated_auth_button(
                 let color = auth_hover_color(base, hover, amount);
                 button
                     .custom(variant.color(color).hover(color))
+                    .bg(color)
                     .opacity(0.96 + amount * 0.04)
             },
         )

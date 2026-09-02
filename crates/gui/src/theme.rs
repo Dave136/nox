@@ -138,7 +138,7 @@ impl Theme {
             column_header: rgb(0x6F7886).into(),
 
             inverse: rgb(0xE3E6ED).into(),
-            inverse_hover: rgb(0xBDBDBD).into(),
+            inverse_hover: rgb(0xF5F6F8).into(),
             inverse_active: rgb(0xE3E6ED).into(),
             inverse_bright: rgb(0xF0F2F6).into(),
             inverse_press: rgb(0xCDD2DC).into(),
