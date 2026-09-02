@@ -273,9 +273,9 @@ impl Nox {
             return false;
         }
         let request = match &self.state {
-            AppState::Unlocked(vault) => {
-                vault.prepare_backup_export(password.as_bytes(), &destination)
-            }
+            AppState::Unlocked(session) => session
+                .vault
+                .prepare_backup_export(password.as_bytes(), &destination),
             _ => return false,
         };
         let request = match request {
@@ -483,12 +483,10 @@ impl Nox {
         };
         window.close_all_dialogs(cx);
         self.discard_clipboard_state(cx);
-        self.vault_list = None;
-        self.item_editor = None;
         self.conflicts = crate::conflicts::ConflictState::Closed;
         self.conflicts_open = false;
-        if let AppState::Unlocked(vault) = std::mem::replace(&mut self.state, AppState::Locked) {
-            vault.lock();
+        if let AppState::Unlocked(session) = std::mem::replace(&mut self.state, AppState::Locked) {
+            session.vault.lock();
         }
         self.reset_unlock_input(window, cx);
         self.backup.epoch = self.backup.epoch.wrapping_add(1);
@@ -638,16 +636,21 @@ impl Nox {
                             .size(px(15.)),
                     )
                     .child("Restore backup"),
-            );
+            )
+            .when(exiting, |button| {
+                button
+                    .bg(theme.inverse_disabled)
+                    .text_color(theme.on_inverse)
+            });
         let restore_button = animated_auth_button(
             "restore-backup-submit",
             restore_button,
             self.auth_hovered.get("restore-backup-submit").copied(),
             (
                 theme.inverse,
-                theme.inverse_bright,
+                theme.inverse_hover,
                 theme.inverse_press,
-                theme.canvas,
+                theme.on_inverse,
             ),
             cx,
         );

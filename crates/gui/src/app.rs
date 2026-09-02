@@ -13,16 +13,14 @@ use crate::vaults::{
 };
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, BoxShadow, Context, Entity, FocusHandle, FontWeight, Hsla,
-    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Render, Rgba,
-    SharedString, Subscription, Task, Window, div, ease_out_quint, point, prelude::*, px, relative,
-    rgb, rgba,
+    Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, FontWeight, Hsla,
+    KeyBinding, Render, Rgba, SharedString, Subscription, Task, Window, div, ease_out_quint,
+    prelude::*, px,
 };
 use gpui_component::{
-    Disableable, FocusTrapElement as _, IndexPath, Root, Sizable, ThemeMode, WindowExt,
+    Disableable, IndexPath, Root, ThemeMode, WindowExt,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    input::{Input, InputState},
-    popover::Popover,
+    input::InputState,
     select::{SelectDelegate, SelectEvent, SelectItem, SelectState},
 };
 use gpui_rsx::rsx;
@@ -34,8 +32,6 @@ use std::{
     rc::Rc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-use crate::assets::logo;
 
 /// Default duration before an inactive unlocked vault is locked.
 pub const DEFAULT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(300);
@@ -87,7 +83,11 @@ fn vault_initials(name: &str) -> String {
         .to_uppercase()
 }
 
-fn vault_dropdown_trailing(theme: Theme, missing: bool, checked: bool) -> (&'static str, Hsla) {
+pub(crate) fn vault_dropdown_trailing(
+    theme: Theme,
+    missing: bool,
+    checked: bool,
+) -> (&'static str, Hsla) {
     if missing {
         ("icons/circle-x.svg", theme.text_ghost)
     } else if checked {
@@ -100,7 +100,11 @@ fn vault_dropdown_trailing(theme: Theme, missing: bool, checked: bool) -> (&'sta
 /// Shared avatar + name + status row content for the vault Select — used
 /// both as the trigger's `display_title` (no trailing icon; the Select adds
 /// its own caret) and as each dropdown option's `render` (with one).
-fn vault_row_content(theme: Theme, vault: &VaultEntry, trailing: Option<AnyElement>) -> AnyElement {
+pub(crate) fn vault_row_content(
+    theme: Theme,
+    vault: &VaultEntry,
+    trailing: Option<AnyElement>,
+) -> AnyElement {
     let missing = !vault.path.is_file();
     let secondary = if missing {
         "File not found".to_owned()
@@ -253,7 +257,7 @@ pub(crate) fn animated_auth_button(
 // ponytail: static display only — no sync status is wired from the `sync`
 // crate into the GUI yet, so this always reads "Synced" regardless of the
 // vault's real sync/pairing state. Add real wiring if that's ever needed.
-fn sync_status_pill(theme: Theme) -> AnyElement {
+pub(crate) fn sync_status_pill(theme: Theme) -> AnyElement {
     div()
         .flex()
         .items_center()
@@ -296,59 +300,11 @@ impl Nox {
         self.arm_inactivity_timer(window, cx);
         cx.notify();
     }
-
-    /// The primary "+ Add item" header button, shared by every workspace
-    /// header (Home, All items, Logins, Secure notes): matches the Pencil
-    /// "Add Item Button" node exactly (`#E3E6ED` fill, dark icon/label) and
-    /// reuses the auth screens' animated hover.
-    fn render_add_item_button(&mut self, id: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::current(cx);
-        let button = Button::new(id)
-            .h(px(38.))
-            .px(px(16.))
-            .rounded(px(8.))
-            .on_click(cx.listener(|this, _, window, cx| this.open_create_editor(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/plus.svg")
-                            .size(px(16.))
-                            .text_color(theme.canvas),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight(500.))
-                            .text_color(theme.canvas)
-                            .child(if self.active_view == ActiveView::SecureNotes {
-                                "Add note"
-                            } else {
-                                "Add item"
-                            }),
-                    ),
-            );
-        animated_auth_button(
-            id,
-            button,
-            self.auth_hovered.get(id).copied(),
-            (
-                theme.inverse_bright,
-                theme.inverse,
-                theme.inverse_press,
-                theme.canvas,
-            ),
-            cx,
-        )
-    }
 }
 
 /// Best-effort display label for a recent item's secondary line: the login's
 /// site host if it has one, or "Secure note" / a bare "Login" fallback.
-fn recent_item_subtitle(payload: &nox_core::ItemPayload) -> String {
+pub(crate) fn recent_item_subtitle(payload: &nox_core::ItemPayload) -> String {
     if payload.item_type == nox_core::ItemType::SecureNote {
         return "Secure note".to_owned();
     }
@@ -382,7 +338,7 @@ pub(crate) fn relative_time(updated_at_ms: u64) -> String {
     }
 }
 
-fn home_stat_tile(theme: Theme, label: &'static str, value: usize) -> AnyElement {
+pub(crate) fn home_stat_tile(theme: Theme, label: &'static str, value: usize) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -421,7 +377,7 @@ fn home_stat_tile(theme: Theme, label: &'static str, value: usize) -> AnyElement
 /// as that happens, so the two backgrounds trade places; that swap is an
 /// instant `group_hover`, not part of the animation, matching what was
 /// actually asked for (a transition on the tile color, not the icon box).
-fn home_quick_action(
+pub(crate) fn home_quick_action(
     id: &'static str,
     icon_path: &'static str,
     label: &'static str,
@@ -509,46 +465,56 @@ fn home_quick_action(
 /// The secure-note workspace is the app's one light surface — a "paper" ground
 /// for long-form note editing. Cipher Midnight has no role for it, and
 /// inventing one would imply a light palette that does not exist.
-const SECURE_NOTE_PAPER: Rgba = Rgba {
+pub(crate) const SECURE_NOTE_PAPER: Rgba = Rgba {
     r: 0.969,
     g: 0.973,
     b: 0.980,
     a: 1.,
 };
 
+/// Everything that only has meaning while a vault is unlocked: the vault
+/// handle itself plus the view-scoped UI state that lives alongside it.
+pub(crate) struct VaultSession {
+    pub(crate) vault: Vault,
+    pub(crate) list: VaultListState,
+    pub(crate) item_editor: Option<ItemEditorState>,
+    pub(crate) active_view: ActiveView,
+    /// Whether the selected item's password is shown in plaintext in the detail panel.
+    pub(crate) reveal_password: bool,
+}
+
 /// The top-level vault lifecycle state.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
 pub enum AppState {
     NoVault,
     RegistryError,
     Locked,
-    Unlocked(Vault),
+    Unlocked(VaultSession),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum FormState {
+pub(crate) enum FormState {
     Idle,
     Pending,
     Error(SharedString),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RemoveVaultDialogState {
-    index: usize,
-    name: SharedString,
-    file_exists: bool,
-    delete_files: bool,
+pub(crate) struct RemoveVaultDialogState {
+    pub(crate) index: usize,
+    pub(crate) name: SharedString,
+    pub(crate) file_exists: bool,
+    pub(crate) delete_files: bool,
 }
 
 #[derive(Clone)]
-struct RenameVaultDialogState {
-    index: usize,
-    original: SharedString,
-    input: Entity<InputState>,
+pub(crate) struct RenameVaultDialogState {
+    pub(crate) index: usize,
+    pub(crate) original: SharedString,
+    pub(crate) input: Entity<InputState>,
     /// Set when the user confirms an empty name: the dialog stays open and
     /// says why, rather than closing on a name that was never applied.
-    error: bool,
+    pub(crate) error: bool,
 }
 
 /// Root Nox view for vault creation, unlock, and lock lifecycle actions.
@@ -561,14 +527,14 @@ pub struct Nox {
     pub(crate) vault_select: Entity<SelectState<VaultDelegate>>,
     _vault_select_subscription: Subscription,
 
-    create_name: Entity<InputState>,
+    pub(crate) create_name: Entity<InputState>,
     pub(crate) create_password: Entity<InputState>,
-    create_confirm: Entity<InputState>,
-    create_state: FormState,
+    pub(crate) create_confirm: Entity<InputState>,
+    pub(crate) create_state: FormState,
     _create_task: Task<()>,
 
     pub(crate) unlock_password: Entity<InputState>,
-    unlock_state: FormState,
+    pub(crate) unlock_state: FormState,
     _unlock_task: Task<()>,
 
     inactivity_timeout: Duration,
@@ -576,15 +542,10 @@ pub struct Nox {
     inactivity_epoch: usize,
     _inactivity_task: Task<()>,
 
-    pub(crate) vault_list: Option<VaultListState>,
-    pub(crate) item_editor: Option<ItemEditorState>,
     /// Freshly rendered (title, body) for the open item-editor Sheet, refreshed
     /// every `render_unlocked` pass. See `open_item_editor_sheet` for why this
     /// indirection exists instead of the Sheet reading `Nox` directly.
     pub(crate) item_editor_sheet_cell: Rc<RefCell<Option<(SharedString, AnyElement)>>>,
-    pub(crate) active_view: ActiveView,
-    /// Whether the selected item's password is shown in plaintext in the detail panel.
-    pub(crate) reveal_password: bool,
     pub(crate) clipboard: ClipboardState,
     pub(crate) conflicts: ConflictState,
     pub(crate) conflicts_open: bool,
@@ -593,17 +554,17 @@ pub struct Nox {
     pub(crate) settings: Settings,
     pub(crate) settings_section: SettingsSection,
     pub(crate) settings_open: bool,
-    remove_vault_dialog: Option<RemoveVaultDialogState>,
-    rename_vault_dialog: Option<RenameVaultDialogState>,
-    rename_vault_dialog_focus: FocusHandle,
-    rename_vault_cancel_focus: FocusHandle,
-    rename_vault_confirm_focus: FocusHandle,
-    rename_vault_prior_focus: Option<FocusHandle>,
-    remove_vault_dialog_focus: FocusHandle,
-    remove_vault_option_focus: FocusHandle,
-    remove_vault_cancel_focus: FocusHandle,
-    remove_vault_confirm_focus: FocusHandle,
-    remove_vault_prior_focus: Option<FocusHandle>,
+    pub(crate) remove_vault_dialog: Option<RemoveVaultDialogState>,
+    pub(crate) rename_vault_dialog: Option<RenameVaultDialogState>,
+    pub(crate) rename_vault_dialog_focus: FocusHandle,
+    pub(crate) rename_vault_cancel_focus: FocusHandle,
+    pub(crate) rename_vault_confirm_focus: FocusHandle,
+    pub(crate) rename_vault_prior_focus: Option<FocusHandle>,
+    pub(crate) remove_vault_dialog_focus: FocusHandle,
+    pub(crate) remove_vault_option_focus: FocusHandle,
+    pub(crate) remove_vault_cancel_focus: FocusHandle,
+    pub(crate) remove_vault_confirm_focus: FocusHandle,
+    pub(crate) remove_vault_prior_focus: Option<FocusHandle>,
     pub(crate) auth_hovered: HashMap<&'static str, bool>,
 }
 
@@ -707,11 +668,7 @@ impl Nox {
             last_activity: Instant::now(),
             inactivity_epoch: 0,
             _inactivity_task: Task::ready(()),
-            vault_list: None,
-            item_editor: None,
             item_editor_sheet_cell: Rc::new(RefCell::new(None)),
-            active_view: ActiveView::AllItems,
-            reveal_password: false,
             clipboard: ClipboardState::new(clipboard_timeout),
             conflicts: ConflictState::Closed,
             conflicts_open: false,
@@ -746,7 +703,36 @@ impl Nox {
         self.active_vault.as_ref().map(|vault| vault.path.as_path())
     }
 
-    fn new_input(
+    /// The active vault session, if the app is currently unlocked.
+    pub(crate) fn session(&self) -> Option<&VaultSession> {
+        match &self.state {
+            AppState::Unlocked(session) => Some(session),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the active vault session, if the app is currently unlocked.
+    pub(crate) fn session_mut(&mut self) -> Option<&mut VaultSession> {
+        match &mut self.state {
+            AppState::Unlocked(session) => Some(session),
+            _ => None,
+        }
+    }
+
+    /// The open item editor, if a vault is unlocked and an editor is open.
+    pub(crate) fn item_editor(&self) -> Option<&ItemEditorState> {
+        self.session()
+            .and_then(|session| session.item_editor.as_ref())
+    }
+
+    /// Mutable access to the open item editor, if a vault is unlocked and an
+    /// editor is open.
+    pub(crate) fn item_editor_mut(&mut self) -> Option<&mut ItemEditorState> {
+        self.session_mut()
+            .and_then(|session| session.item_editor.as_mut())
+    }
+
+    pub(crate) fn new_input(
         window: &mut Window,
         cx: &mut Context<Self>,
         placeholder: &'static str,
@@ -805,7 +791,7 @@ impl Nox {
     /// menu's "Open Vault" command. Locks first if a vault is unlocked; the
     /// vault Select keeps its own last selection, so no index bookkeeping
     /// is needed here.
-    fn return_to_unlock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn return_to_unlock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.lock_vault(window, cx);
         self.state = AppState::Locked;
         self.reset_unlock_input(window, cx);
@@ -916,569 +902,6 @@ impl Nox {
         true
     }
 
-    /// Open the in-app rename dialog for the vault at `index`.
-    pub(crate) fn begin_rename_vault(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(entry) = self.vaults.vaults.get(index) else {
-            return;
-        };
-        let original: SharedString = entry.name.clone().into();
-        let input = Self::new_input(window, cx, "Vault name", false);
-        input.update(cx, |input, cx| {
-            input.set_value(original.to_string(), window, cx);
-        });
-        self.rename_vault_prior_focus = window.focused(cx);
-        self.rename_vault_dialog = Some(RenameVaultDialogState {
-            index,
-            original,
-            input: input.clone(),
-            error: false,
-        });
-        // The name is what the user came to change, so the field takes focus.
-        Self::focus_input(&input, window, cx);
-        cx.notify();
-    }
-
-    fn cancel_rename_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.rename_vault_dialog = None;
-        if let Some(focus) = self.rename_vault_prior_focus.take() {
-            focus.focus(window, cx);
-        }
-        cx.notify();
-    }
-
-    fn confirm_rename_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dialog) = self.rename_vault_dialog.clone() else {
-            return;
-        };
-        let name = dialog.input.read(cx).value().to_string();
-        if self.rename_vault(dialog.index, name, window, cx) {
-            self.rename_vault_dialog = None;
-            self.rename_vault_prior_focus = None;
-            cx.notify();
-        } else if let Some(state) = self.rename_vault_dialog.as_mut() {
-            state.error = true;
-            Self::focus_input(&dialog.input, window, cx);
-            cx.notify();
-        }
-    }
-
-    /// Open the in-app confirmation for removing the vault at `index`.
-    pub(crate) fn begin_remove_vault(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(entry) = self.vaults.vaults.get(index) else {
-            return;
-        };
-        self.remove_vault_prior_focus = window.focused(cx);
-        self.remove_vault_dialog = Some(RemoveVaultDialogState {
-            index,
-            name: entry.name.clone().into(),
-            file_exists: entry.path.is_file(),
-            // Removing only unregisters the vault until the user deliberately
-            // opts into the destructive path.
-            delete_files: false,
-        });
-        self.remove_vault_cancel_focus.focus(window, cx);
-        cx.notify();
-    }
-
-    fn toggle_remove_vault_files(&mut self, cx: &mut Context<Self>) {
-        if let Some(dialog) = &mut self.remove_vault_dialog
-            && dialog.file_exists
-        {
-            dialog.delete_files = !dialog.delete_files;
-            cx.notify();
-        }
-    }
-
-    fn cancel_remove_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.remove_vault_dialog = None;
-        if let Some(focus) = self.remove_vault_prior_focus.take() {
-            focus.focus(window, cx);
-        }
-        cx.notify();
-    }
-
-    fn confirm_remove_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dialog) = self.remove_vault_dialog.take() else {
-            return;
-        };
-        self.remove_vault_prior_focus = None;
-        self.remove_vault(dialog.index, dialog.delete_files, window, cx);
-    }
-
-    fn render_rename_vault_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let dialog = self.rename_vault_dialog.clone()?;
-        let cancel_focus = self.rename_vault_cancel_focus.clone();
-        let confirm_focus = self.rename_vault_confirm_focus.clone();
-        let dialog_focus = self.rename_vault_dialog_focus.clone();
-        let cancel_for_a11y = cx.entity();
-        let confirm_for_a11y = cx.entity();
-
-        let cancel = div()
-            .id("rename-vault-cancel")
-            .debug_selector(|| "rename-vault-cancel".to_owned())
-            .w(px(69.))
-            .h(px(34.))
-            .px(px(16.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(7.))
-            .border_1()
-            .border_color(rgb(0x3A4450))
-            .bg(rgb(0x222731))
-            .font_family("Inter")
-            .text_size(px(11.))
-            .font_weight(FontWeight(550.))
-            .text_color(rgb(0xDDE3E8))
-            .cursor_pointer()
-            .track_focus(&cancel_focus)
-            .role(gpui::Role::Button)
-            .aria_label("Cancel")
-            .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    window.prevent_default();
-                    this.cancel_rename_vault(window, cx);
-                }
-            }))
-            .on_click(cx.listener(|this, _, window, cx| this.cancel_rename_vault(window, cx)))
-            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, app| {
-                cancel_for_a11y.update(app, |this, cx| this.cancel_rename_vault(window, cx));
-            })
-            .child("Cancel");
-
-        let confirm = div()
-            .id("rename-vault-confirm")
-            .debug_selector(|| "rename-vault-confirm".to_owned())
-            .w(px(64.))
-            .h(px(34.))
-            .px(px(16.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(7.))
-            .border_1()
-            .border_color(rgb(0xE3E6ED))
-            .bg(rgb(0xE3E6ED))
-            .font_family("Inter")
-            .text_size(px(11.))
-            .font_weight(FontWeight(650.))
-            .text_color(rgb(0x1A1D22))
-            .cursor_pointer()
-            .track_focus(&confirm_focus)
-            .role(gpui::Role::Button)
-            .aria_label("Save")
-            .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    window.prevent_default();
-                    this.confirm_rename_vault(window, cx);
-                }
-            }))
-            .on_click(cx.listener(|this, _, window, cx| this.confirm_rename_vault(window, cx)))
-            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, app| {
-                confirm_for_a11y.update(app, |this, cx| this.confirm_rename_vault(window, cx));
-            })
-            .child("Save");
-
-        let error = dialog.error.then(|| {
-            div()
-                .debug_selector(|| "rename-vault-error".to_owned())
-                .font_family("Inter")
-                .text_size(px(10.))
-                .line_height(relative(1.45))
-                .text_color(rgb(0xC9959A))
-                .child("A vault needs a name.")
-        });
-
-        Some(
-            div()
-                .id("rename-vault-layer")
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(rgba(0x0A0C0F99))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| this.cancel_rename_vault(window, cx)),
-                )
-                .child(
-                    div()
-                        .id("rename-vault-dialog")
-                        .debug_selector(|| "rename-vault-dialog".to_owned())
-                        .w(px(440.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(16.))
-                        .p(px(21.))
-                        .rounded(px(12.))
-                        .border_1()
-                        .border_color(rgb(0x3A4450))
-                        .bg(rgb(0x202630))
-                        .track_focus(&dialog_focus)
-                        .role(gpui::Role::Dialog)
-                        .aria_label(format!("Rename {}", dialog.original))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            match event.keystroke.key.as_str() {
-                                "escape" => {
-                                    window.prevent_default();
-                                    this.cancel_rename_vault(window, cx);
-                                }
-                                // Enter submits from the field, the way every
-                                // other form in the app behaves.
-                                "enter" => {
-                                    window.prevent_default();
-                                    this.confirm_rename_vault(window, cx);
-                                }
-                                _ => {}
-                            }
-                        }))
-                        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
-                        .child(
-                            div()
-                                .debug_selector(|| "rename-vault-title".to_owned())
-                                .font_family("Inter")
-                                .text_size(px(15.))
-                                .line_height(relative(1.2))
-                                .font_weight(FontWeight(650.))
-                                .text_color(rgb(0xF3F5F7))
-                                .child("Rename vault"),
-                        )
-                        .child(
-                            div()
-                                .debug_selector(|| "rename-vault-body".to_owned())
-                                .w_full()
-                                .font_family("Inter")
-                                .text_size(px(11.))
-                                .line_height(relative(1.45))
-                                .text_color(rgb(0xB9C0C8))
-                                .child(
-                                    "Only the label changes. The vault file stays where it is, \
-                                     so its folder keeps its original name.",
-                                ),
-                        )
-                        .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .flex_col()
-                                .gap(px(7.))
-                                .child(
-                                    div()
-                                        .font_family("Inter")
-                                        .text_size(px(9.))
-                                        .font_weight(FontWeight(700.))
-                                        .text_color(rgb(0x7F8996))
-                                        .child("VAULT NAME"),
-                                )
-                                .child(
-                                    Input::new(&dialog.input)
-                                        .prefix(
-                                            gpui_component::Icon::empty()
-                                                .path("icons/database.svg")
-                                                .size(px(14.))
-                                                .text_color(rgb(0x737E8D)),
-                                        )
-                                        .aria_label("Vault name"),
-                                )
-                                .children(error),
-                        )
-                        .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .justify_end()
-                                .gap(px(8.))
-                                .child(cancel)
-                                .child(confirm),
-                        )
-                        .focus_trap("rename-vault-focus-trap", &dialog_focus),
-                )
-                .into_any_element(),
-        )
-    }
-
-    fn render_remove_vault_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let dialog = self.remove_vault_dialog.clone()?;
-        let checked = dialog.delete_files;
-        let warning = if checked {
-            "Every password in this vault is destroyed. Nox has no password recovery and this \
-             cannot be undone."
-        } else {
-            "Leave this off to keep the file — useful for a vault on a drive you unplug."
-        };
-        let option_fill = if checked { 0x2A2024 } else { 0x1B2029 };
-        let option_border = if checked { 0xA9787D } else { 0x343D48 };
-        let option_label = if checked { 0xE9C3C6 } else { 0xDDE3E8 };
-        let option_warning = if checked { 0xC9959A } else { 0x7F8996 };
-        let confirm_fill = if checked { 0xA9787D } else { 0xE3E6ED };
-        let confirm_label = if checked { "Delete vault" } else { "Remove" };
-
-        let option_focus = self.remove_vault_option_focus.clone();
-        let cancel_focus = self.remove_vault_cancel_focus.clone();
-        let confirm_focus = self.remove_vault_confirm_focus.clone();
-        let dialog_focus = self.remove_vault_dialog_focus.clone();
-        let toggle_for_a11y = cx.entity();
-        let cancel_for_a11y = cx.entity();
-        let confirm_for_a11y = cx.entity();
-
-        let delete_option = dialog.file_exists.then(|| {
-            div()
-                .id("remove-vault-delete-files")
-                .debug_selector(|| "remove-vault-delete-files".to_owned())
-                .w_full()
-                .flex()
-                .items_start()
-                .gap(px(10.))
-                .p(px(11.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(rgb(option_border))
-                .bg(rgb(option_fill))
-                .cursor_pointer()
-                .track_focus(&option_focus)
-                .role(gpui::Role::CheckBox)
-                .aria_label("Also delete the vault file permanently")
-                .aria_description(warning)
-                .aria_toggled(if checked {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        window.prevent_default();
-                        this.toggle_remove_vault_files(cx);
-                    }
-                }))
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_remove_vault_files(cx)))
-                .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, app| {
-                    toggle_for_a11y.update(app, |this, cx| {
-                        this.toggle_remove_vault_files(cx);
-                    });
-                })
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .size(px(16.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.))
-                        .border_1()
-                        .border_color(rgb(if checked { 0xA9787D } else { 0x3A4450 }))
-                        .bg(rgb(if checked { 0xA9787D } else { 0x202630 }))
-                        .when(checked, |checkbox| {
-                            checkbox.child(
-                                gpui_component::Icon::empty()
-                                    .path("icons/check.svg")
-                                    .size(px(11.))
-                                    .text_color(rgb(0x12161C)),
-                            )
-                        }),
-                )
-                .child(
-                    div()
-                        .min_w(px(0.))
-                        .flex_1()
-                        .flex()
-                        .flex_col()
-                        .gap(px(5.))
-                        .child(
-                            div()
-                                .debug_selector(|| "remove-vault-option-label".to_owned())
-                                .font_family("Inter")
-                                .text_size(px(11.))
-                                .line_height(relative(1.18))
-                                .font_weight(FontWeight(550.))
-                                .text_color(rgb(option_label))
-                                .child("Also delete the vault file permanently"),
-                        )
-                        .child(
-                            div()
-                                .debug_selector(|| "remove-vault-option-warning".to_owned())
-                                .font_family("Inter")
-                                .text_size(px(10.))
-                                .line_height(px(15.))
-                                .when(!checked, |text| text.whitespace_nowrap())
-                                .text_color(rgb(option_warning))
-                                .child(warning),
-                        ),
-                )
-        });
-
-        let cancel = div()
-            .id("remove-vault-cancel")
-            .debug_selector(|| "remove-vault-cancel".to_owned())
-            .w(px(69.))
-            .h(px(34.))
-            .px(px(16.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(7.))
-            .border_1()
-            .border_color(rgb(0x3A4450))
-            .bg(rgb(0x222731))
-            .font_family("Inter")
-            .text_size(px(11.))
-            .font_weight(FontWeight(550.))
-            .text_color(rgb(0xDDE3E8))
-            .cursor_pointer()
-            .track_focus(&cancel_focus)
-            .role(gpui::Role::Button)
-            .aria_label("Cancel")
-            .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    window.prevent_default();
-                    this.cancel_remove_vault(window, cx);
-                }
-            }))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.cancel_remove_vault(window, cx);
-            }))
-            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, app| {
-                cancel_for_a11y.update(app, |this, cx| {
-                    this.cancel_remove_vault(window, cx);
-                });
-            })
-            .child("Cancel");
-
-        let confirm = div()
-            .id("remove-vault-confirm")
-            .debug_selector(|| "remove-vault-confirm".to_owned())
-            .w(px(if checked { 94. } else { 74. }))
-            .h(px(34.))
-            .px(px(16.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(7.))
-            .border_1()
-            .border_color(rgb(confirm_fill))
-            .bg(rgb(confirm_fill))
-            .font_family("Inter")
-            .text_size(px(11.))
-            .font_weight(FontWeight(650.))
-            .text_color(rgb(0x1A1D22))
-            .cursor_pointer()
-            .track_focus(&confirm_focus)
-            .role(gpui::Role::Button)
-            .aria_label(confirm_label)
-            .focus_visible(|style| style.border_color(rgb(0x77B8DF)))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    window.prevent_default();
-                    this.confirm_remove_vault(window, cx);
-                }
-            }))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.confirm_remove_vault(window, cx);
-            }))
-            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, app| {
-                confirm_for_a11y.update(app, |this, cx| {
-                    this.confirm_remove_vault(window, cx);
-                });
-            })
-            .child(confirm_label);
-
-        Some(
-            div()
-                .id("remove-vault-modal-layer")
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(rgba(0x0A0C0F99))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        this.cancel_remove_vault(window, cx);
-                    }),
-                )
-                .child(
-                    div()
-                        .id("remove-vault-dialog")
-                        .debug_selector(|| "remove-vault-dialog".to_owned())
-                        .w(px(440.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(16.))
-                        .p(px(21.))
-                        .rounded(px(12.))
-                        .border_1()
-                        .border_color(rgb(0x3A4450))
-                        .bg(rgb(0x202630))
-                        .track_focus(&dialog_focus)
-                        .role(gpui::Role::Dialog)
-                        .aria_label(format!("Remove {} from the list?", dialog.name))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key.as_str() == "escape" {
-                                window.prevent_default();
-                                this.cancel_remove_vault(window, cx);
-                            }
-                        }))
-                        .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
-                        .child(
-                            div()
-                                .debug_selector(|| "remove-vault-title".to_owned())
-                                .font_family("Inter")
-                                .text_size(px(15.))
-                                .line_height(relative(1.2))
-                                .font_weight(FontWeight(650.))
-                                .text_color(rgb(0xF3F5F7))
-                                .child(format!("Remove “{}” from the list?", dialog.name)),
-                        )
-                        .child(
-                            div()
-                                .debug_selector(|| "remove-vault-body".to_owned())
-                                .w_full()
-                                .font_family("Inter")
-                                .text_size(px(11.))
-                                .line_height(relative(1.45))
-                                .text_color(rgb(0xB9C0C8))
-                                .child(
-                                    "Nox stops listing this vault. Its file stays on disk, so you \
-                                     can open it again later.",
-                                ),
-                        )
-                        .children(delete_option)
-                        .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .justify_end()
-                                .gap(px(8.))
-                                .child(cancel)
-                                .child(confirm),
-                        )
-                        .focus_trap("remove-vault-focus-trap", &dialog_focus),
-                )
-                .into_any_element(),
-        )
-    }
-
     /// Rebuild the picker's delegate from the registry.
     ///
     /// A stale delegate keeps offering a vault that is no longer registered,
@@ -1496,7 +919,7 @@ impl Nox {
         });
     }
 
-    fn begin_create_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn begin_create_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.state = AppState::NoVault;
         self.create_state = FormState::Idle;
         self.reset_create_inputs(window, cx);
@@ -1504,7 +927,7 @@ impl Nox {
         cx.notify();
     }
 
-    fn create_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn create_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.create_state == FormState::Pending || !self.backup.is_idle() {
             return;
         }
@@ -1560,14 +983,16 @@ impl Nox {
                             if let Err(error) = save_registry(&this.data_dir, &this.vaults) {
                                 eprintln!("vault registry persistence failed: {error}");
                             }
-                            this.state = AppState::Unlocked(vault);
+                            let list =
+                                VaultListState::from_initial_load(items, deleted, window, cx);
+                            this.state = AppState::Unlocked(VaultSession {
+                                vault,
+                                list,
+                                item_editor: None,
+                                active_view: ActiveView::Home,
+                                reveal_password: false,
+                            });
                             crate::theme::apply(ThemeMode::Dark, Some(window), cx);
-                            this.vault_list = Some(VaultListState::from_initial_load(
-                                items, deleted, window, cx,
-                            ));
-                            this.item_editor = None;
-                            this.active_view = ActiveView::Home;
-                            this.reveal_password = false;
                             this.conflicts = ConflictState::from_initial_load(conflicts);
                             this.conflicts_open = false;
                             this.create_state = FormState::Idle;
@@ -1595,7 +1020,7 @@ impl Nox {
         });
     }
 
-    fn unlock_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn unlock_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.unlock_state == FormState::Pending || !self.backup.is_idle() {
             return;
         }
@@ -1629,14 +1054,16 @@ impl Nox {
                                     eprintln!("vault registry persistence failed: {error}");
                                 }
                             }
-                            this.state = AppState::Unlocked(vault);
+                            let list =
+                                VaultListState::from_initial_load(items, deleted, window, cx);
+                            this.state = AppState::Unlocked(VaultSession {
+                                vault,
+                                list,
+                                item_editor: None,
+                                active_view: ActiveView::Home,
+                                reveal_password: false,
+                            });
                             crate::theme::apply(ThemeMode::Dark, Some(window), cx);
-                            this.vault_list = Some(VaultListState::from_initial_load(
-                                items, deleted, window, cx,
-                            ));
-                            this.item_editor = None;
-                            this.active_view = ActiveView::Home;
-                            this.reveal_password = false;
                             this.conflicts = ConflictState::from_initial_load(conflicts);
                             this.conflicts_open = false;
                             this.unlock_state = FormState::Idle;
@@ -1702,7 +1129,7 @@ impl Nox {
         });
     }
 
-    fn lock_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn lock_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(&self.state, AppState::Unlocked(_)) {
             return;
         }
@@ -1711,10 +1138,6 @@ impl Nox {
         self.discard_clipboard_state(cx);
         self.inactivity_epoch += 1;
         self._inactivity_task = Task::ready(());
-        self.vault_list = None;
-        self.item_editor = None;
-        self.active_view = ActiveView::AllItems;
-        self.reveal_password = false;
         self.conflicts = ConflictState::Closed;
         self.conflicts_open = false;
         if matches!(
@@ -1729,8 +1152,8 @@ impl Nox {
             self.backup.dialog = None;
             self.backup.task = Task::ready(());
         }
-        if let AppState::Unlocked(vault) = std::mem::replace(&mut self.state, AppState::Locked) {
-            vault.lock();
+        if let AppState::Unlocked(session) = std::mem::replace(&mut self.state, AppState::Locked) {
+            session.vault.lock();
         }
         crate::theme::apply(ThemeMode::Dark, Some(window), cx);
         Self::focus_input(&self.unlock_password, window, cx);
@@ -1756,971 +1179,6 @@ impl Nox {
             WindowCommand::LockVault => self.lock_vault(window, cx),
             WindowCommand::Close => window.remove_window(),
         }
-    }
-
-    fn render_no_vault(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = Theme::current(cx);
-        let pending = self.create_state == FormState::Pending;
-        let backup_busy = !self.backup.is_idle();
-        let error = match &self.create_state {
-            FormState::Error(message) => div()
-                .text_sm()
-                .text_center()
-                .text_color(theme.danger)
-                .child(message.clone()),
-            FormState::Idle | FormState::Pending => div(),
-        };
-        let backup_status = match &self.backup.operation {
-            backup::BackupOperation::Failed(message) => div()
-                .text_sm()
-                .text_center()
-                .text_color(theme.danger)
-                .child(message.clone()),
-            _ => div(),
-        };
-        let create_button = Button::new("create-vault-submit")
-            .w_full()
-            .h(px(44.))
-            .rounded(px(7.))
-            .disabled(pending || backup_busy)
-            .loading(pending)
-            .on_click(cx.listener(|this, _, window, cx| this.create_vault(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .font_weight(FontWeight::BOLD)
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/shield-plus.svg")
-                            .size(px(15.)),
-                    )
-                    .child(if pending {
-                        "Creating…"
-                    } else {
-                        "Create vault"
-                    }),
-            );
-        let create_button = animated_auth_button(
-            "create-vault-submit",
-            create_button,
-            self.auth_hovered.get("create-vault-submit").copied(),
-            (
-                theme.inverse,
-                theme.inverse_hover,
-                theme.inverse_active,
-                theme.on_inverse,
-            ),
-            cx,
-        );
-        let restore_button = Button::new("create-restore-backup")
-            .w_full()
-            .h(px(32.))
-            .px(px(12.))
-            .disabled(backup_busy)
-            .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .w_full()
-                    .gap(px(7.))
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/archive-restore.svg")
-                            .size(px(14.))
-                            .text_color(theme.text_subtle),
-                    )
-                    .child("Restore a backup instead"),
-            );
-        let restore_button = animated_auth_button(
-            "create-restore-backup",
-            restore_button,
-            self.auth_hovered.get("create-restore-backup").copied(),
-            (
-                theme.canvas,
-                theme.raised,
-                theme.border,
-                theme.text_secondary,
-            ),
-            cx,
-        );
-        rsx! {
-            <div
-                id="no-vault-view"
-                size_full
-                flex
-                items_center
-                justify_center
-                bg={theme.canvas}
-                p={px(36.)}
-                onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    match event.keystroke.key.as_str() {
-                        "enter" => this.create_vault(window, cx),
-                        "escape" => window.remove_window(),
-                        _ => {}
-                    }
-                })}
-            >
-                <div
-                    id="no-vault-card"
-                    flex
-                    flex_col
-                    gap={px(15.)}
-                    w={px(416.)}
-                >
-                    <div flex flex_col items_center gap={px(8.)}>
-                        {logo(52., theme.text)}
-                        <div flex flex_col items_center gap={px(4.)}>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>
-                                {"Create your vault"}
-                            </div>
-                            <div text_xs text_center textColor={theme.text_muted}>
-                                {"Choose a master password to secure your data"}
-                            </div>
-                        </div>
-                    </div>
-                    <div
-                        id="create-recovery-warning"
-                        flex
-                        items_center
-                        gap={px(10.)}
-                        h={px(48.)}
-                        px={px(12.)}
-                        rounded={px(8.)}
-                        bg={theme.surface}
-                        border_1
-                        borderColor={theme.border}
-                    >
-                        <div size={px(28.)} flex items_center justify_center rounded_full bg={theme.raised}>
-                            <div text_sm fontWeight={FontWeight::BOLD} textColor={theme.text}>{"!"}</div>
-                        </div>
-                        <div flex flex_col flex_1 gap={px(2.)}>
-                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_soft}>
-                                {"No password recovery"}
-                            </div>
-                            <div text_xs textColor={theme.text_subtle}>
-                                {"Store your master password somewhere safe"}
-                            </div>
-                        </div>
-                        {gpui_component::Icon::empty()
-                            .path("icons/shield-alert.svg")
-                            .size(px(14.))
-                            .text_color(theme.text_subtle)}
-                    </div>
-                    <div id="create-vault-name" flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
-                            {"VAULT NAME"}
-                        </div>
-                            <Input
-                                base={Input::new(&self.create_name)
-                                    .prefix(
-                                    gpui_component::Icon::empty()
-                                        .path("icons/database.svg")
-                                        .size(px(15.))
-                                        .text_color(theme.icon_muted),
-                                    )
-                                    .aria_label("Vault name")}
-                                h={px(44.)}
-                                bg={theme.surface}
-                                borderColor={theme.border_strong}
-                                rounded={px(8.)}
-                        />
-                    </div>
-                    <div id="create-vault-password" flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
-                            {"MASTER PASSWORD"}
-                        </div>
-                        <Input
-                            base={Input::new(&self.create_password)
-                                .mask_toggle()
-                                .prefix(
-                                    gpui_component::Icon::empty()
-                                        .path("icons/lock.svg")
-                                        .size(px(15.))
-                                        .text_color(theme.icon_muted),
-                                )
-                                .aria_label("Master password")}
-                            h={px(44.)}
-                            bg={theme.surface}
-                            borderColor={theme.border_strong}
-                            rounded={px(8.)}
-                        />
-                    </div>
-                    <div id="create-vault-confirm" flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
-                            {"CONFIRM MASTER PASSWORD"}
-                        </div>
-                        <Input
-                            base={Input::new(&self.create_confirm)
-                                .mask_toggle()
-                                .prefix(
-                                    gpui_component::Icon::empty()
-                                        .path("icons/lock.svg")
-                                        .size(px(15.))
-                                        .text_color(theme.icon_muted),
-                                )
-                                .aria_label("Confirm master password")}
-                            h={px(44.)}
-                            bg={theme.surface}
-                            borderColor={theme.border_strong}
-                            rounded={px(8.)}
-                        />
-                    </div>
-                    {error}
-                    {create_button}
-                    <div flex flex_col gap={px(8.)}>
-                        <div h={px(1.)} w_full bg={theme.border} />
-                        {if self.vaults.vaults.is_empty() {
-                            div().into_any_element()
-                        } else {
-                            Button::new("create-back-to-vault-list")
-                                .h(px(32.))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.return_to_unlock(window, cx);
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(7.))
-                                        .child("Back"),
-                                )
-                                .into_any_element()
-                        }}
-                        {restore_button}
-                        {backup_status}
-                        <div text_xs text_center textColor={theme.text_ghost}>
-                            {"Enter to create · Esc to close"}
-                        </div>
-                    </div>
-                    <div flex items_center justify_center gap={px(7.)} textColor={theme.text_subtle}>
-                        {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(13.))}
-                        <div text_xs>{"Encrypted locally · You hold the keys"}</div>
-                    </div>
-                </div>
-            </div>
-        }
-    }
-
-    fn render_locked(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::current(cx);
-        let pending = self.unlock_state == FormState::Pending;
-        let backup_busy = !self.backup.is_idle();
-        let trigger_content = self.active_vault.as_ref().map_or_else(
-            || div().child("Select a vault").into_any_element(),
-            |vault| {
-                vault_row_content(
-                    theme,
-                    vault,
-                    Some(
-                        gpui_component::Icon::empty()
-                            .path("icons/chevron-down.svg")
-                            .size(px(14.))
-                            .text_color(theme.icon_muted)
-                            .into_any_element(),
-                    ),
-                )
-            },
-        );
-        let trigger_variant = ButtonCustomVariant::new(cx)
-            .color(theme.surface)
-            .hover(theme.surface)
-            .active(theme.surface)
-            .foreground(theme.text_soft);
-        let trigger = Button::new("vault-select-trigger")
-            .custom(trigger_variant)
-            .w_full()
-            .h(px(48.))
-            .px(px(12.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.surface)
-            .child(trigger_content);
-        let vaults = self.vaults.vaults.clone();
-        let selected_id = self.active_vault.as_ref().map(|vault| vault.id.clone());
-        let select = self.vault_select.clone();
-        let vault_select = Popover::new("vault-select-popover")
-            .appearance(false)
-            .trigger(trigger)
-            .content(move |_state, _window, cx| {
-                let popover = cx.entity();
-                let rows = vaults.iter().cloned().enumerate().map(|(index, vault)| {
-                    let missing = !vault.path.is_file();
-                    let checked = selected_id.as_ref() == Some(&vault.id);
-                    let (icon, color) = vault_dropdown_trailing(theme, missing, checked);
-                    let trailing = gpui_component::Icon::empty()
-                        .path(icon)
-                        .size(px(14.))
-                        .text_color(color)
-                        .into_any_element();
-                    let select = select.clone();
-                    let popover = popover.clone();
-                    let id = vault.id.clone();
-                    div()
-                        .id(("vault-option", index))
-                        .w_full()
-                        .h(px(40.))
-                        .px(px(8.))
-                        .rounded(px(6.))
-                        .bg(if checked { theme.raised } else { theme.surface })
-                        .when(!checked && !missing, |row| {
-                            row.hover(|style| style.bg(theme.raised))
-                        })
-                        .when(!missing, |row| {
-                            row.cursor_pointer().on_click(move |_, window, app| {
-                                select.update(app, |_, cx| {
-                                    cx.emit(SelectEvent::Confirm(Some(id.clone())));
-                                });
-                                popover.update(app, |state, cx| state.dismiss(window, cx));
-                            })
-                        })
-                        .child(vault_row_content(theme, &vault, Some(trailing)))
-                });
-                div()
-                    .w(px(416.))
-                    .p(px(4.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(1.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.surface)
-                    .shadow(vec![BoxShadow {
-                        color: rgba(0x00000066).into(),
-                        offset: point(px(0.), px(4.)),
-                        blur_radius: px(12.),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }])
-                    .children(rows)
-            });
-        let error = match &self.unlock_state {
-            FormState::Error(message) => div()
-                .text_sm()
-                .text_color(theme.danger)
-                .child(message.clone()),
-            FormState::Idle | FormState::Pending => div(),
-        };
-        let backup_status = match &self.backup.operation {
-            backup::BackupOperation::Failed(message) => div()
-                .text_sm()
-                .text_center()
-                .text_color(theme.danger)
-                .child(message.clone()),
-            backup::BackupOperation::Succeeded(message) => div()
-                .text_sm()
-                .text_center()
-                .text_color(theme.text_subtle)
-                .child(message.clone()),
-            backup::BackupOperation::AwaitingRestoreConfirmation { archive_path } => div()
-                .text_sm()
-                .text_center()
-                .text_color(theme.text_subtle)
-                .child(format!("Restore: {}", archive_path.display())),
-            _ => div(),
-        };
-        let unlock_button = Button::new("unlock-submit")
-            .w_full()
-            .h(px(44.))
-            .rounded(px(7.))
-            .disabled(pending || backup_busy)
-            .loading(pending)
-            .on_click(cx.listener(|this, _, window, cx| this.unlock_vault(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::BOLD)
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/lock-keyhole-open.svg")
-                            .size(px(15.))
-                            .text_color(theme.on_inverse),
-                    )
-                    .child(if pending {
-                        "Unlocking…"
-                    } else {
-                        "Unlock vault"
-                    }),
-            );
-        let unlock_button = animated_auth_button(
-            "unlock-submit",
-            unlock_button,
-            self.auth_hovered.get("unlock-submit").copied(),
-            (
-                theme.inverse,
-                theme.inverse_hover,
-                theme.inverse_active,
-                theme.on_inverse,
-            ),
-            cx,
-        );
-        let create_button = Button::new("locked-create-vault")
-            .w_full()
-            .h(px(32.))
-            .px(px(12.))
-            .on_click(cx.listener(|this, _, window, cx| this.begin_create_from_picker(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .w_full()
-                    .gap(px(7.))
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/plus.svg")
-                            .size(px(14.))
-                            .text_color(theme.text_subtle),
-                    )
-                    .child("Create a new vault"),
-            );
-        let create_button = animated_auth_button(
-            "locked-create-vault",
-            create_button,
-            self.auth_hovered.get("locked-create-vault").copied(),
-            (
-                theme.canvas,
-                theme.raised,
-                theme.border,
-                theme.text_secondary,
-            ),
-            cx,
-        );
-        let restore_button = Button::new("restore-backup")
-            .w_full()
-            .h(px(32.))
-            .px(px(12.))
-            .disabled(backup_busy)
-            .on_click(cx.listener(|this, _, window, cx| this.begin_restore(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .w_full()
-                    .gap(px(7.))
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/archive-restore.svg")
-                            .size(px(14.))
-                            .text_color(theme.text_subtle),
-                    )
-                    .child("Restore a backup instead"),
-            );
-        let restore_button = animated_auth_button(
-            "restore-backup",
-            restore_button,
-            self.auth_hovered.get("restore-backup").copied(),
-            (
-                theme.canvas,
-                theme.raised,
-                theme.border,
-                theme.text_secondary,
-            ),
-            cx,
-        );
-        rsx! {
-            <div
-                id="locked-view"
-                size_full
-                flex
-                items_center
-                justify_center
-                bg={theme.canvas}
-                p={px(36.)}
-                onKeyDown={cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    match event.keystroke.key.as_str() {
-                        "enter" => this.unlock_vault(window, cx),
-                        "escape" => window.remove_window(),
-                        _ => {}
-                    }
-                })}
-            >
-                <div
-                    id="locked-card"
-                    flex
-                    flex_col
-                    gap={px(18.)}
-                    w={px(416.)}
-                >
-                    <div flex flex_col items_center gap={px(8.)}>
-                        {logo(52., theme.text)}
-                        <div flex flex_col items_center gap={px(4.)}>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>
-                                {"Unlock your vault"}
-                            </div>
-                            <div text_xs text_center textColor={theme.text_muted}>
-                                {"Enter your master password to continue"}
-                            </div>
-                        </div>
-                    </div>
-                    <div id="locked-vault-summary">
-                        {vault_select}
-                    </div>
-                    <div id="unlock-password" flex flex_col gap={px(7.)}>
-                        <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}>
-                            {"MASTER PASSWORD"}
-                        </div>
-                        <Input
-                            base={Input::new(&self.unlock_password)
-                                .large()
-                                .focus_bordered(false)
-                                .text_size(px(11.))
-                                .gap(px(10.))
-                                .mask_toggle()
-                                .prefix(
-                                    gpui_component::Icon::empty()
-                                        .path("icons/lock.svg")
-                                        .size(px(15.))
-                                        .text_color(theme.icon_muted),
-                                )
-                                .aria_label("Master password")}
-                            h={px(44.)}
-                            bg={theme.surface}
-                            borderColor={theme.border_strong}
-                            rounded={px(8.)}
-                        />
-                    </div>
-                    {error}
-                    {unlock_button}
-                    <div flex flex_col gap={px(8.)}>
-                        <div h={px(1.)} w_full bg={theme.border} />
-                        {create_button}
-                        {restore_button}
-                        {backup_status}
-                        <div text_xs text_center textColor={theme.text_ghost}>
-                            {"Enter to unlock · Esc to close"}
-                        </div>
-                    </div>
-                    <div flex items_center justify_center gap={px(7.)} textColor={theme.text_subtle}>
-                        {gpui_component::Icon::empty()
-                            .path("icons/shield-check.svg")
-                            .size(px(13.))}
-                        <div text_xs>{"Encrypted locally · Works offline"}</div>
-                    </div>
-                </div>
-            </div>
-        }
-    }
-
-    fn render_unlocked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::current(cx);
-        if self.active_view == ActiveView::Home {
-            let nav = self.render_sidebar_nav(cx);
-            let home = self.render_home(window, cx);
-            return rsx! { <div id="home-shell" size_full flex bg={theme.canvas}>{nav}{home}</div> };
-        }
-        if self.uses_secure_note_workspace() {
-            let nav = self.render_sidebar_nav(cx);
-            let workspace = self.render_secure_note_workspace(window, cx);
-            return rsx! {
-                <div id="secure-note-workspace-shell" size_full flex bg={SECURE_NOTE_PAPER}>
-                    {nav}
-                    {workspace}
-                </div>
-            };
-        }
-        if self.uses_login_workspace() {
-            let nav = self.render_sidebar_nav(cx);
-            let workspace = self.render_login_workspace(window, cx);
-            return rsx! {
-                <div id="login-workspace-shell" size_full flex bg={theme.canvas}>
-                    {nav}
-                    {workspace}
-                </div>
-            };
-        }
-        if self.item_editor.is_some() {
-            let locker = cx.entity();
-            let content = self.render_item_editor(locker, window, cx);
-            *self.item_editor_sheet_cell.borrow_mut() = Some(content);
-        }
-        let nav = self.render_sidebar_nav(cx);
-        let add = self.render_add_item_button("header-add-item", cx);
-        let list_toolbar = self.render_vault_list_toolbar(cx);
-        let list = self.render_vault_list(window, cx);
-        let detail = self.render_item_detail(window, cx);
-        let conflict_panel = if self.conflicts_open {
-            div()
-                .p(px(20.))
-                .pb(px(0.))
-                .child(self.render_conflicts(window, cx))
-                .into_any_element()
-        } else {
-            div().into_any_element()
-        };
-        let (total, logins, notes) = self.vault_list.as_ref().map_or((0, 0, 0), |list| {
-            let logins = list
-                .items
-                .iter()
-                .filter(|(_, item)| item.item_type == nox_core::ItemType::Login)
-                .count();
-            let notes = list
-                .items
-                .iter()
-                .filter(|(_, item)| item.item_type == nox_core::ItemType::SecureNote)
-                .count();
-            (list.items.len(), logins, notes)
-        });
-        let (page_title, item_count, item_noun) = match self.active_view {
-            ActiveView::Home => ("Home", total, "items"),
-            ActiveView::AllItems => ("All items", total, "items"),
-            ActiveView::Logins => ("Logins", logins, "logins"),
-            ActiveView::SecureNotes => ("Secure Notes", notes, "encrypted notes"),
-        };
-        rsx! {
-            <div
-                id="unlocked-view"
-                size_full
-                flex
-                bg={theme.canvas}
-                onMouseMove={cx.listener(|this, _: &MouseMoveEvent, _, cx| {
-                    this.note_activity(cx);
-                })}
-                onMouseDown={(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                    this.note_activity(cx);
-                }))}
-                onKeyDown={cx.listener(|this, _: &KeyDownEvent, _, cx| {
-                    this.note_activity(cx);
-                })}
-            >
-                {nav}
-                <div flex flex_col flex_1 min_w={px(0.)} h_full>
-                    <div
-                        id="content-toolbar"
-                        flex
-                        items_center
-                        justify_between
-                        w_full
-                        h={px(88.)}
-                        px={px(32.)}
-                        flex_shrink_0
-                        border_b_1
-                        borderColor={theme.border}
-                    >
-                        <div flex flex_col gap={px(3.)}>
-                            <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{page_title}</div>
-                            <div text_xs textColor={theme.text_muted}>
-                                {if self.active_view == ActiveView::SecureNotes {
-                                    format!("{item_count} {item_noun}")
-                                } else {
-                                    format!("{item_count} {item_noun} in your vault")
-                                }}
-                            </div>
-                        </div>
-                        <div flex items_center gap={px(10.)}>
-                            <Button
-                                base={Button::new("lock-vault")
-                                    .ghost()
-                                    .icon(gpui_component::Icon::empty().path("icons/lock-keyhole-open.svg").text_color(theme.text_muted))
-                                    .tooltip("Lock vault")
-                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                        if !event.keystroke.modifiers.modified()
-                                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                        {
-                                            window.prevent_default();
-                                            this.lock_vault(window, cx);
-                                        }
-                                    }))
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.lock_vault(window, cx)),
-                                    )}
-                            />
-                            {sync_status_pill(theme)}
-                            {add}
-                        </div>
-                    </div>
-                    {conflict_panel}
-                    <div flex flex_col flex_1 min_h={px(0.)} p={px(28.)} pt={px(20.)} gap={px(16.)} bg={theme.canvas}>
-                        {list_toolbar}
-                        <div flex flex_1 min_h={px(0.)} gap={px(16.)}>
-                            {list}
-                            {detail}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        }
-    }
-
-    fn render_home(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::current(cx);
-        let (total, logins, notes, recent) =
-            self.vault_list
-                .as_ref()
-                .map_or((0, 0, 0, Vec::new()), |list| {
-                    let logins = list
-                        .items
-                        .iter()
-                        .filter(|(_, item)| item.item_type == nox_core::ItemType::Login)
-                        .count();
-                    let notes = list
-                        .items
-                        .iter()
-                        .filter(|(_, item)| item.item_type == nox_core::ItemType::SecureNote)
-                        .count();
-                    let recent = list
-                        .items
-                        .iter()
-                        .rev()
-                        .take(5)
-                        .map(|(id, item)| (*id, item.clone()))
-                        .collect::<Vec<_>>();
-                    (list.items.len(), logins, notes, recent)
-                });
-        let locker = cx.entity();
-        let add = self.render_add_item_button("home-add-item", cx);
-        let view_all = Button::new("home-view-all")
-            .ghost()
-            .h(px(26.))
-            .label("View all ›")
-            .text_color(theme.text_secondary)
-            .on_click({
-                let locker = locker.clone();
-                move |_, _window, cx| {
-                    locker.update(cx, |locker, cx| {
-                        locker.set_active_view(ActiveView::AllItems, cx)
-                    });
-                }
-            });
-        let recent_rows: Vec<AnyElement> = recent
-            .into_iter()
-            .map(|(item_id, item)| {
-                let is_login = item.item_type == nox_core::ItemType::Login;
-                let icon_path = if is_login {
-                    "icons/key-square.svg"
-                } else {
-                    "icons/file-lock.svg"
-                };
-                let title = if item.title.is_empty() {
-                    "Untitled".to_owned()
-                } else {
-                    item.title.clone()
-                };
-                let subtitle = recent_item_subtitle(&item);
-                let time = relative_time(item.updated_at);
-                let row_locker = locker.clone();
-                Button::new(SharedString::from(format!("home-recent-{item_id}")))
-                    .ghost()
-                    .w_full()
-                    .h(px(64.))
-                    .justify_start()
-                    .px(px(18.))
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .on_click(move |_, window, cx| {
-                        row_locker.update(cx, |locker, cx| {
-                            locker.open_editor_for_item(item_id, false, window, cx)
-                        });
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .w_full()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(14.))
-                                    .child(
-                                        div()
-                                            .size(px(34.))
-                                            .rounded(px(8.))
-                                            .bg(theme.raised)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                gpui_component::Icon::empty()
-                                                    .path(icon_path)
-                                                    .size(px(15.))
-                                                    .text_color(theme.text_secondary),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(2.))
-                                            .child(
-                                                div().text_sm().text_color(theme.text).child(title),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.text_muted)
-                                                    .child(subtitle),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(16.))
-                                    .child(div().text_xs().text_color(theme.text_muted).child(time))
-                                    .child(
-                                        gpui_component::Icon::empty()
-                                            .path("icons/ellipsis-vertical.svg")
-                                            .size(px(14.))
-                                            .text_color(theme.text_muted),
-                                    ),
-                            ),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-        let recent_body = if recent_rows.is_empty() {
-            div()
-                .py(px(40.))
-                .text_sm()
-                .text_center()
-                .text_color(theme.text_muted)
-                .child("No items yet")
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .children(recent_rows)
-                .into_any_element()
-        };
-        let new_login = home_quick_action(
-            "home-new-login",
-            "icons/key-square.svg",
-            "New login",
-            true,
-            self.auth_hovered.get("home-new-login").copied(),
-            {
-                let locker = locker.clone();
-                move |_, window, cx| {
-                    locker.update(cx, |l, cx| {
-                        l.active_view = ActiveView::Logins;
-                        l.open_create_editor(window, cx);
-                    });
-                }
-            },
-            cx,
-        );
-        let new_note = home_quick_action(
-            "home-secure-note",
-            "icons/file-lock.svg",
-            "Secure note",
-            true,
-            self.auth_hovered.get("home-secure-note").copied(),
-            {
-                let locker = locker.clone();
-                move |_, window, cx| {
-                    locker.update(cx, |l, cx| {
-                        l.active_view = ActiveView::SecureNotes;
-                        l.open_create_editor(window, cx);
-                    });
-                }
-            },
-            cx,
-        );
-        let new_card = home_quick_action(
-            "home-payment-card",
-            "icons/credit-card.svg",
-            "Payment card",
-            false,
-            None,
-            |_, _, _| {},
-            cx,
-        );
-        let new_identity = home_quick_action(
-            "home-identity",
-            "icons/user.svg",
-            "Identity",
-            false,
-            None,
-            |_, _, _| {},
-            cx,
-        );
-        rsx! {
-            <div id="home-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
-                <div id="home-header" flex items_center justify_between h={px(88.)} px={px(32.)} flex_shrink_0 border_b_1 borderColor={theme.border}>
-                    <div flex flex_col gap={px(3.)}>
-                        <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Home"}</div>
-                        <div text_xs textColor={theme.text_muted}>{"Your vault at a glance"}</div>
-                    </div>
-                    <div flex items_center gap={px(10.)}>
-                        {sync_status_pill(theme)}
-                        {add}
-                    </div>
-                </div>
-                <div id="home-dashboard" flex flex_col gap={px(20.)} p={px(32.)} overflow_y_scroll>
-                    <div id="home-hero" flex items_start justify_between p={px(24.)} bg={theme.surface} rounded={px(10.)} border_1 border_color={theme.field_border}>
-                        <div flex flex_col gap={px(8.)} w={px(360.)}>
-                            <div text_xs fontWeight={FontWeight::BOLD} textColor={theme.text_muted}>{"WELCOME BACK"}</div>
-                            <div text_lg fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Your vault is secure"}</div>
-                            <div text_sm textColor={theme.text_muted}>
-                                {format!(
-                                    "Stored locally and encrypted. {total} item{} in your vault.",
-                                    if total == 1 { "" } else { "s" },
-                                )}
-                            </div>
-                        </div>
-                        <div flex gap={px(12.)}>
-                            {home_stat_tile(theme, "VAULT ITEMS", total)}
-                            {home_stat_tile(theme, "LOGINS", logins)}
-                            {home_stat_tile(theme, "SECURE NOTES", notes)}
-                        </div>
-                    </div>
-                    <div id="home-quick-actions" flex flex_col gap={px(12.)}>
-                        <div flex items_center justify_between>
-                            <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Quick actions"}</div>
-                            <div text_xs textColor={theme.text_muted}>{"Ctrl+P to search or create"}</div>
-                        </div>
-                        <div flex gap={px(12.)}>
-                            {new_login}
-                            {new_note}
-                            {new_card}
-                            {new_identity}
-                        </div>
-                    </div>
-                    <div flex gap={px(20.)} items_start>
-                        <div id="home-recent-items" flex flex_col flex_1 min_w={px(0.)} rounded={px(10.)} bg={theme.surface}>
-                            <div flex items_center justify_between h={px(58.)} px={px(18.)} border_b_1 borderColor={theme.border}>
-                                <div flex flex_col gap={px(2.)}>
-                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Recent items"}</div>
-                                    <div text_xs textColor={theme.text_muted}>{"Newest first"}</div>
-                                </div>
-                                {view_all}
-                            </div>
-                            {recent_body}
-                        </div>
-                        <div flex flex_col gap={px(16.)} w={px(330.)} flex_shrink_0>
-                            <div flex flex_col gap={px(10.)} p={px(18.)} rounded={px(10.)} bg={theme.surface}>
-                                <div flex items_center gap={px(8.)}>
-                                    {gpui_component::Icon::empty().path("icons/shield-check.svg").size(px(15.)).text_color(theme.text_secondary)}
-                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Security health"}</div>
-                                </div>
-                                <div text_xs textColor={theme.text_muted}>{"Password health scoring isn't available yet."}</div>
-                            </div>
-                            <div flex flex_col gap={px(10.)} p={px(18.)} rounded={px(10.)} bg={theme.surface}>
-                                <div flex items_center gap={px(8.)}>
-                                    {gpui_component::Icon::empty().path("icons/star.svg").size(px(15.)).text_color(theme.text_secondary)}
-                                    <div text_sm fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Favorites"}</div>
-                                </div>
-                                <div text_xs textColor={theme.text_muted}>{"Favoriting items isn't available yet."}</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        }.into_any_element()
     }
 }
 
@@ -2949,6 +1407,19 @@ mod tests {
     fn write_existing(path: &Path) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, []).unwrap();
+    }
+
+    /// An `Unlocked` state wrapping `vault` with an empty item list and the
+    /// same session defaults `Nox::new` starts with — for tests that jump
+    /// straight to Unlocked without going through `unlock_vault`/`create_vault`.
+    fn unlocked_state(vault: Vault, window: &mut Window, cx: &mut Context<Nox>) -> AppState {
+        AppState::Unlocked(VaultSession {
+            vault,
+            list: VaultListState::from_initial_load(Ok(Vec::new()), Ok(Vec::new()), window, cx),
+            item_editor: None,
+            active_view: ActiveView::AllItems,
+            reveal_password: false,
+        })
     }
 
     fn add_locker_view(
@@ -3279,8 +1750,8 @@ mod tests {
         let vault = Vault::create(b"correct", &path).unwrap();
         let dir = path.parent().unwrap().to_path_buf();
         let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
-        view.update_in(cx, |nox, _window, _cx| {
-            nox.state = AppState::Unlocked(vault);
+        view.update_in(cx, |nox, window, cx| {
+            nox.state = unlocked_state(vault, window, cx);
         });
 
         view.update_in(cx, |nox, window, app| {
@@ -3289,7 +1760,7 @@ mod tests {
 
         // Deleting the file out from under an open vault without running the
         // existing teardown would leave its key material live in memory.
-        assert!(view.read_with(cx, |nox, _| nox.vault_list.is_none()));
+        assert!(view.read_with(cx, |nox, _| nox.session().is_none()));
         assert!(view.read_with(cx, |nox, _| matches!(&nox.state, AppState::NoVault)));
         assert!(!path.exists());
         cleanup(&dir);
@@ -3460,7 +1931,7 @@ mod tests {
         });
         cx.run_until_parked();
         assert!(view.read_with(cx, |locker, _| {
-            matches!(&locker.state, AppState::Unlocked(vault) if vault.vault_id() == vault_id)
+            matches!(&locker.state, AppState::Unlocked(session) if session.vault.vault_id() == vault_id)
         }));
         assert_eq!(cx.update(|_, app| app.theme().mode), ThemeMode::Dark);
         cleanup(&path);
@@ -3537,7 +2008,7 @@ mod tests {
         let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
         cx.update(|_, app| Theme::change(ThemeMode::Light, None, app));
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.state = AppState::Unlocked(vault);
+            locker.state = unlocked_state(vault, window, locker_cx);
             locker.lock_vault(window, locker_cx);
         });
 
@@ -3582,7 +2053,7 @@ mod tests {
         let vault = Vault::create(b"correct", &path).unwrap();
         let (view, cx) = add_locker_view(cx, path.clone(), Duration::from_secs(60));
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.state = AppState::Unlocked(vault);
+            locker.state = unlocked_state(vault, window, locker_cx);
             locker.arm_inactivity_timer(window, locker_cx);
         });
         assert_eq!(view.read_with(cx, |locker, _| locker.inactivity_epoch), 1);
@@ -3593,7 +2064,7 @@ mod tests {
         let second_path = test_path("inactivity-rearm");
         let second_vault = Vault::create(b"correct", &second_path).unwrap();
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.state = AppState::Unlocked(second_vault);
+            locker.state = unlocked_state(second_vault, window, locker_cx);
             locker.arm_inactivity_timer(window, locker_cx);
         });
         assert_eq!(view.read_with(cx, |locker, _| locker.inactivity_epoch), 3);
@@ -3718,7 +2189,7 @@ mod tests {
             locker.set_active_view(ActiveView::Home, locker_cx);
         });
         assert_eq!(
-            view.read_with(cx, |locker, _| locker.active_view),
+            view.read_with(cx, |locker, _| locker.session().unwrap().active_view),
             ActiveView::Home
         );
         cleanup(&path);
@@ -3731,7 +2202,7 @@ mod tests {
         init(cx);
         let (view, cx, path, _) = unlocked_view(cx, "command-palette", &[]);
         let list_search = view.read_with(cx, |locker, _| {
-            locker.vault_list.as_ref().unwrap().search_input.clone()
+            locker.session().unwrap().list.search_input.clone()
         });
         view.update_in(cx, |_, window, locker_cx| {
             list_search.update(locker_cx, |input, input_cx| input.focus(window, input_cx));
@@ -3777,7 +2248,7 @@ mod tests {
         init(cx);
         let (view, cx, path, _) = unlocked_view(cx, "command-palette-escape", &[]);
         let list_search = view.read_with(cx, |locker, _| {
-            locker.vault_list.as_ref().unwrap().search_input.clone()
+            locker.session().unwrap().list.search_input.clone()
         });
         view.update_in(cx, |_, window, locker_cx| {
             list_search.update(locker_cx, |input, input_cx| input.focus(window, input_cx));
@@ -3821,6 +2292,7 @@ mod tests {
     fn task6_list_load_keeps_items_and_deleted_ids(cx: &mut TestAppContext) {
         init(cx);
         let path = test_path("task6-list-load");
+        let vault = Vault::create(b"correct", &path).unwrap();
         let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
         let item_id = ItemId::new();
         let payload = ItemPayload {
@@ -3835,15 +2307,18 @@ mod tests {
             updated_at: 1,
         };
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.vault_list = Some(VaultListState::from_initial_load(
-                Ok(vec![(item_id, payload)]),
-                Ok(vec![ItemId::new()]),
-                window,
-                locker_cx,
-            ));
+            locker.state = unlocked_state(vault, window, locker_cx);
+            if let Some(session) = locker.session_mut() {
+                session.list = VaultListState::from_initial_load(
+                    Ok(vec![(item_id, payload)]),
+                    Ok(vec![ItemId::new()]),
+                    window,
+                    locker_cx,
+                );
+            }
         });
         let (items, filtered, deleted) = view.read_with(cx, |locker, _| {
-            let list = locker.vault_list.as_ref().unwrap();
+            let list = &locker.session().unwrap().list;
             (
                 list.items.len(),
                 list.filtered.len(),
@@ -3882,13 +2357,18 @@ mod tests {
         let items = vault.list_items().unwrap();
         let (view, visual_cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
         view.update_in(visual_cx, |locker, window, locker_cx| {
-            locker.state = AppState::Unlocked(vault);
-            locker.vault_list = Some(VaultListState::from_initial_load(
-                Ok(items),
-                Ok(Vec::new()),
-                window,
-                locker_cx,
-            ));
+            locker.state = AppState::Unlocked(VaultSession {
+                vault,
+                list: VaultListState::from_initial_load(
+                    Ok(items),
+                    Ok(Vec::new()),
+                    window,
+                    locker_cx,
+                ),
+                item_editor: None,
+                active_view: ActiveView::AllItems,
+                reveal_password: false,
+            });
         });
         (view, visual_cx, path, ids)
     }
@@ -3901,7 +2381,7 @@ mod tests {
         password: &str,
     ) {
         view.update_in(cx, |locker, window, locker_cx| {
-            let editor = locker.item_editor.as_ref().unwrap();
+            let editor = locker.session().unwrap().item_editor.as_ref().unwrap();
             for (input, value) in [
                 (&editor.title_input, title),
                 (&editor.username_input, username),
@@ -3918,34 +2398,36 @@ mod tests {
     fn list_load_failure_is_safe_in_either_branch(cx: &mut TestAppContext) {
         init(cx);
         let path = test_path("list-failure");
+        let vault = Vault::create(b"correct", &path).unwrap();
         let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.vault_list = Some(VaultListState::from_initial_load(
-                Err(VaultError::ItemNotFound),
-                Ok(Vec::new()),
-                window,
-                locker_cx,
-            ));
+            locker.state = unlocked_state(vault, window, locker_cx);
+            if let Some(session) = locker.session_mut() {
+                session.list = VaultListState::from_initial_load(
+                    Err(VaultError::ItemNotFound),
+                    Ok(Vec::new()),
+                    window,
+                    locker_cx,
+                );
+            }
         });
         assert!(view.read_with(cx, |locker, _| {
-            matches!(
-                locker.vault_list.as_ref().unwrap().load,
-                vault_list::ListLoadState::Failed(_)
-            ) && locker.vault_list.as_ref().unwrap().items.is_empty()
+            let list = &locker.session().unwrap().list;
+            matches!(list.load, vault_list::ListLoadState::Failed(_)) && list.items.is_empty()
         }));
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.vault_list = Some(VaultListState::from_initial_load(
-                Ok(Vec::new()),
-                Err(VaultError::ItemNotFound),
-                window,
-                locker_cx,
-            ));
+            if let Some(session) = locker.session_mut() {
+                session.list = VaultListState::from_initial_load(
+                    Ok(Vec::new()),
+                    Err(VaultError::ItemNotFound),
+                    window,
+                    locker_cx,
+                );
+            }
         });
         assert!(view.read_with(cx, |locker, _| {
-            matches!(
-                locker.vault_list.as_ref().unwrap().load,
-                vault_list::ListLoadState::Failed(_)
-            ) && locker.vault_list.as_ref().unwrap().filtered.is_empty()
+            let list = &locker.session().unwrap().list;
+            matches!(list.load, vault_list::ListLoadState::Failed(_)) && list.filtered.is_empty()
         }));
         cleanup(&path);
     }
@@ -3959,7 +2441,7 @@ mod tests {
         ];
         let (view, cx, path, _) = unlocked_view(cx, "search", &payloads);
         let search = view.read_with(cx, |locker, _| {
-            locker.vault_list.as_ref().unwrap().search_input.clone()
+            locker.session().unwrap().list.search_input.clone()
         });
         view.update_in(cx, |_, window, locker_cx| {
             search.update(locker_cx, |input, input_cx| input.focus(window, input_cx));
@@ -3967,9 +2449,9 @@ mod tests {
         cx.simulate_keystrokes("alp");
         assert_eq!(
             view.read_with(cx, |locker, _| locker
-                .vault_list
-                .as_ref()
+                .session()
                 .unwrap()
+                .list
                 .filtered
                 .len()),
             1
@@ -3977,9 +2459,9 @@ mod tests {
         cx.simulate_keystrokes("backspace backspace backspace");
         assert_eq!(
             view.read_with(cx, |locker, _| locker
-                .vault_list
-                .as_ref()
+                .session()
                 .unwrap()
+                .list
                 .filtered
                 .len()),
             2
@@ -4003,22 +2485,24 @@ mod tests {
         }];
         let (view, cx, path, _) = unlocked_view(cx, "secure-note-content-search", &payloads);
         view.update_in(cx, |locker, _window, locker_cx| {
-            locker.active_view = ActiveView::SecureNotes;
+            if let Some(session) = locker.session_mut() {
+                session.active_view = ActiveView::SecureNotes;
+            }
             locker.recompute_vault_list_filter(locker_cx);
         });
         view.update_in(cx, |locker, _window, locker_cx| {
             locker
-                .vault_list
-                .as_mut()
+                .session_mut()
                 .unwrap()
+                .list
                 .recompute_filter("amber-galaxy".into());
             locker_cx.notify();
         });
         assert_eq!(
             view.read_with(cx, |locker, _| locker
-                .vault_list
-                .as_ref()
+                .session()
                 .unwrap()
+                .list
                 .filtered
                 .len()),
             1
@@ -4038,16 +2522,16 @@ mod tests {
             locker.save_item(window, locker_cx)
         });
         let (id, persisted) = view.read_with(cx, |locker, _| {
-            let list = locker.vault_list.as_ref().unwrap();
+            let list = &locker.session().unwrap().list;
             let (id, _) = list.items.first().unwrap();
             let persisted = match &locker.state {
-                AppState::Unlocked(vault) => vault.get_item(*id).unwrap(),
+                AppState::Unlocked(session) => session.vault.get_item(*id).unwrap(),
                 _ => None,
             };
             (*id, persisted)
         });
         assert_eq!(
-            view.read_with(cx, |locker, _| locker.vault_list.as_ref().unwrap().selected),
+            view.read_with(cx, |locker, _| locker.session().unwrap().list.selected),
             Some(id)
         );
         assert_eq!(persisted.unwrap().title, "New");
@@ -4078,8 +2562,8 @@ mod tests {
         });
         assert_eq!(
             view.read_with(cx, |locker, _| locker
-                .item_editor
-                .as_ref()
+                .session()
+                .and_then(|session| session.item_editor.as_ref())
                 .and_then(|editor| editor.save_error.as_ref())
                 .map(ToString::to_string)),
             Some("Enter a title.".to_owned())
@@ -4094,7 +2578,14 @@ mod tests {
         view.update_in(cx, |locker, window, locker_cx| {
             locker.set_active_view(ActiveView::SecureNotes, locker_cx);
             locker.open_create_editor(window, locker_cx);
-            let title = locker.item_editor.as_ref().unwrap().title_input.clone();
+            let title = locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .title_input
+                .clone();
             title.update(locker_cx, |input, input_cx| {
                 input.set_value("Recovery codes", window, input_cx)
             });
@@ -4102,8 +2593,8 @@ mod tests {
         });
         assert_eq!(
             view.read_with(cx, |locker, _| locker
-                .item_editor
-                .as_ref()
+                .session()
+                .and_then(|session| session.item_editor.as_ref())
                 .and_then(|editor| editor.save_error.as_ref())
                 .map(ToString::to_string)),
             Some("Enter note content.".to_owned())
@@ -4130,19 +2621,124 @@ mod tests {
         // Type the vault's one existing password into the draft and confirm
         // the real reuse check flags it, then cancel via Escape.
         view.update_in(cx, |locker, window, locker_cx| {
-            let editor = locker.item_editor.as_ref().unwrap();
+            let editor = locker.session().unwrap().item_editor.as_ref().unwrap();
             let password_input = editor.password_input.clone();
             password_input.update(locker_cx, |state, input_cx| {
                 state.set_value("secret".to_owned(), window, input_cx);
             });
         });
         cx.run_until_parked();
-        assert!(view.read_with(cx, |locker, _| locker.item_editor.is_some()));
+        assert!(view.read_with(cx, |locker, _| {
+            locker.session().unwrap().item_editor.is_some()
+        }));
 
         view.update_in(cx, |locker, window, locker_cx| {
             locker.cancel_item_editor(window, locker_cx);
         });
-        assert!(view.read_with(cx, |locker, _| locker.item_editor.is_none()));
+        assert!(view.read_with(cx, |locker, _| {
+            locker.session().unwrap().item_editor.is_none()
+        }));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn login_edit_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, ids) = unlocked_view(
+            cx,
+            "login-edit-workspace",
+            &[login_payload("Existing", "alex")],
+        );
+        let item_id = ids[0];
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::Logins, locker_cx);
+            locker.open_editor_for_item(item_id, false, window, locker_cx);
+        });
+
+        assert!(view.read_with(cx, |locker, _| {
+            locker.uses_login_workspace()
+                && matches!(
+                    locker
+                        .session()
+                        .and_then(|session| session.item_editor.as_ref())
+                        .map(|editor| editor.mode),
+                    Some(EditorMode::Edit(id)) if id == item_id
+                )
+        }));
+        assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+        cleanup(&path);
+    }
+
+    /// Editing a login from the All items view reuses the full-page "Edit
+    /// login" workspace instead of the generic Sheet.
+    #[gpui::test]
+    fn all_items_login_edit_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, ids) = unlocked_view(
+            cx,
+            "all-items-login-edit",
+            &[login_payload("Existing", "alex")],
+        );
+        let item_id = ids[0];
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_editor_for_item(item_id, false, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| {
+            locker.session().unwrap().active_view == ActiveView::AllItems
+                && locker.uses_login_workspace()
+                && matches!(
+                    locker
+                        .session()
+                        .and_then(|session| session.item_editor.as_ref())
+                        .map(|editor| editor.mode),
+                    Some(EditorMode::Edit(id)) if id == item_id
+                )
+        }));
+        assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+        cleanup(&path);
+    }
+
+    /// Editing a secure note opens the full-page note workspace both from the
+    /// Secure Notes view and from All items (creation from All items keeps
+    /// the generic Sheet).
+    #[gpui::test]
+    fn secure_note_edit_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
+        init(cx);
+        let payload = ItemPayload {
+            schema_version: ITEM_SCHEMA_VERSION,
+            item_type: ItemType::SecureNote,
+            title: "Recovery codes".into(),
+            username: String::new(),
+            password: String::new(),
+            uris: Vec::new(),
+            notes: "amber-galaxy".into(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        let (view, cx, path, ids) = unlocked_view(cx, "note-edit-workspace", &[payload]);
+        let item_id = ids[0];
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_editor_for_item(item_id, false, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| {
+            locker.uses_secure_note_workspace()
+                && matches!(
+                    locker
+                        .session()
+                        .and_then(|session| session.item_editor.as_ref())
+                        .map(|editor| editor.mode),
+                    Some(EditorMode::Edit(id)) if id == item_id
+                )
+        }));
+        assert!(!cx.update(|window, app| window.has_active_sheet(app)));
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.cancel_item_editor(window, locker_cx);
+            locker.set_active_view(ActiveView::AllItems, locker_cx);
+            locker.open_editor_for_item(item_id, false, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.uses_secure_note_workspace()));
+        assert!(!cx.update(|window, app| window.has_active_sheet(app)));
         cleanup(&path);
     }
 
@@ -4166,24 +2762,26 @@ mod tests {
         });
         cx.run_until_parked();
         let (weak, reused) = view.read_with(cx, |locker, _| {
-            let list = locker.vault_list.as_ref().unwrap();
+            let list = &locker.session().unwrap().list;
             (list.weak_login_count(), list.reused_login_count())
         });
         assert_eq!((weak, reused), (2, 2));
 
         view.update_in(cx, |locker, window, locker_cx| {
             locker.select_item(ids[0], locker_cx);
-            if let Some(list) = locker.vault_list.as_mut() {
-                list.set_login_health_filter(Some(vault_list::LoginHealth::Reused));
+            if let Some(session) = locker.session_mut() {
+                session
+                    .list
+                    .set_login_health_filter(Some(vault_list::LoginHealth::Reused));
             }
             let _ = window;
         });
         cx.run_until_parked();
         assert_eq!(
             view.read_with(cx, |locker, _| locker
-                .vault_list
-                .as_ref()
+                .session()
                 .unwrap()
+                .list
                 .filtered
                 .len()),
             2
@@ -4205,7 +2803,7 @@ mod tests {
             locker.save_item(window, locker_cx)
         });
         assert_eq!(
-            view.read_with(cx, |locker, _| locker.vault_list.as_ref().unwrap().items[0]
+            view.read_with(cx, |locker, _| locker.session().unwrap().list.items[0]
                 .1
                 .title
                 .clone()),
@@ -4218,16 +2816,22 @@ mod tests {
             locker.open_editor_for_item(item_id, true, window, locker_cx)
         });
         assert_eq!(
-            view.read_with(cx, |locker, _| locker.item_editor.as_ref().unwrap().mode),
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .mode),
             EditorMode::Restore(item_id)
         );
         view.update_in(cx, |locker, window, locker_cx| {
             locker.save_item(window, locker_cx)
         });
         assert!(view.read_with(cx, |locker, _| {
-            locker.vault_list.as_ref().unwrap().deleted_ids.is_empty()
+            locker.session().unwrap().list.deleted_ids.is_empty()
         }));
-        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Unlocked(vault) if vault.get_item(item_id).unwrap().is_some())));
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Unlocked(session) if session.vault.get_item(item_id).unwrap().is_some())));
         cleanup(&path);
     }
 
@@ -4244,11 +2848,12 @@ mod tests {
             locker.delete_item(item_id, window, locker_cx)
         });
         assert!(view.read_with(cx, |locker, _| {
-            let list = locker.vault_list.as_ref().unwrap();
+            let session = locker.session().unwrap();
+            let list = &session.list;
             list.items.is_empty()
                 && list.filtered.is_empty()
                 && list.deleted_ids == [item_id]
-                && locker.item_editor.is_none()
+                && session.item_editor.is_none()
         }));
         cleanup(&path);
     }
@@ -4267,10 +2872,10 @@ mod tests {
         });
         let (item_count, titles, selected_is_new, persisted_count) =
             view.read_with(cx, |locker, _| {
-                let list = locker.vault_list.as_ref().unwrap();
+                let list = &locker.session().unwrap().list;
                 let titles: Vec<_> = list.items.iter().map(|(_, p)| p.title.clone()).collect();
                 let persisted_count = match &locker.state {
-                    AppState::Unlocked(vault) => vault.list_items().unwrap().len(),
+                    AppState::Unlocked(session) => session.vault.list_items().unwrap().len(),
                     _ => 0,
                 };
                 (
@@ -4300,7 +2905,7 @@ mod tests {
         }
         assert!(view.read_with(
             cx,
-            |locker, _| locker.vault_list.as_ref().unwrap().deleted_ids.len() == 2
+            |locker, _| locker.session().unwrap().list.deleted_ids.len() == 2
         ));
         let restore_id = ids[0];
         view.update_in(cx, |locker, window, locker_cx| {
@@ -4310,7 +2915,7 @@ mod tests {
             locker.save_item(window, locker_cx)
         });
         assert!(view.read_with(cx, |locker, _| {
-            let list = locker.vault_list.as_ref().unwrap();
+            let list = &locker.session().unwrap().list;
             list.deleted_ids == [ids[1]] && list.items.iter().any(|(id, _)| *id == restore_id)
         }));
         cleanup(&path);
@@ -4329,7 +2934,13 @@ mod tests {
             locker.open_editor_for_item(item_id, true, window, locker_cx)
         });
         assert_eq!(
-            view.read_with(cx, |locker, _| locker.item_editor.as_ref().unwrap().mode),
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .mode),
             EditorMode::Restore(item_id)
         );
         view.update_in(cx, |locker, window, locker_cx| {
@@ -4337,9 +2948,9 @@ mod tests {
         });
         assert!(!view.read_with(cx, |locker, _| {
             locker
-                .vault_list
-                .as_ref()
+                .session()
                 .unwrap()
+                .list
                 .deleted_ids
                 .contains(&item_id)
         }));
@@ -4448,8 +3059,8 @@ mod tests {
                 locker.backup.epoch,
                 locker.backup.is_idle(),
                 locker.clipboard.expected.is_none(),
-                locker.vault_list.is_none(),
-                locker.item_editor.is_none(),
+                locker.session().is_none(),
+                locker.session().is_none(),
                 matches!(&locker.conflicts, conflicts::ConflictState::Closed),
                 locker.conflicts_open,
             )

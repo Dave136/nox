@@ -5,12 +5,15 @@ mod clipboard;
 mod conflicts;
 mod detail;
 mod item_editor;
+mod locked;
 mod nav;
 mod settings;
 mod theme;
 mod ui;
+mod vault_dialogs;
 mod vault_list;
 mod vaults;
+mod workspace;
 
 use gpui::{AppContext, WindowDecorations, WindowOptions};
 use gpui_platform::application;

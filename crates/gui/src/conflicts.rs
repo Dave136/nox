@@ -175,7 +175,9 @@ impl Nox {
             return;
         };
         let result = match &mut self.state {
-            AppState::Unlocked(vault) => vault.resolve_conflict(item_id, selected_change_id),
+            AppState::Unlocked(session) => {
+                session.vault.resolve_conflict(item_id, selected_change_id)
+            }
             _ => return,
         };
         if result.is_err() {
@@ -196,19 +198,19 @@ impl Nox {
                 window.on_next_frame(|window, cx| window.focus_next(cx));
             }
         }
-        if let Some(list) = self.vault_list.as_mut() {
+        if let Some(session) = self.session_mut() {
             if let Some(payload) = selected_payload {
-                list.upsert(item_id, payload);
-                list.remove_deleted(item_id);
-                list.selected = Some(item_id);
+                session.list.upsert(item_id, payload);
+                session.list.remove_deleted(item_id);
+                session.list.selected = Some(item_id);
             } else {
-                list.remove(item_id);
-                list.add_deleted(item_id);
-                list.selected = None;
-                if let Some(editor) = self.item_editor.as_ref()
+                session.list.remove(item_id);
+                session.list.add_deleted(item_id);
+                session.list.selected = None;
+                if let Some(editor) = session.item_editor.as_ref()
                     && matches!(editor.mode, crate::item_editor::EditorMode::Edit(id) | crate::item_editor::EditorMode::Restore(id) if id == item_id)
                 {
-                    self.item_editor = None;
+                    session.item_editor = None;
                 }
             }
         }

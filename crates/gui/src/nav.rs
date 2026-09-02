@@ -36,14 +36,15 @@ impl Nox {
     /// Switch the active nav view, resetting selection-scoped UI state that
     /// no longer applies (a Login's password may have been revealed, etc).
     pub(crate) fn set_active_view(&mut self, view: ActiveView, cx: &mut Context<Self>) {
-        if self.active_view == view {
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        if session.active_view == view {
             return;
         }
-        self.active_view = view;
-        self.reveal_password = false;
-        if let Some(list) = self.vault_list.as_mut() {
-            list.set_type_filter(view.item_type());
-        }
+        session.active_view = view;
+        session.reveal_password = false;
+        session.list.set_type_filter(view.item_type());
         cx.notify();
     }
 
@@ -60,7 +61,9 @@ impl Nox {
 
     pub(crate) fn render_sidebar_nav(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
-        let active = self.active_view;
+        let active = self
+            .session()
+            .map_or(ActiveView::AllItems, |session| session.active_view);
         let locker = cx.entity();
         let locker_home = locker.clone();
         let locker_all_items = locker.clone();

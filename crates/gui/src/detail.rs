@@ -44,9 +44,11 @@ impl Nox {
                 .child(content)
         };
 
-        let Some((item_id, payload)) = self.vault_list.as_ref().and_then(|list| {
-            let item_id = list.selected?;
-            list.items
+        let Some((item_id, payload)) = self.session().and_then(|session| {
+            let item_id = session.list.selected?;
+            session
+                .list
+                .items
                 .iter()
                 .find(|(id, _)| *id == item_id)
                 .map(|(_, payload)| (item_id, payload.clone()))
@@ -55,7 +57,9 @@ impl Nox {
         };
 
         let feedback = self.clipboard.feedback;
-        let reveal_password = self.reveal_password;
+        let reveal_password = self
+            .session()
+            .is_some_and(|session| session.reveal_password);
         let locker = cx.entity();
         let title = if payload.title.is_empty() {
             "Untitled".to_owned()
@@ -135,41 +139,50 @@ impl Nox {
         if payload.item_type == ItemType::SecureNote {
             let copy_note_locker = locker.clone();
             let copied = feedback == Some((item_id, CopyField::Note));
-            body = body.child(
-                Button::new("copy-note-contents")
-                    .h(px(40.))
-                    .w_full()
-                    .rounded(px(7.))
-                    .bg(theme.text)
-                    .on_click(move |_, window, app| {
-                        copy_note_locker
-                            .update(app, |locker, cx| locker.copy_note(item_id, window, cx));
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(8.))
-                            .child(
-                                gpui_component::Icon::empty()
-                                    .path("icons/copy.svg")
-                                    .size(px(14.))
-                                    .text_color(theme.canvas),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight(650.))
-                                    .text_color(theme.canvas)
-                                    .child(if copied {
-                                        "Copied!"
-                                    } else {
-                                        "Copy note contents"
-                                    }),
-                            ),
-                    ),
-            );
+            let copy_note_button = Button::new("copy-note-contents")
+                .h(px(40.))
+                .w_full()
+                .rounded(px(7.))
+                .on_click(move |_, window, app| {
+                    copy_note_locker
+                        .update(app, |locker, cx| locker.copy_note(item_id, window, cx));
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.))
+                        .child(
+                            gpui_component::Icon::empty()
+                                .path("icons/copy.svg")
+                                .size(px(14.))
+                                .text_color(theme.canvas),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .font_weight(FontWeight(650.))
+                                .text_color(theme.canvas)
+                                .child(if copied {
+                                    "Copied!"
+                                } else {
+                                    "Copy note contents"
+                                }),
+                        ),
+                );
+            body = body.child(crate::app::animated_auth_button(
+                "copy-note-contents",
+                copy_note_button,
+                self.auth_hovered.get("copy-note-contents").copied(),
+                (
+                    theme.inverse,
+                    theme.inverse_hover,
+                    theme.inverse_press,
+                    theme.on_inverse,
+                ),
+                cx,
+            ));
         }
 
         if payload.item_type == ItemType::Login {
@@ -182,34 +195,43 @@ impl Nox {
                     .filter(|host| !host.is_empty())
                     .unwrap_or(uri);
                 let open_uri = uri.clone();
-                body = body.child(
-                    Button::new("detail-open-website")
-                        .h(px(38.))
-                        .w_full()
-                        .rounded(px(7.))
-                        .bg(theme.inverse)
-                        .on_click(move |_, _window, app| app.open_url(&open_uri))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .gap(px(7.))
-                                .child(
-                                    gpui_component::Icon::empty()
-                                        .path("icons/external-link.svg")
-                                        .size(px(14.))
-                                        .text_color(theme.canvas),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.canvas)
-                                        .child(format!("Open {host}")),
-                                ),
-                        ),
-                );
+                let open_website = Button::new("detail-open-website")
+                    .h(px(38.))
+                    .w_full()
+                    .rounded(px(7.))
+                    .on_click(move |_, _window, app| app.open_url(&open_uri))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(7.))
+                            .child(
+                                gpui_component::Icon::empty()
+                                    .path("icons/external-link.svg")
+                                    .size(px(14.))
+                                    .text_color(theme.canvas),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.canvas)
+                                    .child(format!("Open {host}")),
+                            ),
+                    );
+                body = body.child(crate::app::animated_auth_button(
+                    "detail-open-website",
+                    open_website,
+                    self.auth_hovered.get("detail-open-website").copied(),
+                    (
+                        theme.inverse,
+                        theme.inverse_hover,
+                        theme.inverse_press,
+                        theme.on_inverse,
+                    ),
+                    cx,
+                ));
             }
 
             let username_locker = locker.clone();
@@ -255,7 +277,9 @@ impl Nox {
                 )
                 .on_click(move |_, _window, app| {
                     reveal_locker.update(app, |locker, cx| {
-                        locker.reveal_password = !locker.reveal_password;
+                        if let Some(session) = locker.session_mut() {
+                            session.reveal_password = !session.reveal_password;
+                        }
                         cx.notify();
                     });
                 });
@@ -382,9 +406,8 @@ impl Nox {
         // date, and — for logins — the same weak/reused check the Logins
         // view's smart filters use, computed against every saved login.
         let dupes = self
-            .vault_list
-            .as_ref()
-            .map(|list| vault_list::duplicate_passwords(&list.items))
+            .session()
+            .map(|session| vault_list::duplicate_passwords(&session.list.items))
             .unwrap_or_default();
         let mut metadata = div()
             .flex()

@@ -271,34 +271,64 @@ fn password_is_reused(password: &str, items: &[(ItemId, ItemPayload)]) -> bool {
 
 impl Nox {
     pub(crate) fn uses_secure_note_workspace(&self) -> bool {
-        self.active_view == ActiveView::SecureNotes
-            && matches!(
-                self.item_editor,
+        let Some(session) = self.session() else {
+            return false;
+        };
+        match session.active_view {
+            ActiveView::SecureNotes => matches!(
+                session.item_editor,
                 Some(ItemEditorState {
-                    mode: EditorMode::Create,
+                    mode: EditorMode::Create | EditorMode::Edit(_),
                     item_type: ItemType::SecureNote,
                     ..
                 })
-            )
+            ),
+            // All items reuses the full-page editor for edits only; creation
+            // there keeps the generic Sheet.
+            ActiveView::AllItems => matches!(
+                session.item_editor,
+                Some(ItemEditorState {
+                    mode: EditorMode::Edit(_),
+                    item_type: ItemType::SecureNote,
+                    ..
+                })
+            ),
+            _ => false,
+        }
     }
 
-    /// Mirrors `uses_secure_note_workspace`: a dedicated full-page create flow
-    /// instead of the generic Sheet, matching the Pencil "Nox — Create Login"
-    /// frame.
+    /// A dedicated full-page login flow instead of the generic Sheet.
     pub(crate) fn uses_login_workspace(&self) -> bool {
-        self.active_view == ActiveView::Logins
-            && matches!(
-                self.item_editor,
+        let Some(session) = self.session() else {
+            return false;
+        };
+        match session.active_view {
+            ActiveView::Logins => matches!(
+                session.item_editor,
                 Some(ItemEditorState {
-                    mode: EditorMode::Create,
+                    mode: EditorMode::Create | EditorMode::Edit(_),
                     item_type: ItemType::Login,
                     ..
                 })
-            )
+            ),
+            // All items reuses the full-page editor for edits only; creation
+            // there keeps the generic Sheet.
+            ActiveView::AllItems => matches!(
+                session.item_editor,
+                Some(ItemEditorState {
+                    mode: EditorMode::Edit(_),
+                    item_type: ItemType::Login,
+                    ..
+                })
+            ),
+            _ => false,
+        }
     }
 
     pub(crate) fn cancel_item_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.item_editor = None;
+        if let Some(session) = self.session_mut() {
+            session.item_editor = None;
+        }
         window.close_sheet(cx);
         cx.notify();
     }
@@ -325,7 +355,9 @@ impl Nox {
                 .child(content)
                 .on_close(move |_, _window, app| {
                     locker_for_close.update(app, |locker, cx| {
-                        locker.item_editor = None;
+                        if let Some(session) = locker.session_mut() {
+                            session.item_editor = None;
+                        }
                         cx.notify();
                     });
                 })
@@ -333,14 +365,14 @@ impl Nox {
     }
 
     pub(crate) fn set_editor_type(&mut self, item_type: ItemType, cx: &mut Context<Self>) {
-        if let Some(editor) = self.item_editor.as_mut() {
+        if let Some(editor) = self.item_editor_mut() {
             editor.item_type = item_type;
             cx.notify();
         }
     }
 
     pub(crate) fn generate_editor_password(&mut self, cx: &mut Context<Self>) {
-        let Some(editor) = self.item_editor.as_mut() else {
+        let Some(editor) = self.item_editor_mut() else {
             return;
         };
         if let Ok(length) = editor
@@ -363,7 +395,7 @@ impl Nox {
         checked: bool,
         cx: &mut Context<Self>,
     ) {
-        if let Some(editor) = self.item_editor.as_mut() {
+        if let Some(editor) = self.item_editor_mut() {
             if checked {
                 editor.generator.classes |= class;
             } else {
@@ -385,7 +417,7 @@ impl Nox {
     }
 
     pub(crate) fn use_generated_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editor) = self.item_editor.as_mut() else {
+        let Some(editor) = self.item_editor_mut() else {
             return;
         };
         let Some(password) = editor.generator.generated.as_ref() else {
@@ -401,18 +433,18 @@ impl Nox {
     }
 
     pub(crate) fn set_generator_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if let Some(editor) = self.item_editor.as_mut() {
+        if let Some(editor) = self.item_editor_mut() {
             editor.generator.open = open;
             cx.notify();
         }
     }
 
     pub(crate) fn save_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editor) = self.item_editor.as_ref() else {
+        let Some(editor) = self.item_editor() else {
             return;
         };
         if editor.title_input.read(cx).value().trim().is_empty() {
-            if let Some(editor) = self.item_editor.as_mut() {
+            if let Some(editor) = self.item_editor_mut() {
                 editor.save_error = Some("Enter a title.".into());
             }
             cx.notify();
@@ -421,7 +453,7 @@ impl Nox {
         if editor.item_type == ItemType::SecureNote
             && editor.notes_input.read(cx).value().trim().is_empty()
         {
-            if let Some(editor) = self.item_editor.as_mut() {
+            if let Some(editor) = self.item_editor_mut() {
                 editor.save_error = Some("Enter note content.".into());
             }
             cx.notify();
@@ -430,29 +462,31 @@ impl Nox {
         let mode = editor.mode;
         let payload = editor.payload(window, cx);
         let result = match (&mut self.state, mode) {
-            (AppState::Unlocked(vault), EditorMode::Create) => {
-                vault.create_item(&payload).map(|item_id| (item_id, false))
-            }
-            (AppState::Unlocked(vault), EditorMode::Edit(item_id))
-            | (AppState::Unlocked(vault), EditorMode::Restore(item_id)) => vault
+            (AppState::Unlocked(session), EditorMode::Create) => session
+                .vault
+                .create_item(&payload)
+                .map(|item_id| (item_id, false)),
+            (AppState::Unlocked(session), EditorMode::Edit(item_id))
+            | (AppState::Unlocked(session), EditorMode::Restore(item_id)) => session
+                .vault
                 .update_item(item_id, &payload)
                 .map(|()| (item_id, true)),
             _ => return,
         };
         match result {
             Ok((item_id, was_restore)) => {
-                if let Some(list) = self.vault_list.as_mut() {
-                    list.upsert(item_id, payload);
-                    list.selected = Some(item_id);
+                if let Some(session) = self.session_mut() {
+                    session.list.upsert(item_id, payload);
+                    session.list.selected = Some(item_id);
                     if was_restore {
-                        list.remove_deleted(item_id);
+                        session.list.remove_deleted(item_id);
                     }
+                    session.item_editor = None;
                 }
-                self.item_editor = None;
                 window.close_sheet(cx);
             }
             Err(_) => {
-                if let Some(editor) = self.item_editor.as_mut() {
+                if let Some(editor) = self.item_editor_mut() {
                     editor.save_error = Some("Could not save item. Try again.".into());
                 }
             }
@@ -467,21 +501,21 @@ impl Nox {
         cx: &mut Context<Self>,
     ) {
         let result = match &mut self.state {
-            AppState::Unlocked(vault) => vault.delete_item(item_id),
+            AppState::Unlocked(session) => session.vault.delete_item(item_id),
             _ => return,
         };
         match result {
             Ok(()) => {
-                if let Some(list) = self.vault_list.as_mut() {
-                    list.remove(item_id);
-                    list.add_deleted(item_id);
-                    list.selected = None;
+                if let Some(session) = self.session_mut() {
+                    session.list.remove(item_id);
+                    session.list.add_deleted(item_id);
+                    session.list.selected = None;
+                    session.item_editor = None;
                 }
-                self.item_editor = None;
                 window.close_sheet(cx);
             }
             Err(_) => {
-                if let Some(editor) = self.item_editor.as_mut() {
+                if let Some(editor) = self.item_editor_mut() {
                     editor.save_error = Some("Could not delete item. Try again.".into());
                 }
             }
@@ -494,7 +528,7 @@ impl Nox {
     /// no separate duplication machinery.
     pub(crate) fn duplicate_item(&mut self, item_id: ItemId, cx: &mut Context<Self>) {
         let Some(mut payload) = (match &self.state {
-            AppState::Unlocked(vault) => vault.get_item(item_id).ok().flatten(),
+            AppState::Unlocked(session) => session.vault.get_item(item_id).ok().flatten(),
             _ => None,
         }) else {
             return;
@@ -503,19 +537,19 @@ impl Nox {
         payload.created_at = now_millis();
         payload.updated_at = payload.created_at;
         let result = match &mut self.state {
-            AppState::Unlocked(vault) => vault.create_item(&payload),
+            AppState::Unlocked(session) => session.vault.create_item(&payload),
             _ => return,
         };
         match result {
             Ok(new_item_id) => {
-                if let Some(list) = self.vault_list.as_mut() {
-                    list.upsert(new_item_id, payload);
-                    list.selected = Some(new_item_id);
+                if let Some(session) = self.session_mut() {
+                    session.list.upsert(new_item_id, payload);
+                    session.list.selected = Some(new_item_id);
                 }
             }
             Err(error) => {
-                if let Some(list) = self.vault_list.as_mut() {
-                    list.load = crate::vault_list::ListLoadState::Failed(
+                if let Some(session) = self.session_mut() {
+                    session.list.load = crate::vault_list::ListLoadState::Failed(
                         format!("Could not duplicate item: {error}").into(),
                     );
                 }
@@ -532,9 +566,8 @@ impl Nox {
     ) {
         let locker = cx.entity().downgrade();
         let title = self
-            .vault_list
-            .as_ref()
-            .and_then(|list| list.items.iter().find(|(id, _)| *id == item_id))
+            .session()
+            .and_then(|session| session.list.items.iter().find(|(id, _)| *id == item_id))
             .map_or_else(
                 || "this item".to_owned(),
                 |(_, payload)| payload.title.clone(),
@@ -571,7 +604,7 @@ impl Nox {
         let muted_foreground = component_theme.muted_foreground;
         let danger = component_theme.danger;
 
-        let Some(editor) = self.item_editor.as_ref() else {
+        let Some(editor) = self.item_editor() else {
             return (
                 "Item".into(),
                 div()
@@ -757,7 +790,7 @@ impl Nox {
                     let locker = locker.clone();
                     move |_, window, app| {
                         locker.update(app, |locker, cx| {
-                            if let Some(editor) = locker.item_editor.as_ref()
+                            if let Some(editor) = locker.item_editor()
                                 && let EditorMode::Edit(item_id) | EditorMode::Restore(item_id) =
                                     editor.mode
                             {
@@ -901,13 +934,41 @@ impl Nox {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::current(cx);
-        let Some(editor) = self.item_editor.as_ref() else {
+        let Some(editor) = self.item_editor() else {
             return div().into_any_element();
         };
         let title = editor.title_input.clone();
         let notes = editor.notes_input.clone();
         let character_count = notes.read(cx).value().chars().count();
         let save_error = editor.save_error.clone();
+        let editing = matches!(editor.mode, EditorMode::Edit(_));
+        let workspace_title = if editing {
+            "Edit note"
+        } else {
+            "Create secure note"
+        };
+        let workspace_subtitle = if editing {
+            "Update this encrypted note"
+        } else {
+            "Add an encrypted note to your vault"
+        };
+        let save_label = if editing { "Save changes" } else { "Save note" };
+        let save_hint = if editing {
+            "⌘ ↵  Save changes"
+        } else {
+            "⌘ ↵  Save note"
+        };
+        let saved_hint = if editing {
+            "Encrypted locally · saved in your vault"
+        } else {
+            "Encrypted locally · not saved yet"
+        };
+        let back_label =
+            if self.session().map(|session| session.active_view) == Some(ActiveView::AllItems) {
+                "Back to all items"
+            } else {
+                "Back to secure notes"
+            };
         let locker = cx.entity();
 
         let cancel_locker = locker.clone();
@@ -933,7 +994,6 @@ impl Nox {
             .h(px(38.))
             .px(px(16.))
             .rounded(px(8.))
-            .bg(theme.inverse)
             .on_click(move |_, window, app| {
                 save_locker.update(app, |locker, cx| locker.save_item(window, cx));
             })
@@ -953,9 +1013,21 @@ impl Nox {
                             .text_size(px(12.))
                             .font_weight(FontWeight(600.))
                             .text_color(theme.canvas)
-                            .child("Save note"),
+                            .child(save_label),
                     ),
             );
+        let save = crate::app::animated_auth_button(
+            "save-secure-note",
+            save,
+            self.auth_hovered.get("save-secure-note").copied(),
+            (
+                theme.inverse,
+                theme.inverse_hover,
+                theme.inverse_press,
+                theme.on_inverse,
+            ),
+            cx,
+        );
         let back_locker = locker.clone();
         let back = Button::new("back-to-secure-notes")
             .ghost()
@@ -981,7 +1053,7 @@ impl Nox {
                             .text_size(px(11.))
                             .font_weight(FontWeight(500.))
                             .text_color(theme.text_soft)
-                            .child("Back to secure notes"),
+                            .child(back_label),
                     ),
             );
         let field = |label: &'static str, required: bool, body: AnyElement| {
@@ -1138,8 +1210,8 @@ impl Nox {
             <div id="secure-note-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
                 <div flex items_center justify_between h={px(88.)} px={px(32.)} flex_shrink_0 border_b_1 borderColor={theme.border}>
                     <div flex flex_col gap={px(3.)}>
-                        <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Create secure note"}</div>
-                        <div text_xs textColor={theme.text_muted}>{"Add an encrypted note to your vault"}</div>
+                        <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{workspace_title}</div>
+                        <div text_xs textColor={theme.text_muted}>{workspace_subtitle}</div>
                     </div>
                     <div flex items_center gap={px(10.)}>{cancel}{save}</div>
                 </div>
@@ -1148,7 +1220,7 @@ impl Nox {
                         {back}
                         <div flex items_center gap={px(8.)}>
                             {Icon::empty().path("icons/shield-check.svg").size(px(14.)).text_color(theme.text_subtle)}
-                            <div text_size={px(9.)} textColor={theme.icon_muted}>{"Encrypted locally · not saved yet"}</div>
+                            <div text_size={px(9.)} textColor={theme.icon_muted}>{saved_hint}</div>
                         </div>
                     </div>
                     <div flex flex_1 min_h={px(0.)} gap={px(16.)}>
@@ -1170,7 +1242,7 @@ impl Nox {
                             <div flex items_center h={px(42.)} px={px(11.)} rounded={px(7.)} bg={theme.inset} border_1 borderColor={theme.border}>
                                 {Icon::empty().path("icons/lock-keyhole.svg").size(px(13.)).text_color(theme.success)}
                                 <div ml={px(8.)} text_size={px(9.)} textColor={theme.text_subtle}>{"Encrypted before it leaves this device"}</div>
-                                <div ml_auto text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{"⌘ ↵  Save note"}</div>
+                                <div ml_auto text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{save_hint}</div>
                             </div>
                         </div>
                         <div flex flex_col flex_1 min_w={px(0.)} h_full gap={px(14.)}>
@@ -1224,7 +1296,7 @@ impl Nox {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::current(cx);
-        let Some(editor) = self.item_editor.as_ref() else {
+        let Some(editor) = self.item_editor() else {
             return div().into_any_element();
         };
         let title = editor.title_input.clone();
@@ -1242,11 +1314,29 @@ impl Nox {
         let classes = editor.generator.classes;
         let generator_open = editor.generator.open;
         let save_error = editor.save_error.clone();
+        let edit_item_id = match editor.mode {
+            EditorMode::Edit(item_id) => Some(item_id),
+            EditorMode::Create | EditorMode::Restore(_) => None,
+        };
+        let workspace_title = if edit_item_id.is_some() {
+            "Edit login"
+        } else {
+            "Create login"
+        };
+        let workspace_subtitle = if edit_item_id.is_some() {
+            "Update this secure account in your vault"
+        } else {
+            "Add a secure account to your vault"
+        };
+        let save_label = if edit_item_id.is_some() {
+            "Save changes"
+        } else {
+            "Save login"
+        };
 
         let items = self
-            .vault_list
-            .as_ref()
-            .map_or(Vec::new(), |list| list.items.clone());
+            .session()
+            .map_or(Vec::new(), |session| session.list.items.clone());
         let strength = password_strength_score(&password_value);
         let has_min_length = password_value.chars().count() >= 14;
         let is_reused = password_is_reused(&password_value, &items);
@@ -1254,6 +1344,12 @@ impl Nox {
 
         let locker = cx.entity();
 
+        let back_label =
+            if self.session().map(|session| session.active_view) == Some(ActiveView::AllItems) {
+                "Back to all items"
+            } else {
+                "Back to logins"
+            };
         let back_locker = locker.clone();
         let back_link = Button::new("back-to-logins")
             .ghost()
@@ -1270,7 +1366,7 @@ impl Nox {
                     .text_size(px(13.))
                     .text_color(theme.text_soft)
                     .child("‹")
-                    .child("Back to logins"),
+                    .child(back_label),
             );
 
         let cancel_locker = locker.clone();
@@ -1314,7 +1410,7 @@ impl Nox {
                             .text_size(px(14.))
                             .font_weight(FontWeight(500.))
                             .text_color(theme.canvas)
-                            .child("Save login"),
+                            .child(save_label),
                     ),
             );
         let save_button = crate::app::animated_auth_button(
@@ -1323,12 +1419,29 @@ impl Nox {
             self.auth_hovered.get("save-create-login").copied(),
             (
                 theme.inverse,
-                theme.inverse_bright,
+                theme.inverse_hover,
                 theme.inverse_press,
-                theme.canvas,
+                theme.on_inverse,
             ),
             cx,
         );
+
+        let delete_button = if let Some(item_id) = edit_item_id {
+            let delete_locker = locker.clone();
+            Button::new("delete-login")
+                .danger()
+                .outline()
+                .small()
+                .label("Delete")
+                .on_click(move |_, window, app| {
+                    delete_locker.update(app, |locker, cx| {
+                        locker.open_delete_confirmation(item_id, window, cx);
+                    });
+                })
+                .into_any_element()
+        } else {
+            div().into_any_element()
+        };
 
         let field = |label: &'static str,
                      required: bool,
@@ -1919,13 +2032,13 @@ impl Nox {
                                     .text_xl()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text)
-                                    .child("Create login"),
+                                    .child(workspace_title),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.text_muted)
-                                    .child("Add a secure account to your vault"),
+                                    .child(workspace_subtitle),
                             ),
                     )
                     .child(
@@ -1934,6 +2047,7 @@ impl Nox {
                             .items_center()
                             .gap(px(10.))
                             .child(cancel_button)
+                            .child(delete_button)
                             .child(save_button),
                     ),
             )

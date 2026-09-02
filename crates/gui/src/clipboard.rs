@@ -54,9 +54,8 @@ impl Nox {
             return;
         }
         let Some(value) = self
-            .vault_list
-            .as_ref()
-            .and_then(|list| list.items.iter().find(|(id, _)| *id == item_id))
+            .session()
+            .and_then(|session| session.list.items.iter().find(|(id, _)| *id == item_id))
             .map(|(_, payload)| payload.username.clone())
             .filter(|value| !value.is_empty())
         else {
@@ -76,9 +75,8 @@ impl Nox {
             return;
         }
         let Some(value) = self
-            .vault_list
-            .as_ref()
-            .and_then(|list| list.items.iter().find(|(id, _)| *id == item_id))
+            .session()
+            .and_then(|session| session.list.items.iter().find(|(id, _)| *id == item_id))
             .map(|(_, payload)| payload.password.clone())
             .filter(|value| !value.is_empty())
         else {
@@ -98,9 +96,8 @@ impl Nox {
             return;
         }
         let Some(value) = self
-            .vault_list
-            .as_ref()
-            .and_then(|list| list.items.iter().find(|(id, _)| *id == item_id))
+            .session()
+            .and_then(|session| session.list.items.iter().find(|(id, _)| *id == item_id))
             .filter(|(_, payload)| payload.item_type == nox_core::ItemType::SecureNote)
             .map(|(_, payload)| payload.notes.clone())
             .filter(|value| !value.is_empty())

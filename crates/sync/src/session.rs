@@ -514,6 +514,7 @@ struct PeerSession {
 enum TaskCompletion {
     ConnectionClosed {
         peer_addr: SocketAddr,
+        received_changes: bool,
     },
     DiscoveryEnded,
     PairingFinished,
@@ -814,8 +815,14 @@ async fn run_actor(
             result = state.tasks.join_next(), if !state.tasks.is_empty() => {
                 match result {
                     Some(Ok(completion)) => match completion {
-                        TaskCompletion::ConnectionClosed { peer_addr } => {
+                        TaskCompletion::ConnectionClosed {
+                            peer_addr,
+                            received_changes,
+                        } => {
                             state.active_cancels.remove(&peer_addr);
+                            if received_changes {
+                                refresh_peer_keys(&mut state).await;
+                            }
                         }
                         TaskCompletion::DiscoveryEnded | TaskCompletion::PairingFinished => {}
                         TaskCompletion::PairingDone { epoch, success } => {
@@ -840,6 +847,9 @@ async fn run_actor(
                         } => {
                             state.sync_active = false;
                             state.sync_cancel.take();
+                            if summary.received_changes > 0 {
+                                refresh_peer_keys(&mut state).await;
+                            }
                             if epoch == state.epoch && !state.stopping {
                                 let _ = sender.try_send(Ok(summary));
                             } else {
@@ -1007,8 +1017,11 @@ async fn accept_connection(
                         .map_err(|_| ())
                 } => result,
             };
-            let _ = result;
-            TaskCompletion::ConnectionClosed { peer_addr }
+            let received_changes = result.is_ok_and(|report| report.received_changes > 0);
+            TaskCompletion::ConnectionClosed {
+                peer_addr,
+                received_changes,
+            }
         });
         return;
     }
@@ -1024,7 +1037,10 @@ fn spawn_close(
     state.tasks.spawn(async move {
         let _permit = permit;
         let _ = io.shutdown().await;
-        TaskCompletion::ConnectionClosed { peer_addr }
+        TaskCompletion::ConnectionClosed {
+            peer_addr,
+            received_changes: false,
+        }
     });
 }
 
@@ -1405,6 +1421,29 @@ async fn block_device(state: &mut ServiceState, device_id: DeviceId) -> Result<(
         blocked: true,
     });
     Ok(())
+}
+
+/// Reload the authorized peer keys the service matches inbound handshakes and
+/// outbound dials against.
+///
+/// `peer_keys` is snapshotted once at startup, but membership itself arrives
+/// over replication: a device admitted after this one joined lands in the vault
+/// only when a batch carrying that membership commits. Without this reload the
+/// running service keeps the stale snapshot, so it answers the new peer's
+/// handshake with the wrong static key (`RemoteStaticMismatch`) and drops its
+/// discovery events, and the pair stays unreachable until a restart.
+///
+/// `authorized_peer_keys` reads the committed authorization snapshot, which
+/// already excludes locally blocked devices and inactive members, so a reload
+/// cannot resurrect a device that `block_device` removed.
+async fn refresh_peer_keys(state: &mut ServiceState) {
+    let Some(access) = state.access.as_ref() else {
+        return;
+    };
+    let job = access.clone_for_blocking_job();
+    if let Ok(Ok(peers)) = crate::spawn_core_blocking(move || job.authorized_peer_keys()).await {
+        state.peer_keys = peers;
+    }
 }
 
 async fn unblock_device(state: &mut ServiceState, device_id: DeviceId) -> Result<(), SyncError> {

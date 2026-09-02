@@ -78,11 +78,12 @@ pub(crate) struct Theme {
     pub(crate) inverse: Hsla,
     pub(crate) inverse_hover: Hsla,
     pub(crate) inverse_active: Hsla,
-    /// A lighter inverse: the resting fill of the toolbar's Add item button,
-    /// which darkens toward [`Self::inverse`] on hover rather than lightening.
+    /// A lighter inverse: the hover fill of the backup restore submit button.
     pub(crate) inverse_bright: Hsla,
     /// Pressed state for that same button.
     pub(crate) inverse_press: Hsla,
+    /// Disabled fill of a primary button.
+    pub(crate) inverse_disabled: Hsla,
     pub(crate) on_inverse: Hsla,
 
     /// Reserved for meaning; the chrome itself is neutral.
@@ -137,10 +138,11 @@ impl Theme {
             column_header: rgb(0x6F7886).into(),
 
             inverse: rgb(0xE3E6ED).into(),
-            inverse_hover: rgb(0xF5F6F8).into(),
+            inverse_hover: rgb(0xBDBDBD).into(),
             inverse_active: rgb(0xE3E6ED).into(),
             inverse_bright: rgb(0xF0F2F6).into(),
             inverse_press: rgb(0xCDD2DC).into(),
+            inverse_disabled: rgb(0x787878).into(),
             on_inverse: rgb(0x1A1D22).into(),
 
             accent: rgb(0x2D87B9).into(),

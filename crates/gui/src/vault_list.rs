@@ -612,9 +612,10 @@ fn list_header_row(
 
 impl Nox {
     pub(crate) fn recompute_vault_list_filter(&mut self, cx: &mut Context<Self>) {
-        let Some(list) = self.vault_list.as_mut() else {
+        let Some(session) = self.session_mut() else {
             return;
         };
+        let list = &mut session.list;
         let query = list.search_input.read(cx).value().to_lowercase();
         if list.search_query_lower == query {
             return;
@@ -625,8 +626,13 @@ impl Nox {
 
     pub(crate) fn open_create_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut editor = crate::item_editor::ItemEditorState::for_create(window, cx);
-        editor.item_type = self.active_view.item_type().unwrap_or(ItemType::Login);
-        self.item_editor = Some(editor);
+        let active_view = self
+            .session()
+            .map_or(ActiveView::AllItems, |session| session.active_view);
+        editor.item_type = active_view.item_type().unwrap_or(ItemType::Login);
+        if let Some(session) = self.session_mut() {
+            session.item_editor = Some(editor);
+        }
         if self.uses_secure_note_workspace() || self.uses_login_workspace() {
             cx.notify();
         } else {
@@ -641,9 +647,10 @@ impl Nox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let AppState::Unlocked(vault) = &self.state else {
+        let AppState::Unlocked(session) = &self.state else {
             return;
         };
+        let vault = &session.vault;
         let result = if restore {
             crate::item_editor::ItemEditorState::for_restore(item_id, vault, window, cx)
         } else {
@@ -651,15 +658,19 @@ impl Nox {
         };
         match result {
             Ok(editor) => {
-                if let Some(list) = self.vault_list.as_mut() {
-                    list.selected = Some(item_id);
+                if let Some(session) = self.session_mut() {
+                    session.list.selected = Some(item_id);
+                    session.item_editor = Some(editor);
                 }
-                self.item_editor = Some(editor);
-                self.open_item_editor_sheet(window, cx);
+                if self.uses_login_workspace() || self.uses_secure_note_workspace() {
+                    cx.notify();
+                } else {
+                    self.open_item_editor_sheet(window, cx);
+                }
             }
             Err(error) => {
-                if let Some(list) = self.vault_list.as_mut() {
-                    list.load =
+                if let Some(session) = self.session_mut() {
+                    session.list.load =
                         ListLoadState::Failed(format!("Could not open item: {error}").into());
                 }
             }
@@ -668,9 +679,10 @@ impl Nox {
     }
 
     fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(list) = self.vault_list.as_mut() else {
+        let Some(session) = self.session_mut() else {
             return;
         };
+        let list = &mut session.list;
         if list.filtered.is_empty() {
             return;
         }
@@ -686,10 +698,10 @@ impl Nox {
     /// Select an item to show its read-only detail panel, resetting any
     /// transient per-item UI state (password reveal, copy feedback).
     pub(crate) fn select_item(&mut self, item_id: ItemId, cx: &mut Context<Self>) {
-        if let Some(list) = self.vault_list.as_mut() {
-            list.selected = Some(item_id);
+        if let Some(session) = self.session_mut() {
+            session.list.selected = Some(item_id);
+            session.reveal_password = false;
         }
-        self.reveal_password = false;
         cx.notify();
     }
 
@@ -697,7 +709,7 @@ impl Nox {
     /// above both the list and detail panes (Pencil "All Items Split Toolbar").
     pub(crate) fn render_vault_list_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
-        let Some(list) = self.vault_list.as_ref() else {
+        let Some(list) = self.session().map(|session| &session.list) else {
             return div().into_any_element();
         };
         let search_input = list.search_input.clone();
@@ -758,8 +770,8 @@ impl Nox {
             .border_color(theme.field_border)
             .on_click(move |_, _window, app| {
                 locker.update(app, |locker, cx| {
-                    if let Some(list) = locker.vault_list.as_mut() {
-                        list.toggle_sort_mode();
+                    if let Some(session) = locker.session_mut() {
+                        session.list.toggle_sort_mode();
                     }
                     cx.notify();
                 });
@@ -812,7 +824,7 @@ impl Nox {
                 .child(content)
         };
 
-        let Some(list) = self.vault_list.as_ref() else {
+        let Some(session) = self.session() else {
             return card(
                 div()
                     .p(px(16.))
@@ -823,6 +835,7 @@ impl Nox {
             )
             .into_any_element();
         };
+        let list = &session.list;
 
         let load = list.load.clone();
         let item_count = list.filtered.len();
@@ -838,8 +851,8 @@ impl Nox {
         let weak_count = list.weak_login_count();
         let reused_count = list.reused_login_count();
         let dupes_for_rows = duplicate_passwords(&list.items);
-        let is_logins_view = self.active_view == ActiveView::Logins;
-        let is_secure_notes_view = self.active_view == ActiveView::SecureNotes;
+        let is_logins_view = session.active_view == ActiveView::Logins;
+        let is_secure_notes_view = session.active_view == ActiveView::SecureNotes;
         let (scope_total, scope_noun) = match active_type {
             None => (all_count, "items"),
             Some(ItemType::Login) => (logins_count, "logins"),
@@ -867,8 +880,8 @@ impl Nox {
                             let locker = locker.clone();
                             move |_, _window, app| {
                                 locker.update(app, |locker, cx| {
-                                    if let Some(list) = locker.vault_list.as_mut() {
-                                        list.set_login_health_filter(None);
+                                    if let Some(session) = locker.session_mut() {
+                                        session.list.set_login_health_filter(None);
                                     }
                                     cx.notify();
                                 });
@@ -884,8 +897,10 @@ impl Nox {
                             let locker = locker.clone();
                             move |_, _window, app| {
                                 locker.update(app, |locker, cx| {
-                                    if let Some(list) = locker.vault_list.as_mut() {
-                                        list.set_login_health_filter(Some(LoginHealth::Weak));
+                                    if let Some(session) = locker.session_mut() {
+                                        session
+                                            .list
+                                            .set_login_health_filter(Some(LoginHealth::Weak));
                                     }
                                     cx.notify();
                                 });
@@ -901,8 +916,10 @@ impl Nox {
                             let locker = locker.clone();
                             move |_, _window, app| {
                                 locker.update(app, |locker, cx| {
-                                    if let Some(list) = locker.vault_list.as_mut() {
-                                        list.set_login_health_filter(Some(LoginHealth::Reused));
+                                    if let Some(session) = locker.session_mut() {
+                                        session
+                                            .list
+                                            .set_login_health_filter(Some(LoginHealth::Reused));
                                     }
                                     cx.notify();
                                 });
@@ -943,8 +960,8 @@ impl Nox {
                             let locker = locker.clone();
                             move |_, _window, app| {
                                 locker.update(app, |locker, cx| {
-                                    if let Some(list) = locker.vault_list.as_mut() {
-                                        list.set_type_filter(None);
+                                    if let Some(session) = locker.session_mut() {
+                                        session.list.set_type_filter(None);
                                     }
                                     cx.notify();
                                 });
@@ -959,8 +976,8 @@ impl Nox {
                             let locker = locker.clone();
                             move |_, _window, app| {
                                 locker.update(app, |locker, cx| {
-                                    if let Some(list) = locker.vault_list.as_mut() {
-                                        list.set_type_filter(Some(ItemType::Login));
+                                    if let Some(session) = locker.session_mut() {
+                                        session.list.set_type_filter(Some(ItemType::Login));
                                     }
                                     cx.notify();
                                 });
@@ -978,8 +995,8 @@ impl Nox {
                             let locker = locker.clone();
                             move |_, _window, app| {
                                 locker.update(app, |locker, cx| {
-                                    if let Some(list) = locker.vault_list.as_mut() {
-                                        list.set_type_filter(Some(ItemType::SecureNote));
+                                    if let Some(session) = locker.session_mut() {
+                                        session.list.set_type_filter(Some(ItemType::SecureNote));
                                     }
                                     cx.notify();
                                 });
@@ -995,7 +1012,7 @@ impl Nox {
         let rows = uniform_list("vault-list-rows", item_count, move |range, _window, app| {
             let data = range
                 .filter_map(|index| {
-                    let list = row_locker.read(app).vault_list.as_ref()?;
+                    let list = &row_locker.read(app).session()?.list;
                     let item_index = *list.filtered.get(index)?;
                     let (item_id, payload) = list.items.get(item_index)?;
                     Some((*item_id, payload.clone(), list.selected == Some(*item_id)))
@@ -1181,8 +1198,8 @@ impl Nox {
                             .text_color(theme.text_muted)
                             .label(format!("Deleted ({deleted_count})"))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(list) = this.vault_list.as_mut() {
-                                    list.toggle_deleted();
+                                if let Some(session) = this.session_mut() {
+                                    session.list.toggle_deleted();
                                     cx.notify();
                                 }
                             })),
