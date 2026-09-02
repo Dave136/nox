@@ -1,8 +1,33 @@
-# Nox
+<p align="center" style="background-color: #15181e; padding: 16px; width: 42px; border-radius: 12px; border: 1px solid #36393f; padding-bottom: 10px; margin-left: auto; margin-right: auto">
+  <img src="crates/gui/src/assets/icons/nox-logo.svg" alt="Nox logo" width="96" style="filter: invert(1);" />
+</p>
 
-Nox is a native desktop password manager for a **single-device** release.
-It supports multiple local encrypted vaults per installation. Synchronization
-remains unshipped.
+
+<h1 align="center">Nox</h1>
+
+<p align="center">
+  <img alt="Status" src="https://img.shields.io/badge/status-work--in--progress-orange">
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-blue">
+</p>
+
+<p align="center">
+  <a href="#what-works-now">What works</a> ·
+  <a href="#platform-support">Platforms</a> ·
+  <a href="#data-and-security-model">Security model</a> ·
+  <a href="#passwords-backups-and-recovery">Backups</a> ·
+  <a href="#security-limitations">Limitations</a> ·
+  <a href="#not-yet-available">Roadmap</a> ·
+  <a href="ARCHITECTURE.md">Architecture</a>
+</p>
+
+---
+
+**🚧 Work in progress.** Nox is a local-first, multi-vault credential manager
+for macOS and Linux. It stores Login and Secure Note items in encrypted local
+vaults with journal-based revisions and local conflict resolution already
+built in. **Version 1 targets a single device only** — a peer-to-peer sync
+layer (Noise-protocol pairing and replication, see `crates/sync`) exists in
+the codebase but is not yet wired into the app.
 
 ## What works now
 
@@ -124,18 +149,17 @@ clipboard still contains text Nox copied. It does not disable operating
 system or third-party clipboard history and cannot erase copies already read
 elsewhere.
 
-## Current scope / not yet available
+## Not yet available
 
-- No device pairing or LAN synchronization.
-- No cloud account, hosted service, WAN relay, or telemetry.
-- No browser extension, autofill, or mobile client.
-- Multiple local vaults per installation.
-- No multi-user sharing or roles.
-- No Windows support.
-- Only Login and Secure Note items; card, identity, and custom fields are
-  deferred.
+- Device pairing and LAN synchronization.
+- WAN relay.
+- Browser extension and autofill.
+- Mobile client.
+- Multi-user sharing or roles.
+- Windows support.
+- Card, identity, and custom item fields beyond Login and Secure Note.
 
-## Design details
+## Architecture
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the design, security model,
 verification requirements, and future protocol boundaries.
