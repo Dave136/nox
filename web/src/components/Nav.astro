@@ -1,0 +1,43 @@
+---
+const links = ["Features", "Security", "Local-first", "Download"];
+---
+
+<header
+  class="flex h-[76px] items-center justify-between border-b border-border px-6 sm:px-12"
+>
+  <div class="flex items-center gap-2">
+    <img src="/wordmark.png" alt="Nox" class="h-10 w-auto" />
+    <span class="font-mono text-[9px] font-bold tracking-[0.8px] text-ink-mute">
+      VAULT
+    </span>
+  </div>
+
+  <nav class="hidden items-center gap-8 md:flex">
+    {
+      links.map((label) => (
+        <a
+          href={`#${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}
+          class="group relative text-xs font-medium text-ink-soft transition-colors hover:text-ink"
+        >
+          {label}
+          <span class="absolute -bottom-1 left-0 h-px w-0 bg-ink transition-all duration-300 group-hover:w-full" />
+        </a>
+      ))
+    }
+  </nav>
+
+  <div class="flex items-center gap-3.5">
+    <a
+      href="https://github.com"
+      class="hidden text-xs font-medium text-ink-soft transition-colors hover:text-ink sm:inline"
+    >
+      GitHub
+    </a>
+    <a
+      href="#download"
+      class="flex h-[34px] items-center rounded-lg bg-accent px-4 text-[11px] font-bold text-bg transition-transform duration-200 hover:scale-105"
+    >
+      Download
+    </a>
+  </div>
+</header>

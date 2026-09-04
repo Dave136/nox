@@ -1,0 +1,27 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Nav from "../components/Nav.astro";
+import Hero from "../components/Hero.astro";
+import StatStrip from "../components/StatStrip.astro";
+import ProductShot from "../components/ProductShot.astro";
+import Features from "../components/Features.astro";
+import Security from "../components/Security.astro";
+import FinalCta from "../components/FinalCta.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<Layout
+  title="Nox — Your passwords never leave."
+  description="Nox is a local-first password vault. Encrypted on your machine, no cloud account, no telemetry, no sync you didn't ask for."
+>
+  <Nav />
+  <main>
+    <Hero />
+    <StatStrip />
+    <ProductShot />
+    <Features />
+    <Security />
+    <FinalCta />
+  </main>
+  <Footer />
+</Layout>

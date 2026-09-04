@@ -1,0 +1,52 @@
+---
+const spec = [
+  { key: "ENCRYPTION", value: "AES-256-GCM" },
+  { key: "KEY DERIVATION", value: "Argon2id" },
+  { key: "VAULT FORMAT", value: "Encrypted SQLite" },
+  { key: "SYNC", value: "None. Ever." },
+  { key: "TELEMETRY", value: "None" },
+  { key: "SOURCE", value: "Open, auditable" },
+];
+---
+
+<section
+  id="security"
+  class="flex flex-col gap-16 border-t border-border px-6 py-24 sm:flex-row sm:px-12"
+>
+  <div class="flex flex-1 flex-col gap-5" data-reveal>
+    <div class="flex items-center gap-3">
+      <span class="h-px w-8 bg-border-strong"></span>
+      <span class="font-mono text-[11px] text-ink-faint">
+        Local-first, not cloud-optional
+      </span>
+    </div>
+    <h2 class="text-[44px] leading-[1.1] font-semibold tracking-[-1.4px]">
+      There is no server<br />to breach.
+    </h2>
+    <p class="max-w-[520px] text-[14.5px] leading-[1.65] text-ink-soft">
+      Nox has no account to create and no vault to upload. Your master
+      password never leaves your machine, and neither does anything it
+      unlocks. Encryption happens before a single byte reaches disk — so a
+      stolen laptop, a stolen backup, or a stolen drive is still just noise.
+    </p>
+  </div>
+
+  <div
+    class="w-full max-w-[480px] rounded-[10px] border border-border bg-surface px-5"
+    data-reveal
+  >
+    {
+      spec.map(({ key, value }, i) => (
+        <div
+          class:list={[
+            "flex h-[52px] items-center justify-between",
+            i > 0 && "border-t border-border-subtle",
+          ]}
+        >
+          <span class="font-mono text-[9.5px] tracking-[0.8px] text-ink-mute">{key}</span>
+          <span class="text-[13px] font-semibold text-ink-value">{value}</span>
+        </div>
+      ))
+    }
+  </div>
+</section>
