@@ -66,10 +66,19 @@ impl Nox {
         } else {
             payload.title.clone()
         };
-        let icon_path = match payload.item_type {
-            ItemType::Login => "icons/key-square.svg",
-            ItemType::SecureNote => "icons/file-lock.svg",
-        };
+        let local_selection = self
+            .local_icon_selections
+            .get(&crate::icons::item_key(item_id));
+        let icon = crate::icons::render_resolved_icon(
+            crate::icons::resolved_item_icon(
+                &self.data_dir,
+                &crate::icons::item_key(item_id),
+                &payload,
+                local_selection,
+            ),
+            18.,
+            accent,
+        );
 
         let mut body = div()
             .id("item-detail")
@@ -98,12 +107,7 @@ impl Nox {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(
-                                gpui_component::Icon::empty()
-                                    .path(icon_path)
-                                    .size(px(18.))
-                                    .text_color(accent),
-                            ),
+                            .child(icon),
                     )
                     .child(
                         div()

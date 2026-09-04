@@ -1,7 +1,10 @@
 use crate::app::{AppState, Nox};
 use crate::nav::ActiveView;
 use crate::theme::Theme;
-use gpui::{AnyElement, Context, Entity, FontWeight, SharedString, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, App, Context, Entity, FontWeight, PathPromptOptions, SharedString, Window, div,
+    prelude::*, px,
+};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -15,7 +18,22 @@ use nox_core::{
     CharClasses, ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType, MAX_LENGTH,
     Password, Vault, VaultError, generate_password,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Identifies one *opening* of the editor, which `EditorMode` cannot: two
+/// successive `Create` editors are equal as modes but are different editors,
+/// and a favicon fetch started in the first must not land in the second.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EditorId(u64);
+
+static NEXT_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
+
+impl EditorId {
+    fn next() -> Self {
+        Self(NEXT_EDITOR_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EditorMode {
@@ -34,6 +52,37 @@ fn sheet_title(mode: EditorMode, item_type: ItemType) -> &'static str {
     }
 }
 
+/// What the picker's "Favicon del sitio" row is doing right now. Only an
+/// explicit click moves it out of `Idle` — nothing here ever starts on its own.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum FaviconFetchStatus {
+    #[default]
+    Idle,
+    Loading,
+    Failed,
+}
+
+/// Shown inline in the popover when a fetch comes back empty-handed: the
+/// popover stays open and the item's icon is left exactly as it was.
+pub(crate) const FAVICON_FETCH_ERROR: &str = "Couldn't fetch a favicon for that address.";
+
+/// Shown under the picker's inline URL field. That URL is fetch input only: it
+/// is deliberately never appended to `item.uris` (the user owns that list
+/// through the URI field itself), so an item that should keep resolving this
+/// favicon after a cache clear or a sync to another device needs the address
+/// saved as a URI as well. Saying so beats letting the field imply it saved.
+pub(crate) const FAVICON_TYPED_URL_NOTE: &str =
+    "Used to find the icon only — save it as a URI to keep it.";
+
+pub(crate) struct FaviconPickerState {
+    /// The URL typed into the row's inline field when the item has no saved
+    /// URI. It feeds the fetch only — it is never added to `item.uris`.
+    pub(crate) url_input: Entity<InputState>,
+    pub(crate) url_expanded: bool,
+    pub(crate) status: FaviconFetchStatus,
+    pub(crate) last_auto_fetch_uri: Option<String>,
+}
+
 pub(crate) struct GeneratorPopoverState {
     pub(crate) open: bool,
     pub(crate) length: usize,
@@ -43,9 +92,13 @@ pub(crate) struct GeneratorPopoverState {
 }
 
 pub(crate) struct ItemEditorState {
+    /// Stamped once per opening and never reused, so an async reply can prove
+    /// it is still talking to the editor that sent it.
+    pub(crate) id: EditorId,
     pub(crate) mode: EditorMode,
     pub(crate) item_type: ItemType,
     pub(crate) icon: IconChoice,
+    pub(crate) local_icon: Option<crate::icons::LocalIconRef>,
     pub(crate) title_input: Entity<InputState>,
     pub(crate) username_input: Entity<InputState>,
     pub(crate) password_input: Entity<InputState>,
@@ -54,6 +107,7 @@ pub(crate) struct ItemEditorState {
     pub(crate) created_at: u64,
     pub(crate) save_error: Option<SharedString>,
     pub(crate) generator: GeneratorPopoverState,
+    pub(crate) favicon: FaviconPickerState,
 }
 
 pub(crate) fn now_millis() -> u64 {
@@ -110,10 +164,13 @@ impl ItemEditorState {
         let uris_input = textarea("", window, cx, "URIs (one per line)");
         let notes_input = textarea("", window, cx, "Notes");
         let length_input = input("20", window, cx, "Length", false);
+        let favicon_url_input = input("", window, cx, "https://example.com", false);
         Self {
+            id: EditorId::next(),
             mode: EditorMode::Create,
             item_type: ItemType::Login,
             icon: IconChoice::Default,
+            local_icon: None,
             title_input,
             username_input,
             password_input,
@@ -128,6 +185,66 @@ impl ItemEditorState {
                 generated: None,
                 length_input,
             },
+            favicon: FaviconPickerState {
+                url_input: favicon_url_input,
+                url_expanded: false,
+                status: FaviconFetchStatus::Idle,
+                last_auto_fetch_uri: None,
+            },
+        }
+    }
+
+    /// The item's URI lines as the editor currently holds them — the same list
+    /// `payload` saves, and the candidates an explicit favicon fetch walks.
+    pub(crate) fn uris(&self, cx: &App) -> Vec<String> {
+        self.uris_input
+            .read(cx)
+            .value()
+            .lines()
+            .map(str::trim)
+            .filter(|uri| !uri.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
+    pub(crate) fn local_icon_key(&self) -> String {
+        match self.mode {
+            EditorMode::Create => crate::icons::editor_key(self.id.0),
+            EditorMode::Edit(item_id) | EditorMode::Restore(item_id) => {
+                crate::icons::item_key(item_id)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn payload_for_test(&self, cx: &App) -> ItemPayload {
+        let item_type = self.item_type;
+        let username = if item_type == ItemType::Login {
+            self.username_input.read(cx).value().to_string()
+        } else {
+            String::new()
+        };
+        let password = if item_type == ItemType::Login {
+            self.password_input.read(cx).value().to_string()
+        } else {
+            String::new()
+        };
+        let uris = if item_type == ItemType::Login {
+            self.uris(cx)
+        } else {
+            Vec::new()
+        };
+        ItemPayload {
+            schema_version: ITEM_SCHEMA_VERSION,
+            item_type,
+            title: self.title_input.read(cx).value().to_string(),
+            username,
+            password,
+            uris,
+            notes: self.notes_input.read(cx).value().to_string(),
+            created_at: self.created_at,
+            updated_at: now_millis(),
+            icon: self.icon,
         }
     }
 
@@ -206,14 +323,7 @@ impl ItemEditorState {
             String::new()
         };
         let uris = if item_type == ItemType::Login {
-            self.uris_input
-                .read(cx)
-                .value()
-                .lines()
-                .map(str::trim)
-                .filter(|uri| !uri.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
+            self.uris(cx)
         } else {
             Vec::new()
         };
@@ -308,96 +418,163 @@ fn icon_picker_row(
         .into_any_element()
 }
 
-/// The favicon row: a plain clickable row when the item already has a
-/// saved URI.
-///
-/// ponytail: with no `uris` yet, this shows a static hint instead of the
-/// agreed inline URL-input-plus-fetch — the row is still never *disabled*,
-/// just not actionable until a URL exists on the item some other way. The
-/// full inline field is the upgrade path if that gap is felt in practice.
-fn favicon_picker_row(
+/// Everything the favicon row needs, snapshotted at render time: the popover's
+/// content builder runs inside `Nox`'s own render pass and so cannot read the
+/// entity back out.
+#[derive(Clone)]
+struct FaviconRow {
     theme: Theme,
     locker: Entity<Nox>,
-    data_dir: std::path::PathBuf,
-    uris: Vec<String>,
-) -> AnyElement {
-    if !uris.is_empty() {
-        return Button::new("icon-favicon")
-            .ghost()
-            .w_full()
-            .h(px(32.))
-            .px(px(8.))
-            .on_click(move |_, window, app| {
-                let uris = uris.clone();
-                let data_dir = data_dir.clone();
-                // Same shape as `create_vault`/`unlock_vault` (app.rs) and
-                // every `backup.rs` task: the blocking fetch runs on
-                // `cx.background_executor()`, off GPUI's foreground
-                // executor; `this: WeakEntity<Nox>` is upgraded before
-                // touching state back on the foreground thread.
-                locker.update(app, |_, cx| {
-                    cx.spawn_in(window, async move |this, cx| {
-                        let uris_for_fetch = uris.clone();
-                        let result = cx
-                            .background_executor()
-                            .spawn(async move { crate::favicon::fetch_favicon(&uris_for_fetch) })
-                            .await;
-                        let Ok(bytes) = result else {
-                            return;
-                        };
-                        let Some(host) = uris
-                            .iter()
-                            .find_map(|uri| crate::favicon::extract_host(uri))
-                        else {
-                            return;
-                        };
-                        if crate::favicon::cache_favicon(&data_dir, &host, &bytes).is_err() {
-                            return;
-                        }
-                        if let Some(this) = this.upgrade() {
-                            let _ = cx.update(|window, app| {
-                                this.update(app, |locker, cx| {
-                                    locker.choose_item_icon(IconChoice::Favicon, window, cx);
-                                });
-                            });
-                        }
-                    })
-                    .detach();
-                });
-            })
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(
-                        gpui_component::Icon::empty()
-                            .path("icons/globe.svg")
-                            .size(px(14.))
-                            .text_color(theme.text_secondary),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(theme.text)
-                            .child("Favicon del sitio"),
-                    ),
-            )
-            .into_any_element();
-    }
+    status: FaviconFetchStatus,
+    error: Option<&'static str>,
+    needs_url_input: bool,
+    url_expanded: bool,
+    url_input: Entity<InputState>,
+    /// The "this URL isn't saved" caveat, when the inline field is showing.
+    typed_url_note: Option<&'static str>,
+    offers_refetch: bool,
+}
+
+/// The favicon row: a clickable row that fetches against the item's saved URIs,
+/// or — with no URI saved yet — expands into an inline URL field plus "Buscar"
+/// that fetches against just that typed URL. Never disabled outright, and never
+/// fetching without a click.
+fn favicon_picker_row(row: FaviconRow) -> AnyElement {
+    let FaviconRow {
+        theme,
+        locker,
+        status,
+        error,
+        needs_url_input,
+        url_expanded,
+        url_input,
+        typed_url_note,
+        offers_refetch,
+    } = row;
+    let loading = status == FaviconFetchStatus::Loading;
+    let label = if loading {
+        "Buscando…"
+    } else if offers_refetch {
+        // `IconChoice::Favicon` with no cached bytes (synced from another
+        // device, or a cleared cache) renders the type default until the user
+        // asks for the fetch again — this row is that ask.
+        "Refetch favicon"
+    } else {
+        "Favicon del sitio"
+    };
+    let locker_for_row = locker.clone();
+    let trigger_row = Button::new("icon-favicon")
+        .ghost()
+        .w_full()
+        .h(px(32.))
+        .px(px(8.))
+        .disabled(loading)
+        .on_click(move |_, window, app| {
+            locker_for_row.update(app, |locker, cx| {
+                // With no saved URI there is nothing to fetch against yet, so
+                // the row opens its inline field instead of failing a fetch.
+                if locker.icon_picker_needs_url_input(cx) {
+                    locker.expand_favicon_url_input(cx);
+                } else {
+                    locker.fetch_item_favicon(window, cx);
+                }
+            });
+        })
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    gpui_component::Icon::empty()
+                        .path("icons/globe.svg")
+                        .size(px(14.))
+                        .text_color(theme.text_secondary),
+                )
+                .child(div().text_size(px(13.)).text_color(theme.text).child(label)),
+        );
 
     div()
         .w_full()
         .flex()
         .flex_col()
         .gap(px(4.))
-        .p(px(8.))
+        .child(trigger_row)
+        .when(needs_url_input && url_expanded, |this| {
+            this.child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .px(px(8.))
+                    .pb(px(4.))
+                    .child(Input::new(&url_input))
+                    .when_some(typed_url_note, |this, note| {
+                        this.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme.text_subtle)
+                                .child(note),
+                        )
+                    })
+                    .child(
+                        Button::new("icon-favicon-search")
+                            .primary()
+                            .small()
+                            .label(if loading { "Buscando…" } else { "Buscar" })
+                            .disabled(loading)
+                            .on_click(move |_, window, app| {
+                                locker.update(app, |locker, cx| {
+                                    locker.fetch_item_favicon(window, cx);
+                                });
+                            }),
+                    ),
+            )
+        })
+        .when_some(error, |this, message| {
+            this.child(
+                div()
+                    .px(px(8.))
+                    .pb(px(4.))
+                    .text_size(px(11.))
+                    .text_color(theme.danger)
+                    .child(message),
+            )
+        })
+        .into_any_element()
+}
+
+fn upload_icon_picker_row(theme: Theme, locker: Entity<Nox>) -> AnyElement {
+    Button::new("icon-upload")
+        .ghost()
+        .w_full()
+        .h(px(32.))
+        .px(px(8.))
+        .on_click(move |_, window, app| {
+            locker.update(app, |locker, cx| {
+                locker.choose_uploaded_item_icon(window, cx);
+            });
+        })
         .child(
             div()
-                .text_size(px(11.))
-                .text_color(theme.text_subtle)
-                .child("Agregá una URL para poder buscar el favicon"),
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    gpui_component::Icon::empty()
+                        .path("icons/file-sliders.svg")
+                        .size(px(14.))
+                        .text_color(theme.text_secondary),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(theme.text)
+                        .child("Upload from file"),
+                ),
         )
         .into_any_element()
 }
@@ -487,47 +664,343 @@ impl Nox {
             .is_some_and(|editor| editor.item_type == ItemType::Login)
     }
 
+    /// The icon the picker's "Default" row previews: the *item type's* own
+    /// default, so a Secure Note shows `file-lock` and not Login's `key-square`.
+    pub(crate) fn icon_picker_default_icon_path(&self) -> &'static str {
+        crate::icons::default_type_icon(
+            self.item_editor()
+                .map_or(ItemType::Login, |editor| editor.item_type),
+        )
+    }
+
+    /// A Login with no URI of its own still gets a fetch path — through the
+    /// row's inline URL field rather than the item's saved URIs.
+    pub(crate) fn icon_picker_needs_url_input(&self, cx: &App) -> bool {
+        self.icon_picker_offers_favicon()
+            && self
+                .item_editor()
+                .is_some_and(|editor| editor.uris(cx).is_empty())
+    }
+
+    /// The caveat for the inline URL field, offered only while that field is
+    /// the thing on screen — an unprompted note about a field nobody opened is
+    /// just noise.
+    pub(crate) fn favicon_typed_url_note(&self, cx: &App) -> Option<&'static str> {
+        (self.icon_picker_needs_url_input(cx) && self.icon_picker_url_input_expanded())
+            .then_some(FAVICON_TYPED_URL_NOTE)
+    }
+
+    pub(crate) fn icon_picker_url_input_expanded(&self) -> bool {
+        self.item_editor()
+            .is_some_and(|editor| editor.favicon.url_expanded)
+    }
+
+    /// Reveals the inline URL field inside the still-open popover.
+    pub(crate) fn expand_favicon_url_input(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = self.item_editor_mut() {
+            editor.favicon.url_expanded = true;
+            editor.favicon.status = FaviconFetchStatus::Idle;
+        }
+        cx.notify();
+    }
+
+    /// An item already on `IconChoice::Favicon` may be looking at a cache miss
+    /// (synced from another device, or a cleared cache); the picker offers the
+    /// same explicit fetch again rather than refetching on its own.
+    pub(crate) fn icon_picker_offers_refetch(&self) -> bool {
+        self.icon_picker_offers_favicon()
+            && self
+                .item_editor()
+                .is_some_and(|editor| editor.icon == IconChoice::Favicon)
+    }
+
+    pub(crate) fn favicon_fetch_status(&self) -> FaviconFetchStatus {
+        self.item_editor()
+            .map_or(FaviconFetchStatus::Idle, |editor| editor.favicon.status)
+    }
+
+    pub(crate) fn favicon_fetch_error(&self) -> Option<&'static str> {
+        (self.favicon_fetch_status() == FaviconFetchStatus::Failed).then_some(FAVICON_FETCH_ERROR)
+    }
+
+    /// Candidate URIs for one explicit fetch: the item's own URI lines, or —
+    /// when it has none — only the URL typed into the picker's inline field.
+    /// That typed URL is used for the fetch and nothing else; it never joins
+    /// `item.uris`, which the user edits through the URI field itself.
+    fn favicon_fetch_candidates(&self, cx: &App) -> Vec<String> {
+        let Some(editor) = self.item_editor() else {
+            return Vec::new();
+        };
+        let uris = editor.uris(cx);
+        if !uris.is_empty() {
+            return uris;
+        }
+        let typed = editor.favicon.url_input.read(cx).value().trim().to_owned();
+        if typed.is_empty() {
+            Vec::new()
+        } else {
+            vec![typed]
+        }
+    }
+
+    /// Runs the one favicon fetch the user just asked for. Nothing here starts
+    /// without that click — no background scan, no fetch while typing a URL.
+    pub(crate) fn website_field_blurred(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.icon_picker_offers_favicon() {
+            return;
+        }
+        let Some(editor) = self.item_editor() else {
+            return;
+        };
+        let Some(uri) = editor.uris(cx).first().cloned() else {
+            return;
+        };
+        if editor.favicon.last_auto_fetch_uri.as_deref() == Some(uri.as_str()) {
+            return;
+        }
+        if let Some(editor) = self.item_editor_mut() {
+            editor.favicon.last_auto_fetch_uri = Some(uri);
+        }
+        self.fetch_item_favicon(window, cx);
+    }
+
+    pub(crate) fn choose_uploaded_item_icon(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor_id) = self.item_editor().map(|editor| editor.id) else {
+            return;
+        };
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose item icon".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let path = receiver
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+                .and_then(|mut paths| if paths.len() == 1 { paths.pop() } else { None });
+            let Some(path) = path else {
+                return;
+            };
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(_) => return,
+            };
+            let _ = cx.update(|window, app| {
+                if let Some(this) = this.upgrade() {
+                    this.update(app, |locker, cx| {
+                        if locker
+                            .item_editor()
+                            .is_some_and(|editor| editor.id == editor_id)
+                        {
+                            let _ = locker.upload_item_icon_bytes(&bytes, window, cx);
+                        }
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn upload_item_icon_bytes(
+        &mut self,
+        bytes: &[u8],
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), crate::icons::LocalIconError> {
+        let data_dir = self.data_dir.clone();
+        let Some(editor) = self.item_editor_mut() else {
+            return Ok(());
+        };
+        let local_key = editor.local_icon_key();
+        let selection = crate::icons::cache_local_icon(&data_dir, &local_key, bytes)?;
+        editor.local_icon = Some(selection.clone());
+        editor.favicon.status = FaviconFetchStatus::Idle;
+        self.record_local_icon_selection(selection);
+        cx.notify();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn editor_avatar_is_before_name(&self) -> bool {
+        self.item_editor().is_some()
+    }
+
+    pub(crate) fn fetch_item_favicon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.icon_picker_offers_favicon() {
+            return;
+        }
+        // Whose fetch this is. The reply is only allowed to touch this exact
+        // editor, however long it takes to arrive.
+        let Some(editor_id) = self.item_editor().map(|editor| editor.id) else {
+            return;
+        };
+        let candidates = self.favicon_fetch_candidates(cx);
+        if candidates.is_empty() {
+            self.finish_favicon_fetch(editor_id, None, window, cx);
+            return;
+        }
+        let client = cx.http_client();
+        let data_dir = self.data_dir.clone();
+        // Captured now, not re-derived when the reply lands: by then this may
+        // be a different opening entirely, and a still-unsaved Create editor's
+        // key depends on this exact `editor_id`.
+        let local_key = self
+            .item_editor()
+            .map(|editor| editor.local_icon_key())
+            .unwrap_or_else(|| crate::icons::editor_key(0));
+        if let Some(editor) = self.item_editor_mut() {
+            editor.favicon.status = FaviconFetchStatus::Loading;
+        }
+        cx.notify();
+        // Same shape as `create_vault`/`unlock_vault` (app.rs) and every
+        // `backup.rs` task: the network and disk work runs on
+        // `cx.background_executor()`, off GPUI's foreground executor;
+        // `this: WeakEntity<Nox>` is upgraded before touching state back on the
+        // foreground thread.
+        cx.spawn_in(window, async move |this, cx| {
+            let local_icon = cx
+                .background_executor()
+                .spawn(async move {
+                    // One candidate per call: `fetch_favicon` returns bytes but
+                    // not *which* URI produced them, and the cache is keyed by
+                    // host — handing it the whole list would file a later URI's
+                    // icon under the first parseable host, where the resolver
+                    // would never find it.
+                    for uri in candidates {
+                        let Some(host) = crate::favicon::extract_host(&uri) else {
+                            continue;
+                        };
+                        if let Ok(bytes) = crate::favicon::fetch_favicon(
+                            client.as_ref(),
+                            std::slice::from_ref(&uri),
+                        )
+                        .await
+                        {
+                            // Best-effort compatibility cache under the host key;
+                            // what the editor actually renders is the
+                            // content-addressed local selection cached next.
+                            let _ = crate::favicon::cache_favicon(&data_dir, &host, &bytes);
+                            if let Ok(selection) =
+                                crate::favicon::cache_favicon_for_key(&data_dir, &local_key, &bytes)
+                            {
+                                return Some(selection);
+                            }
+                        }
+                    }
+                    None
+                })
+                .await;
+            let _ = cx.update(|window, app| {
+                if let Some(this) = this.upgrade() {
+                    this.update(app, |locker, cx| {
+                        locker.finish_favicon_fetch(editor_id, local_icon, window, cx);
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// On success the item moves to `IconChoice::Favicon`; on failure the icon
+    /// is left exactly as it was and the row reports it inline, so the popover
+    /// stays usable for a retry or another pick.
+    ///
+    /// `editor_id` is the editor that asked. A fetch outlives its editor easily
+    /// — cancelled, saved, or swapped for another item while the request is in
+    /// flight — and the editor sitting there when it answers may well be a
+    /// Secure Note, which has no favicon at all. A reply that no longer matches
+    /// its requester is dropped rather than applied to whoever is open now.
+    fn finish_favicon_fetch(
+        &mut self,
+        editor_id: EditorId,
+        local_icon: Option<crate::icons::LocalIconRef>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let still_the_requester = self
+            .item_editor()
+            .is_some_and(|editor| editor.id == editor_id && editor.item_type == ItemType::Login);
+        if !still_the_requester {
+            return;
+        }
+        let cached = local_icon.is_some();
+        if let Some(selection) = local_icon {
+            // Set before `choose_item_icon` so the picker's trigger and rows
+            // resolve the new bytes on the very same render pass that flips
+            // the choice to `Favicon`, instead of a stale render in between.
+            if let Some(editor) = self.item_editor_mut() {
+                editor.local_icon = Some(selection.clone());
+            }
+            self.record_local_icon_selection(selection);
+            self.choose_item_icon(IconChoice::Favicon, window, cx);
+        }
+        if let Some(editor) = self.item_editor_mut() {
+            editor.favicon.status = if cached {
+                FaviconFetchStatus::Idle
+            } else {
+                FaviconFetchStatus::Failed
+            };
+        }
+        cx.notify();
+    }
+
     /// The item's icon, clickable to open the picker: Default, the 20
     /// presets, and — Login only — "Favicon del sitio". Secure Note gets no
     /// favicon row; it has no site identity to fetch from.
     fn render_icon_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let data_dir = self.data_dir.clone();
-        let (item_type, current_icon, uris) = self
+        let (item_type, current_icon, _uris, favicon_url_input) = self
             .session()
             .and_then(|session| session.item_editor.as_ref())
             .map(|editor| {
                 (
                     editor.item_type,
                     editor.icon,
-                    editor
-                        .uris_input
-                        .read(cx)
-                        .value()
-                        .lines()
-                        .map(str::trim)
-                        .filter(|line| !line.is_empty())
-                        .map(ToOwned::to_owned)
-                        .collect::<Vec<_>>(),
+                    editor.uris(cx),
+                    Some(editor.favicon.url_input.clone()),
                 )
             })
-            .unwrap_or((ItemType::Login, IconChoice::Default, Vec::new()));
+            .unwrap_or((ItemType::Login, IconChoice::Default, Vec::new(), None));
 
         // The trigger is the one spot that actually shows a chosen favicon
         // as an image — it's the direct feedback for "did my pick work?".
-        // List/detail rows (Task 7) stay SVG-only fixed-size glyph wells.
-        let trigger_child: AnyElement =
-            match crate::icons::resolve_item_icon(item_type, current_icon, &data_dir, &uris) {
-                crate::icons::ResolvedIcon::Svg(path) => gpui_component::Icon::empty()
-                    .path(path)
-                    .size(px(14.))
-                    .text_color(theme.text_secondary)
-                    .into_any_element(),
-                crate::icons::ResolvedIcon::Favicon(path) => gpui::img(path)
-                    .size(px(18.))
-                    .rounded(px(4.))
-                    .into_any_element(),
-            };
+        let local_selection = self
+            .item_editor()
+            .and_then(|editor| editor.local_icon.as_ref());
+        let local_key = self
+            .item_editor()
+            .map(|editor| editor.local_icon_key())
+            .unwrap_or_else(|| crate::icons::editor_key(0));
+        let trigger_child: AnyElement = match crate::icons::resolve_item_icon(
+            item_type,
+            current_icon,
+            &data_dir,
+            &local_key,
+            local_selection,
+        ) {
+            crate::icons::ResolvedIcon::Svg(path) => gpui_component::Icon::empty()
+                .path(path)
+                .size(px(14.))
+                .text_color(theme.text_secondary)
+                .into_any_element(),
+            crate::icons::ResolvedIcon::LocalImage(path) => gpui::img(path)
+                .size(px(18.))
+                .rounded(px(4.))
+                .into_any_element(),
+            crate::icons::ResolvedIcon::UnavailableLocalImage => gpui_component::Icon::empty()
+                .path(crate::icons::default_type_icon(item_type))
+                .size(px(14.))
+                .text_color(theme.text_secondary)
+                .into_any_element(),
+        };
         let trigger = Button::new("item-icon-picker-trigger")
             .size(px(28.))
             .rounded(px(8.))
@@ -535,7 +1008,22 @@ impl Nox {
             .child(trigger_child);
 
         let locker = cx.entity();
-        let offers_favicon = self.icon_picker_offers_favicon();
+        let default_icon_path = self.icon_picker_default_icon_path();
+        // The popover's content builder runs inside this same render pass and
+        // cannot read `Nox` back, so the row's whole state is snapshotted here.
+        let favicon_row = favicon_url_input
+            .filter(|_| self.icon_picker_offers_favicon())
+            .map(|url_input| FaviconRow {
+                theme,
+                locker: locker.clone(),
+                status: self.favicon_fetch_status(),
+                error: self.favicon_fetch_error(),
+                needs_url_input: self.icon_picker_needs_url_input(cx),
+                url_expanded: self.icon_picker_url_input_expanded(),
+                url_input,
+                typed_url_note: self.favicon_typed_url_note(cx),
+                offers_refetch: self.icon_picker_offers_refetch(),
+            });
 
         Popover::new("item-icon-picker")
             .appearance(false)
@@ -544,7 +1032,7 @@ impl Nox {
                 let mut rows: Vec<AnyElement> = Vec::new();
                 rows.push(icon_picker_row(
                     "icon-default",
-                    "icons/key-square.svg",
+                    default_icon_path,
                     "Default",
                     theme,
                     locker.clone(),
@@ -560,14 +1048,10 @@ impl Nox {
                         IconChoice::Preset(preset),
                     ));
                 }
-                if offers_favicon {
-                    rows.push(favicon_picker_row(
-                        theme,
-                        locker.clone(),
-                        data_dir.clone(),
-                        uris.clone(),
-                    ));
+                if let Some(favicon_row) = favicon_row.clone() {
+                    rows.push(favicon_picker_row(favicon_row));
                 }
+                rows.push(upload_icon_picker_row(theme, locker.clone()));
                 div()
                     .id("item-icon-picker-menu")
                     .w(px(220.))
@@ -590,6 +1074,7 @@ impl Nox {
         if let Some(session) = self.session_mut() {
             session.item_editor = None;
         }
+        self.editor_blur_subscriptions.clear();
         window.close_sheet(cx);
         cx.notify();
     }
@@ -721,6 +1206,10 @@ impl Nox {
             return;
         }
         let mode = editor.mode;
+        // A Create editor's local selection, if any, is still cached under its
+        // throwaway editor key — captured here so it can be re-keyed to the
+        // item's real key once `create_item` returns one below.
+        let pending_local_icon = editor.local_icon.clone();
         let payload = editor.payload(window, cx);
         let result = match (&mut self.state, mode) {
             (AppState::Unlocked(session), EditorMode::Create) => session
@@ -736,6 +1225,11 @@ impl Nox {
         };
         match result {
             Ok((item_id, was_restore)) => {
+                if mode == EditorMode::Create
+                    && let Some(local_icon) = pending_local_icon
+                {
+                    self.migrate_local_icon_to_item(&local_icon, item_id);
+                }
                 if let Some(session) = self.session_mut() {
                     session.list.upsert(item_id, payload);
                     session.list.selected = Some(item_id);
@@ -744,6 +1238,7 @@ impl Nox {
                     }
                     session.item_editor = None;
                 }
+                self.editor_blur_subscriptions.clear();
                 window.close_sheet(cx);
             }
             Err(_) => {
@@ -753,6 +1248,31 @@ impl Nox {
             }
         }
         cx.notify();
+    }
+
+    /// Re-keys a just-saved Create editor's local image from its throwaway
+    /// editor key to the new item's real key, so the list/detail resolvers
+    /// (keyed by item, not by editor opening) can find it. The bytes are
+    /// content-addressed, so this is a cheap local copy, never a re-fetch or
+    /// re-upload; the stale editor-keyed entry is dropped from the map since
+    /// nothing will ever look it up again.
+    fn migrate_local_icon_to_item(
+        &mut self,
+        local_icon: &crate::icons::LocalIconRef,
+        item_id: ItemId,
+    ) {
+        let new_key = crate::icons::item_key(item_id);
+        if local_icon.item_key == new_key {
+            self.record_local_icon_selection(local_icon.clone());
+            return;
+        }
+        let data_dir = self.data_dir.clone();
+        if let Ok(migrated) =
+            crate::icons::cache_local_icon_from_path(&data_dir, &new_key, &local_icon.cache_path)
+        {
+            self.local_icon_selections.remove(&local_icon.item_key);
+            self.record_local_icon_selection(migrated);
+        }
     }
 
     pub(crate) fn delete_item(
@@ -1063,6 +1583,7 @@ impl Nox {
                 .into_any_element()
         };
 
+        let icon_picker = self.render_icon_picker(cx);
         let mut content = div()
             .id("item-editor")
             .flex()
@@ -1076,6 +1597,19 @@ impl Nox {
                     .justify_between()
                     .child(type_group)
                     .child(delete_button),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(icon_picker)
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(muted_foreground)
+                            .child("Tap to change icon"),
+                    ),
             )
             .child(
                 div()
@@ -2007,35 +2541,37 @@ impl Nox {
                             ),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(icon_picker)
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .h(px(26.))
-                                    .px(px(10.))
-                                    .rounded(px(6.))
-                                    .bg(theme.raised)
-                                    .child(
-                                        gpui_component::Icon::empty()
-                                            .path("icons/key-square.svg")
-                                            .size(px(12.))
-                                            .text_color(theme.text_secondary),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(10.))
-                                            .font_weight(FontWeight(700.))
-                                            .text_color(theme.text_secondary)
-                                            .child("LOGIN"),
-                                    ),
-                            ),
+                        div().flex().items_center().gap(px(8.)).child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .h(px(26.))
+                                .px(px(10.))
+                                .rounded(px(6.))
+                                .bg(theme.raised)
+                                .child(
+                                    gpui_component::Icon::empty()
+                                        .path("icons/key-square.svg")
+                                        .size(px(12.))
+                                        .text_color(theme.text_secondary),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .font_weight(FontWeight(700.))
+                                        .text_color(theme.text_secondary)
+                                        .child("LOGIN"),
+                                ),
+                        ),
                     ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon_picker),
             )
             .child(field(
                 "NAME",

@@ -7,8 +7,8 @@ use crate::app::{AppState, Nox};
 use crate::nav::ActiveView;
 use crate::theme::Theme;
 use gpui::{
-    AnyElement, Context, ElementId, Entity, FontWeight, Hsla, KeyDownEvent, SharedString,
-    Subscription, UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
+    AnyElement, Context, ElementId, Entity, Focusable, FontWeight, Hsla, KeyDownEvent,
+    SharedString, Subscription, UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
     Disableable, Sizable,
@@ -477,7 +477,7 @@ impl TypeFilterPill {
 #[allow(clippy::too_many_arguments)]
 fn item_row_content(
     theme: Theme,
-    icon_path: &'static str,
+    icon: AnyElement,
     title: String,
     subtitle: String,
     third_column: (String, Hsla),
@@ -506,12 +506,7 @@ fn item_row_content(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(
-                    gpui_component::Icon::empty()
-                        .path(icon_path)
-                        .size(px(15.))
-                        .text_color(theme.text_secondary),
-                ),
+                .child(icon),
         )
         .child(
             div()
@@ -624,6 +619,21 @@ impl Nox {
         cx.notify();
     }
 
+    fn register_website_blur_listener(
+        &mut self,
+        uris_focus: gpui::FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let this = cx.entity();
+        let subscription = window.on_focus_out(&uris_focus, cx, move |_event, window, app| {
+            this.update(app, |locker, cx| {
+                locker.website_field_blurred(window, cx);
+            });
+        });
+        self.editor_blur_subscriptions.push(subscription);
+    }
+
     pub(crate) fn open_create_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active_view = self
             .session()
@@ -640,8 +650,11 @@ impl Nox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.editor_blur_subscriptions.clear();
         let mut editor = crate::item_editor::ItemEditorState::for_create(window, cx);
         editor.item_type = item_type;
+        let uris_focus = editor.uris_input.focus_handle(cx);
+        self.register_website_blur_listener(uris_focus, window, cx);
         if let Some(session) = self.session_mut() {
             session.item_editor = Some(editor);
         }
@@ -663,13 +676,24 @@ impl Nox {
             return;
         };
         let vault = &session.vault;
+        self.editor_blur_subscriptions.clear();
         let result = if restore {
             crate::item_editor::ItemEditorState::for_restore(item_id, vault, window, cx)
         } else {
             crate::item_editor::ItemEditorState::for_edit(item_id, vault, window, cx)
         };
         match result {
-            Ok(editor) => {
+            Ok(mut editor) => {
+                // A previously fetched/uploaded image for this item, if any, was
+                // persisted under its item key on save; picking it back up here
+                // is what lets the reopened editor (and its trigger) show it
+                // again instead of falling back to the type default.
+                editor.local_icon = self
+                    .local_icon_selections
+                    .get(&editor.local_icon_key())
+                    .cloned();
+                let uris_focus = editor.uris_input.focus_handle(cx);
+                self.register_website_blur_listener(uris_focus, window, cx);
                 if let Some(session) = self.session_mut() {
                     session.list.selected = Some(item_id);
                     session.item_editor = Some(editor);
@@ -1021,6 +1045,7 @@ impl Nox {
         };
 
         let row_locker = cx.entity();
+        let data_dir = self.data_dir.clone();
         let rows = uniform_list("vault-list-rows", item_count, move |range, _window, app| {
             let data = range
                 .filter_map(|index| {
@@ -1039,10 +1064,20 @@ impl Nox {
                     } else {
                         payload.title.clone()
                     };
-                    let icon_path = match payload.item_type {
-                        ItemType::Login => "icons/key-square.svg",
-                        ItemType::SecureNote => "icons/file-lock.svg",
-                    };
+                    let local_selection = row_locker
+                        .read(app)
+                        .local_icon_selections
+                        .get(&crate::icons::item_key(item_id));
+                    let icon = crate::icons::render_resolved_icon(
+                        crate::icons::resolved_item_icon(
+                            &data_dir,
+                            &crate::icons::item_key(item_id),
+                            &payload,
+                            local_selection,
+                        ),
+                        15.,
+                        theme.text_secondary,
+                    );
                     let updated = crate::app::relative_time(payload.updated_at);
                     let (subtitle, third_column) = if is_logins_view {
                         let (label, color) = login_health(theme, &payload, &dupes_for_rows);
@@ -1059,7 +1094,7 @@ impl Nox {
                     };
                     let content = item_row_content(
                         theme,
-                        icon_path,
+                        icon,
                         title,
                         subtitle,
                         third_column,

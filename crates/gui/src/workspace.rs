@@ -391,12 +391,14 @@ impl Nox {
         let recent_rows: Vec<AnyElement> = recent
             .into_iter()
             .map(|(item_id, item)| {
-                let is_login = item.item_type == nox_core::ItemType::Login;
-                let icon_path = if is_login {
-                    "icons/key-square.svg"
-                } else {
-                    "icons/file-lock.svg"
-                };
+                let item_key = crate::icons::item_key(item_id);
+                let local_selection = self.local_icon_selections.get(&item_key);
+                let resolved_icon = crate::icons::resolved_item_icon(
+                    &self.data_dir,
+                    &item_key,
+                    &item,
+                    local_selection,
+                );
                 let title = if item.title.is_empty() {
                     "Untitled".to_owned()
                 } else {
@@ -437,12 +439,11 @@ impl Nox {
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .child(
-                                                gpui_component::Icon::empty()
-                                                    .path(icon_path)
-                                                    .size(px(15.))
-                                                    .text_color(theme.text_secondary),
-                                            ),
+                                            .child(crate::icons::render_resolved_icon(
+                                                resolved_icon,
+                                                15.,
+                                                theme.text_secondary,
+                                            )),
                                     )
                                     .child(
                                         div()

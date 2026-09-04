@@ -10,25 +10,22 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+futures = "0.3"
 gpui.workspace = true
 gpui-platform.workspace = true
 gpui-component.workspace = true
 gpui-component-assets.workspace = true
 gpui-rsx.workspace = true
 nox-core = { path = "../nox-core" }
+reqwest_client = { git = "https://github.com/zed-industries/zed", package = "reqwest_client" }
 rust-embed = "8.12.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-# Deliberately NOT a zed-industries/zed crate (unlike gpui/gpui-component):
-# that monorepo's git deps must all resolve to one exact commit across every
-# consumer, including gpui-component's own internal (unpinned) reference —
-# adding a new package from that source broke it (see git history). ureq is
-# a small, independent, synchronous HTTP client with no such coupling.
-ureq = "2"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+http_client = { git = "https://github.com/zed-industries/zed", package = "http_client", features = ["test-support"] }
 
 [lints]
 workspace = true

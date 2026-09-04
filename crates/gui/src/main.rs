@@ -46,7 +46,9 @@ fn window_options() -> WindowOptions {
 }
 
 fn main() {
-    let app = application().with_assets(Assets);
+    let app = application()
+        .with_assets(Assets)
+        .with_http_client(std::sync::Arc::new(reqwest_client::ReqwestClient::new()));
 
     app.run(|cx| {
         init(cx);

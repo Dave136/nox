@@ -572,6 +572,14 @@ pub struct Nox {
     pub(crate) remove_vault_confirm_focus: FocusHandle,
     pub(crate) remove_vault_prior_focus: Option<FocusHandle>,
     pub(crate) auth_hovered: HashMap<&'static str, bool>,
+    /// Subscriptions for the website-blur listener on the current editor.
+    pub(crate) editor_blur_subscriptions: Vec<Subscription>,
+    /// Locally cached favicon/upload selections, keyed by item key (or, for
+    /// an editor still being created, its editor key). Loaded once at
+    /// startup from the private icon cache and re-persisted on every
+    /// change, so list/detail rendering and a reopened editor both see the
+    /// same selection without any bytes ever entering synced item state.
+    pub(crate) local_icon_selections: HashMap<String, crate::icons::LocalIconRef>,
 }
 
 impl Nox {
@@ -647,6 +655,7 @@ impl Nox {
         let unlock_password = Self::new_input(window, cx, "Password", true);
         let locker = cx.weak_entity();
         let settings = load_settings(&data_dir);
+        let local_icon_selections = crate::icons::load_local_selections(&data_dir);
         let window_controls = cx.new(|cx| {
             WindowControls::new(window, cx).with_command_handler(move |command, window, app| {
                 let _ = locker.update(app, |locker, cx| {
@@ -695,6 +704,8 @@ impl Nox {
             remove_vault_confirm_focus: cx.focus_handle().tab_stop(true),
             remove_vault_prior_focus: None,
             auth_hovered: HashMap::new(),
+            editor_blur_subscriptions: Vec::new(),
+            local_icon_selections,
         };
 
         match locker.state {
@@ -736,6 +747,22 @@ impl Nox {
     pub(crate) fn item_editor_mut(&mut self) -> Option<&mut ItemEditorState> {
         self.session_mut()
             .and_then(|session| session.item_editor.as_mut())
+    }
+
+    /// Records one local icon selection (a favicon fetch or a manual upload)
+    /// under its cache key and persists the whole map, so a reopened editor
+    /// or another view's resolver can find it without re-fetching or
+    /// re-uploading. The key is `LocalIconRef::item_key`, which for a
+    /// still-unsaved Create editor is its editor key until `save_item`
+    /// migrates it to the item's real key.
+    pub(crate) fn record_local_icon_selection(&mut self, selection: crate::icons::LocalIconRef) {
+        self.local_icon_selections
+            .insert(selection.item_key.clone(), selection);
+        if let Err(error) =
+            crate::icons::persist_local_selections(&self.data_dir, &self.local_icon_selections)
+        {
+            eprintln!("local icon selection persistence failed: {error}");
+        }
     }
 
     pub(crate) fn new_input(
@@ -2337,6 +2364,13 @@ mod tests {
         cleanup(&path);
     }
 
+    fn valid_test_png() -> Vec<u8> {
+        vec![
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0,
+            0, 0, 1, 0, 0, 0, 1,
+        ]
+    }
+
     fn login_payload(title: &str, username: &str) -> ItemPayload {
         ItemPayload {
             schema_version: ITEM_SCHEMA_VERSION,
@@ -2638,6 +2672,789 @@ mod tests {
             locker.open_create_editor(window, locker_cx);
         });
         assert!(view.read_with(cx, |locker, _| locker.icon_picker_offers_favicon()));
+        cleanup(&path);
+    }
+
+    /// The picker's "Default" row previews the *item type's* own icon — a
+    /// Secure Note's default is `file-lock`, not Login's `key-square`.
+    #[gpui::test]
+    fn website_blur_auto_fetches_only_changed_non_empty_login_values(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-auto-fetch", &[]);
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requests_for_client = requests.clone();
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(move |_req| {
+                requests_for_client.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                async move {
+                    Ok(gpui::http_client::Response::builder()
+                        .status(200)
+                        .header("content-type", "image/png")
+                        .body(valid_test_png().into())
+                        .unwrap())
+                }
+            }));
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let uris = locker.item_editor().unwrap().uris_input.clone();
+            uris.update(locker_cx, |state, input_cx| {
+                state.set_value("https://auto.test".to_owned(), window, input_cx)
+            });
+            locker.website_field_blurred(window, locker_cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.website_field_blurred(window, locker_cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            let uris = locker.item_editor().unwrap().uris_input.clone();
+            uris.update(locker_cx, |state, input_cx| {
+                state.set_value("https://changed.test".to_owned(), window, input_cx)
+            });
+            locker.website_field_blurred(window, locker_cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 2);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn secure_note_website_blur_never_starts_a_favicon_fetch(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-note-no-auto-fetch", &[]);
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requests_for_client = requests.clone();
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(move |_req| {
+                requests_for_client.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                async move { panic!("secure notes must not fetch favicons") }
+            }));
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+            let uris = locker.item_editor().unwrap().uris_input.clone();
+            uris.update(locker_cx, |state, input_cx| {
+                state.set_value("https://not-a-site.test".to_owned(), window, input_cx)
+            });
+            locker.website_field_blurred(window, locker_cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 0);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn local_upload_is_not_added_to_the_encrypted_item_payload(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-local-upload", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            locker
+                .upload_item_icon_bytes(&valid_test_png(), window, locker_cx)
+                .unwrap();
+        });
+        let (icon, has_local, serialized) = view.read_with(cx, |locker, app| {
+            let editor = locker.item_editor().unwrap();
+            let payload = editor.payload_for_test(app);
+            (
+                editor.icon,
+                editor.local_icon.is_some(),
+                serde_json::to_vec(&payload).unwrap(),
+            )
+        });
+        assert_eq!(icon, IconChoice::Default);
+        assert!(has_local);
+        assert!(
+            !serialized
+                .windows(valid_test_png().len())
+                .any(|window| { window == valid_test_png().as_slice() })
+        );
+        cleanup(&path);
+    }
+
+    /// C1 regression: a successful fetch must bridge to the content-addressed
+    /// local selection the editor's own resolver reads, not just the
+    /// host-keyed compatibility cache.
+    #[gpui::test]
+    fn favicon_fetch_sets_a_local_selection_that_renders_immediately(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-local-selection", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(
+                |_req| async move {
+                    Ok(gpui::http_client::Response::builder()
+                        .status(200)
+                        .header("content-type", "image/png")
+                        .body(valid_test_png().into())
+                        .unwrap())
+                },
+            ));
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            url_input.update(locker_cx, |state, input_cx| {
+                state.set_value("https://selection.test".to_owned(), window, input_cx)
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+
+        let local_key = view.read_with(cx, |locker, _| {
+            locker.item_editor().unwrap().local_icon_key()
+        });
+        assert!(view.read_with(cx, |locker, _| {
+            locker.item_editor().unwrap().local_icon.is_some()
+        }));
+        let selection = view
+            .read_with(cx, |locker, _| {
+                locker.local_icon_selections.get(&local_key).cloned()
+            })
+            .expect("fetch success records a local selection under the editor's key");
+        assert_eq!(fs::read(&selection.cache_path).unwrap(), valid_test_png());
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// C4 regression: an uploaded image cached under a throwaway Create editor
+    /// key must still be found after the item is saved and its editor reopened
+    /// under the item's real key.
+    #[gpui::test]
+    fn uploaded_icon_survives_save_and_reopen(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-upload-reopen", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            locker
+                .upload_item_icon_bytes(&valid_test_png(), window, locker_cx)
+                .unwrap();
+        });
+        set_editor_values(&view, cx, "Uploaded", "alice", "secret");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.save_item(window, locker_cx);
+        });
+        let item_id = view
+            .read_with(cx, |locker, _| locker.session().unwrap().list.selected)
+            .unwrap();
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_editor_for_item(item_id, false, window, locker_cx);
+        });
+        let selection = view
+            .read_with(cx, |locker, _| {
+                locker.item_editor().unwrap().local_icon.clone()
+            })
+            .expect("the reopened editor finds the item's saved local selection");
+        assert_eq!(selection.item_key, crate::icons::item_key(item_id));
+        assert_eq!(fs::read(&selection.cache_path).unwrap(), valid_test_png());
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// C2 regression: the list/detail resolvers must look the saved item up in
+    /// the persisted local selection map (as `resolved_item_icon` expects)
+    /// instead of the bytes-blind `resolved_icon_path`.
+    #[gpui::test]
+    fn list_and_detail_resolvers_use_the_saved_local_icon_selection(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-resolver-wiring", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            locker
+                .upload_item_icon_bytes(&valid_test_png(), window, locker_cx)
+                .unwrap();
+        });
+        set_editor_values(&view, cx, "Uploaded", "alice", "secret");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.save_item(window, locker_cx);
+        });
+        let item_id = view
+            .read_with(cx, |locker, _| locker.session().unwrap().list.selected)
+            .unwrap();
+
+        let (payload, local_selection) = view.read_with(cx, |locker, _| {
+            let payload = locker
+                .session()
+                .unwrap()
+                .list
+                .items
+                .iter()
+                .find(|(id, _)| *id == item_id)
+                .map(|(_, payload)| payload.clone())
+                .unwrap();
+            let local_selection = locker
+                .local_icon_selections
+                .get(&crate::icons::item_key(item_id))
+                .cloned();
+            (payload, local_selection)
+        });
+        let local_selection =
+            local_selection.expect("save persists the local selection under the item's real key");
+        let resolved = crate::icons::resolved_item_icon(
+            &data_dir,
+            &crate::icons::item_key(item_id),
+            &payload,
+            Some(&local_selection),
+        );
+        assert!(matches!(
+            resolved,
+            crate::icons::ResolvedIcon::LocalImage(_)
+        ));
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// C3 regression: All Items' "New Item" uses the generic Sheet editor
+    /// (`uses_login_workspace`/`uses_secure_note_workspace` are both false for
+    /// a fresh Create there), which must still expose the avatar/picker before
+    /// the name/title field. The test harness does not reliably lay out Sheet
+    /// bounds, so this guards the render function's structure directly.
+    #[gpui::test]
+    fn all_items_create_sheet_exposes_the_icon_picker(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-generic-sheet", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::AllItems, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert!(!view.read_with(cx, |locker, _| locker.uses_login_workspace()));
+        assert!(!view.read_with(cx, |locker, _| locker.uses_secure_note_workspace()));
+        assert!(cx.update(|window, app| window.has_active_sheet(app)));
+
+        let source = include_str!("item_editor.rs");
+        let render_start = source
+            .find("pub(crate) fn render_item_editor")
+            .expect("render_item_editor exists");
+        let generic_render = &source[render_start..];
+        let picker = generic_render
+            .find("let icon_picker = self.render_icon_picker(cx);")
+            .expect("generic sheet builds the icon picker");
+        let title = generic_render
+            .find(r#".child(field_label("Title"))"#)
+            .expect("generic sheet renders the title field");
+        assert!(
+            picker < title,
+            "generic sheet icon picker must be before Title"
+        );
+        cleanup(&path);
+    }
+
+    /// I2 regression: the website-blur subscription registered for one editor
+    /// opening must not still be live once that editor has been saved.
+    #[gpui::test]
+    fn icon_editor_save_clears_the_blur_subscriptions(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-save-clears-subscriptions", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert!(!view.read_with(cx, |locker, _| locker.editor_blur_subscriptions.is_empty()));
+        set_editor_values(&view, cx, "Sub", "alice", "secret");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.save_item(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.editor_blur_subscriptions.is_empty()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn editor_exposes_avatar_before_name_for_login_and_secure_note(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-avatar-order", &[]);
+        for item_type in [ItemType::Login, ItemType::SecureNote] {
+            view.update_in(cx, |locker, window, locker_cx| {
+                locker.open_create_editor_as(item_type, window, locker_cx);
+            });
+            assert!(view.read_with(cx, |locker, _| { locker.editor_avatar_is_before_name() }));
+            view.update_in(cx, |locker, window, locker_cx| {
+                locker.cancel_item_editor(window, locker_cx);
+            });
+        }
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn the_default_row_previews_the_item_types_own_icon(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-default-row", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.icon_picker_default_icon_path()),
+            "icons/key-square.svg"
+        );
+        cleanup(&path);
+
+        let (view, cx, path, _) = unlocked_view(cx, "icon-default-row-note", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.icon_picker_default_icon_path()),
+            "icons/file-lock.svg"
+        );
+        cleanup(&path);
+    }
+
+    /// A Login with no saved URI is not a dead end: the favicon row expands into
+    /// an inline URL field the user can search from.
+    #[gpui::test]
+    fn a_login_without_a_saved_uri_offers_an_inline_url_field(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-inline-url", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, app| locker.icon_picker_needs_url_input(app)));
+        assert!(!view.read_with(cx, |locker, _| locker.icon_picker_url_input_expanded()));
+        view.update(cx, |locker, locker_cx| {
+            locker.expand_favicon_url_input(locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.icon_picker_url_input_expanded()));
+
+        // Once the item has a URI of its own, the row fetches against it
+        // directly — no inline field needed.
+        view.update_in(cx, |locker, window, locker_cx| {
+            let uris = locker.item_editor().unwrap().uris_input.clone();
+            uris.update(locker_cx, |state, input_cx| {
+                state.set_value("https://saved.test".to_owned(), window, input_cx)
+            });
+        });
+        assert!(!view.read_with(cx, |locker, app| locker.icon_picker_needs_url_input(app)));
+        cleanup(&path);
+    }
+
+    /// The typed URL drives the fetch and nothing else: it is never appended to
+    /// the item's own URI list.
+    #[gpui::test]
+    fn searching_a_typed_url_sets_the_favicon_icon(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-typed-url", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(
+                |req| async move {
+                    assert_eq!(req.uri().host(), Some("typed.test"));
+                    Ok(gpui::http_client::Response::builder()
+                        .status(200)
+                        .header("content-type", "image/png")
+                        .body(valid_test_png().into())
+                        .unwrap())
+                },
+            ));
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            url_input.update(locker_cx, |state, input_cx| {
+                state.set_value("https://typed.test".to_owned(), window, input_cx)
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().icon),
+            IconChoice::Favicon
+        );
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.favicon_fetch_status()),
+            item_editor::FaviconFetchStatus::Idle
+        );
+        assert_eq!(
+            fs::read(crate::favicon::favicon_cache_path(&data_dir, "typed.test")).unwrap(),
+            valid_test_png()
+        );
+        assert!(view.read_with(cx, |locker, app| {
+            locker
+                .item_editor()
+                .unwrap()
+                .uris_input
+                .read(app)
+                .value()
+                .is_empty()
+        }));
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// A failed fetch says so inline and leaves the chosen icon alone.
+    #[gpui::test]
+    fn a_failed_favicon_fetch_reports_inline_and_keeps_the_icon(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-fetch-failure", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(
+                |_req| async move {
+                    Ok(gpui::http_client::Response::builder()
+                        .status(404)
+                        .body(Vec::new().into())
+                        .unwrap())
+                },
+            ));
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            url_input.update(locker_cx, |state, input_cx| {
+                state.set_value("https://dead.test".to_owned(), window, input_cx)
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().icon),
+            IconChoice::Default
+        );
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.favicon_fetch_status()),
+            item_editor::FaviconFetchStatus::Failed
+        );
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.favicon_fetch_error()),
+            Some(item_editor::FAVICON_FETCH_ERROR)
+        );
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// The row reports the in-flight fetch instead of looking inert.
+    #[gpui::test]
+    fn a_favicon_fetch_reports_loading_until_it_finishes(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-fetch-loading", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        let (release, released) = futures::channel::oneshot::channel::<()>();
+        let gate = std::sync::Arc::new(std::sync::Mutex::new(Some(released)));
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(move |_req| {
+                let waiter = gate.lock().unwrap().take();
+                async move {
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.await;
+                    }
+                    Ok(gpui::http_client::Response::builder()
+                        .status(200)
+                        .header("content-type", "image/png")
+                        .body(valid_test_png().into())
+                        .unwrap())
+                }
+            }));
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            url_input.update(locker_cx, |state, input_cx| {
+                state.set_value("https://slow.test".to_owned(), window, input_cx)
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.favicon_fetch_status()),
+            item_editor::FaviconFetchStatus::Loading
+        );
+
+        let _ = release.send(());
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.favicon_fetch_status()),
+            item_editor::FaviconFetchStatus::Idle
+        );
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().icon),
+            IconChoice::Favicon
+        );
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// A fetch can outlive the editor that asked for it. Whatever comes back
+    /// belongs to *that* editor and no other: the reply must not reach into a
+    /// Secure Note the user opened in the meantime — which has no favicon at
+    /// all — and silently set its icon.
+    #[gpui::test]
+    fn a_favicon_fetch_result_does_not_apply_to_a_different_editor(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-fetch-stale-editor", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        let (release, released) = futures::channel::oneshot::channel::<()>();
+        let gate = std::sync::Arc::new(std::sync::Mutex::new(Some(released)));
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(move |_req| {
+                let waiter = gate.lock().unwrap().take();
+                async move {
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.await;
+                    }
+                    Ok(gpui::http_client::Response::builder()
+                        .status(200)
+                        .body(vec![7u8].into())
+                        .unwrap())
+                }
+            }));
+        });
+
+        // A Login editor asks for a favicon and the fetch parks in flight.
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            url_input.update(locker_cx, |state, input_cx| {
+                state.set_value("https://slow.test".to_owned(), window, input_cx)
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.favicon_fetch_status()),
+            item_editor::FaviconFetchStatus::Loading
+        );
+
+        // The user abandons it and starts a Secure Note instead.
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.cancel_item_editor(window, locker_cx);
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().item_type),
+            ItemType::SecureNote
+        );
+
+        // Only now does the abandoned fetch answer.
+        let _ = release.send(());
+        cx.run_until_parked();
+
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().icon),
+            IconChoice::Default
+        );
+        // Nor may it leave the note's row showing a status it never asked for.
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.favicon_fetch_status()),
+            item_editor::FaviconFetchStatus::Idle
+        );
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// The inline URL feeds the fetch and nothing else, which is easy to read as
+    /// "the URL is now saved". The row says so, and only while that field is the
+    /// thing the user is looking at.
+    #[gpui::test]
+    fn the_inline_url_field_says_the_typed_url_is_not_saved(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-typed-url-note", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+        });
+        // Nothing to caveat until the field is actually on screen.
+        assert_eq!(
+            view.read_with(cx, |locker, app| locker.favicon_typed_url_note(app)),
+            None
+        );
+
+        view.update(cx, |locker, locker_cx| {
+            locker.expand_favicon_url_input(locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, app| locker.favicon_typed_url_note(app)),
+            Some(item_editor::FAVICON_TYPED_URL_NOTE)
+        );
+        cleanup(&path);
+    }
+
+    /// The other way an editor stops being the one that asked: `set_editor_type`
+    /// flips the *same* editor to Secure Note in place, so the id still matches
+    /// and only the type check can catch it.
+    #[gpui::test]
+    fn a_favicon_fetch_result_does_not_apply_after_switching_to_secure_note(
+        cx: &mut TestAppContext,
+    ) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-fetch-type-flip", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        let (release, released) = futures::channel::oneshot::channel::<()>();
+        let gate = std::sync::Arc::new(std::sync::Mutex::new(Some(released)));
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(move |_req| {
+                let waiter = gate.lock().unwrap().take();
+                async move {
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.await;
+                    }
+                    Ok(gpui::http_client::Response::builder()
+                        .status(200)
+                        .body(vec![7u8].into())
+                        .unwrap())
+                }
+            }));
+        });
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            url_input.update(locker_cx, |state, input_cx| {
+                state.set_value("https://slow.test".to_owned(), window, input_cx)
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+
+        // Same editor, now a Secure Note — which has no favicon at all.
+        view.update(cx, |locker, locker_cx| {
+            locker.set_editor_type(ItemType::SecureNote, locker_cx);
+        });
+
+        let _ = release.send(());
+        cx.run_until_parked();
+
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().icon),
+            IconChoice::Default
+        );
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// The case the type check alone cannot catch: the next editor is *also* a
+    /// Login, so only the requesting editor's identity distinguishes it. A reply
+    /// meant for an abandoned draft must not decorate the next item the user
+    /// starts writing.
+    #[gpui::test]
+    fn a_favicon_fetch_result_does_not_apply_to_the_next_login_editor(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-fetch-next-login", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        let (release, released) = futures::channel::oneshot::channel::<()>();
+        let gate = std::sync::Arc::new(std::sync::Mutex::new(Some(released)));
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(move |_req| {
+                let waiter = gate.lock().unwrap().take();
+                async move {
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.await;
+                    }
+                    Ok(gpui::http_client::Response::builder()
+                        .status(200)
+                        .body(vec![7u8].into())
+                        .unwrap())
+                }
+            }));
+        });
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            url_input.update(locker_cx, |state, input_cx| {
+                state.set_value("https://slow.test".to_owned(), window, input_cx)
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+
+        // Abandon that draft and start a second, unrelated Login.
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.cancel_item_editor(window, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().item_type),
+            ItemType::Login
+        );
+
+        let _ = release.send(());
+        cx.run_until_parked();
+
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().icon),
+            IconChoice::Default
+        );
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// The cache is keyed on the URI that actually answered — filing the bytes
+    /// under the first *parseable* URI instead hides them from the resolver.
+    #[gpui::test]
+    fn the_favicon_cache_is_keyed_on_the_uri_that_answered(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-cache-host", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(
+                |req| async move {
+                    if req.uri().host() == Some("alive.test") && req.uri().path() == "/favicon.ico"
+                    {
+                        Ok(gpui::http_client::Response::builder()
+                            .status(200)
+                            .header("content-type", "image/png")
+                            .body(valid_test_png().into())
+                            .unwrap())
+                    } else {
+                        Ok(gpui::http_client::Response::builder()
+                            .status(404)
+                            .body(Vec::new().into())
+                            .unwrap())
+                    }
+                },
+            ));
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let uris = locker.item_editor().unwrap().uris_input.clone();
+            uris.update(locker_cx, |state, input_cx| {
+                state.set_value(
+                    "https://dead.test\nhttps://alive.test".to_owned(),
+                    window,
+                    input_cx,
+                )
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().icon),
+            IconChoice::Favicon
+        );
+        assert_eq!(
+            fs::read(crate::favicon::favicon_cache_path(&data_dir, "alive.test")).unwrap(),
+            valid_test_png()
+        );
+        assert!(!crate::favicon::favicon_cache_path(&data_dir, "dead.test").is_file());
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// A cache miss on a synced `Favicon` choice needs a way back: the picker
+    /// offers a refetch once the item is already on a favicon.
+    #[gpui::test]
+    fn refetch_is_offered_once_the_icon_is_a_favicon(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-refetch", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+        });
+        assert!(!view.read_with(cx, |locker, _| locker.icon_picker_offers_refetch()));
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.choose_item_icon(IconChoice::Favicon, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.icon_picker_offers_refetch()));
         cleanup(&path);
     }
 
