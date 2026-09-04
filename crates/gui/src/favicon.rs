@@ -128,7 +128,27 @@ fn parse_site_url(uri: &str) -> Option<Url> {
                 .ok()
                 .filter(|url| is_web_url(url) && url.host_str().is_some())
         })?;
+    // Same-machine/internal targets never get a request: a synced or
+    // imported item's website URI could literally be an internal address
+    // (a cloud metadata endpoint, a LAN device, this device's own loopback).
+    // DNS rebinding — a public-looking hostname resolving to a private IP at
+    // request time — is out of scope here; this only catches a literal
+    // internal address or the well-known `localhost` alias.
+    if is_disallowed_favicon_target(&parsed) {
+        return None;
+    }
     Some(parsed)
+}
+
+fn is_disallowed_favicon_target(url: &Url) -> bool {
+    match url.host() {
+        Some(gpui::http_client::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        Some(gpui::http_client::Host::Ipv4(ip)) => {
+            ip.is_loopback() || ip.is_link_local() || ip.is_private()
+        }
+        Some(gpui::http_client::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unicast_link_local(),
+        None => true,
+    }
 }
 
 fn is_scheme_like(value: &str) -> bool {
@@ -476,7 +496,12 @@ mod tests {
     #[test]
     fn extract_host_handles_schemeless_host_port_without_dropping_the_port_origin() {
         assert_eq!(extract_host("nas.local:5000"), Some("nas.local".to_owned()));
-        assert_eq!(extract_host("localhost:3000"), Some("localhost".to_owned()));
+        // A public literal-IP:port authority, same schemeless shape as
+        // `localhost:3000` (rejected below), keeps working.
+        assert_eq!(
+            extract_host("203.0.113.5:3000"),
+            Some("203.0.113.5".to_owned())
+        );
         assert_eq!(
             extract_origin("nas.local:5000"),
             Some("https://nas.local:5000".to_owned())
@@ -491,6 +516,67 @@ mod tests {
     fn invalid_uri_has_no_origin() {
         assert_eq!(extract_origin("not a URI"), None);
         assert_eq!(extract_origin("mailto:user@example.test"), None);
+    }
+
+    /// SSRF-shaped guard: a stored website value that literally names a
+    /// loopback, link-local (including the common cloud metadata IP), or
+    /// RFC1918 private address — or the `localhost` alias — never becomes a
+    /// fetch target. DNS rebinding (a public hostname resolving privately at
+    /// request time) is out of scope; this only catches a literal address.
+    #[test]
+    fn internal_and_loopback_targets_are_rejected_before_any_fetch() {
+        let disallowed = [
+            "http://127.0.0.1/icon",
+            "https://127.0.0.1:8443",
+            "127.0.0.1",
+            "http://localhost/",
+            "localhost:3000",
+            "LOCALHOST",
+            "http://169.254.169.254/latest/meta-data/", // cloud metadata IP
+            "169.254.1.1",
+            "http://[fe80::1]/",
+            "http://[::1]/",
+            "http://10.0.0.5/",
+            "http://172.16.0.1/",
+            "http://192.168.1.1/",
+        ];
+        for uri in disallowed {
+            assert_eq!(extract_origin(uri), None, "{uri} must be rejected");
+            assert_eq!(extract_host(uri), None, "{uri} must be rejected");
+        }
+    }
+
+    #[test]
+    fn a_normal_public_host_is_unaffected_by_the_internal_target_guard() {
+        assert_eq!(
+            extract_origin("https://example.test/path"),
+            Some("https://example.test".to_owned())
+        );
+        assert_eq!(
+            extract_origin("203.0.113.5"),
+            Some("https://203.0.113.5".to_owned())
+        );
+        assert_eq!(
+            extract_host("https://example.test/path"),
+            Some("example.test".to_owned())
+        );
+    }
+
+    #[gpui::test]
+    async fn favicon_fetch_never_requests_an_internal_target() {
+        let client = FakeHttpClient::create(|_request| async move {
+            panic!("an internal/loopback target must never be requested")
+        });
+        let uris = [
+            "http://127.0.0.1/".to_owned(),
+            "http://169.254.169.254/".to_owned(),
+            "http://localhost/".to_owned(),
+            "http://192.168.1.1/".to_owned(),
+        ];
+        assert_eq!(
+            fetch_favicon(client.as_ref(), &uris).await,
+            Err(FaviconError::NoUsableUri)
+        );
     }
 
     #[test]
