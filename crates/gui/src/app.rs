@@ -2791,6 +2791,66 @@ mod tests {
         cleanup(&path);
     }
 
+    /// Regression: `choose_uploaded_item_icon` must reject an oversized file
+    /// by its on-disk size (`std::fs::metadata`), not by reading the whole
+    /// thing into memory first and only then discovering
+    /// `validate_local_image` rejects it. Observable end state is the same
+    /// either way — no icon change — which is what this proves still holds
+    /// after the reorder.
+    #[gpui::test]
+    fn oversized_uploaded_file_is_rejected_without_a_full_read(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-upload-oversized", &[]);
+        let dir = test_dir("icon-upload-oversized-source");
+        fs::create_dir_all(&dir).unwrap();
+        let oversized_path = dir.join("too-big.png");
+        fs::write(
+            &oversized_path,
+            vec![0u8; crate::icons::MAX_LOCAL_IMAGE_BYTES + 1],
+        )
+        .unwrap();
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            locker.choose_uploaded_item_icon(window, locker_cx);
+        });
+        let picked = oversized_path.clone();
+        cx.simulate_path_prompt_response(move |_options| Some(vec![picked]));
+        cx.run_until_parked();
+
+        assert!(view.read_with(cx, |locker, _| {
+            locker.item_editor().unwrap().local_icon.is_none()
+        }));
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The everyday path through the real (test) file dialog still accepts a
+    /// normal-sized valid image after the size-before-read reorder.
+    #[gpui::test]
+    fn uploaded_file_within_the_cap_is_accepted_through_the_real_dialog(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-upload-via-dialog", &[]);
+        let dir = test_dir("icon-upload-via-dialog-source");
+        fs::create_dir_all(&dir).unwrap();
+        let source_path = dir.join("icon.png");
+        fs::write(&source_path, valid_test_png()).unwrap();
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            locker.choose_uploaded_item_icon(window, locker_cx);
+        });
+        let picked = source_path.clone();
+        cx.simulate_path_prompt_response(move |_options| Some(vec![picked]));
+        cx.run_until_parked();
+
+        assert!(view.read_with(cx, |locker, _| {
+            locker.item_editor().unwrap().local_icon.is_some()
+        }));
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// C1 regression: a successful fetch must bridge to the content-addressed
     /// local selection the editor's own resolver reads, not just the
     /// host-keyed compatibility cache.

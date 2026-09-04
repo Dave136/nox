@@ -804,6 +804,16 @@ impl Nox {
             let Some(path) = path else {
                 return;
             };
+            // Check the on-disk size before reading any bytes — an oversized
+            // file is rejected the same way (silently, no icon change) either
+            // way, but this way a multi-gigabyte pick never gets read into
+            // memory first just to be thrown away by `validate_local_image`.
+            let Ok(metadata) = std::fs::metadata(&path) else {
+                return;
+            };
+            if metadata.len() > crate::icons::MAX_LOCAL_IMAGE_BYTES as u64 {
+                return;
+            }
             let bytes = match std::fs::read(path) {
                 Ok(bytes) => bytes,
                 Err(_) => return,
