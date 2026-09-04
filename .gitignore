@@ -24,3 +24,7 @@ packaging/arch/*.pkg.tar.zst
 # Cargo registry tokens — never commit these
 .cargo/credentials
 .cargo/credentials.toml
+# Local cargo overrides (target-dir, linker, per-machine rustflags). These are
+# developer-machine settings with absolute paths in them; a shared checkout must
+# not inherit one.
+.cargo/config.toml

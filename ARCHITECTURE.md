@@ -544,6 +544,20 @@ Use the smallest maintained set that directly implements the design:
 - Networking: `tokio`, `mdns-sd`, and plain TCP; do not add QUIC in v1. The
   `gui`-to-`sync` bridge is a plain async channel, not a second async runtime
   inside `gui`.
+
+  One deliberate exception: `gui` depends on Zed's `reqwest_client` and installs
+  a `reqwest_client::ReqwestClient` as GPUI's `http_client` (`main.rs`). That
+  client owns a Tokio runtime internally, so a second runtime does now live
+  inside the `gui` process. It is accepted for one narrow job — the favicon
+  fetch (`favicon.rs`), an explicit, user-initiated, non-vault HTTPS GET — and
+  it is reached only through GPUI's own `HttpClient` trait: `gui` still never
+  `.await`s a Tokio future directly from a view, and the sync bridge is
+  untouched. The rule above still holds for sync and for anything vault-related.
+  It was chosen over the previous synchronous `ureq` client because GPUI's
+  `HttpClient` seam is what makes the fetch testable with `FakeHttpClient`; the
+  cost is a real one, and packaged builds inherit it (see
+  `packaging/arch/PKGBUILD`: `aws-lc-sys` needs `cmake`, and TLS roots now come
+  from the system trust store rather than bundled `webpki-roots`).
 - GUI: exactly pinned `gpui`, `gpui-component`, and `gpui-rsx` dependencies.
 
 Pin exact versions in `Cargo.lock`. Protocol and persisted formats must not depend on

@@ -6,8 +6,18 @@ pkgdesc="Native desktop password manager"
 arch=('x86_64')
 url="https://github.com/dave136/nox"
 license=('GPL3')
-depends=('gcc-libs' 'glibc' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11')
-makedepends=('cargo')
+# `ca-certificates` is not incidental: the favicon fetch's TLS stack moved from
+# ureq (which bundled its roots via webpki-roots) to reqwest_client, whose
+# rustls-platform-verifier reads the *system* trust store instead. Without it
+# there are no roots at all and every HTTPS fetch fails.
+depends=('ca-certificates' 'gcc-libs' 'glibc' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11')
+# `cmake` is for aws-lc-sys, pulled in by reqwest_client -> rustls -> aws-lc-rs.
+# Its build script picks a builder at build time: the CC builder when the target
+# has pregenerated bindings (x86_64 linux does), and otherwise CMake — and that
+# fallback ends in `cmake_builder.check_dependencies().unwrap()`, a hard panic
+# when cmake is missing. Listing it keeps the package building off a documented
+# dependency rather than off which branch that probe happens to take.
+makedepends=('cargo' 'cmake')
 # rusqlite's "bundled" sqlite3 is compiled by cc/gcc; makepkg's default
 # `lto` OPTION appends -flto to CFLAGS/LDFLAGS, which makes gcc emit
 # GCC-LTO bytecode that rust-lld can't link (undefined sqlite3_* symbols).
