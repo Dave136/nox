@@ -300,6 +300,31 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
 }
 
+/// Overwrite `path` with `bytes`, atomically and unconditionally. Unlike
+/// `write_private_file`, this never treats an existing file as already
+/// correct — used for state that changes across writes (the selections
+/// index), never for the content-addressed image cache where identical
+/// content really does make an existing file already correct.
+fn write_private_file_overwrite(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cache path has no parent"))?;
+    set_private_dir(parent)?;
+    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(".tmp-{}-{sequence}", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(&temp, path)
+}
+
 fn image_signature_is_valid(bytes: &[u8]) -> bool {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return bytes.len() >= 24
@@ -421,7 +446,7 @@ pub(crate) fn persist_local_selections(
         contents.push_str(&selection.content_hash);
         contents.push('\n');
     }
-    write_private_file(&selection_file(data_dir), contents.as_bytes())
+    write_private_file_overwrite(&selection_file(data_dir), contents.as_bytes())
 }
 
 #[cfg(test)]
@@ -566,6 +591,39 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    /// Regression: `persist_local_selections` writes to the same fixed path
+    /// every time. Before the fix, `write_private_file`'s exists-check made
+    /// every write after the first a silent no-op, so a second selection
+    /// never reached disk even though the in-memory map updated correctly.
+    #[test]
+    fn a_second_selection_overwrites_the_persisted_index() {
+        let dir = temp_dir("overwrite");
+        let first = cache_local_icon(&dir, "item-a", &valid_png()).unwrap();
+        let mut selections = HashMap::new();
+        selections.insert(first.item_key.clone(), first.clone());
+        persist_local_selections(&dir, &selections).unwrap();
+        assert_eq!(load_local_selections(&dir).get("item-a"), Some(&first));
+
+        // A different item entirely: the persisted index must grow, not stay
+        // frozen at its first-ever write.
+        let second = cache_local_icon(&dir, "item-b", &valid_png()).unwrap();
+        selections.insert(second.item_key.clone(), second.clone());
+        persist_local_selections(&dir, &selections).unwrap();
+        let reloaded = load_local_selections(&dir);
+        assert_eq!(reloaded.get("item-a"), Some(&first));
+        assert_eq!(reloaded.get("item-b"), Some(&second));
+
+        // Changing the same item's selection must also land on disk.
+        let mut other_png = valid_png();
+        other_png.push(0);
+        let changed = cache_local_icon(&dir, "item-a", &other_png).unwrap();
+        selections.insert(changed.item_key.clone(), changed.clone());
+        persist_local_selections(&dir, &selections).unwrap();
+        let reloaded_again = load_local_selections(&dir);
+        assert_eq!(reloaded_again.get("item-a"), Some(&changed));
+        assert_ne!(changed.content_hash, first.content_hash);
     }
 
     #[test]

@@ -765,6 +765,18 @@ impl Nox {
         }
     }
 
+    /// Removes a local icon selection (picking Default/a preset after an
+    /// upload or fetch, or an explicit delete) so the resolver falls back to
+    /// `IconChoice` again instead of rendering a stale local image forever.
+    pub(crate) fn clear_local_icon_selection(&mut self, item_key: &str) {
+        if self.local_icon_selections.remove(item_key).is_some()
+            && let Err(error) =
+                crate::icons::persist_local_selections(&self.data_dir, &self.local_icon_selections)
+        {
+            eprintln!("local icon selection persistence failed: {error}");
+        }
+    }
+
     pub(crate) fn new_input(
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -2858,6 +2870,123 @@ mod tests {
         assert_eq!(fs::read(&selection.cache_path).unwrap(), valid_test_png());
         cleanup(&path);
         let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// Regression: picking Default after an upload must actually replace the
+    /// local image — previously `resolve_item_icon`'s local-selection lookup
+    /// kept preferring the old bytes forever, making the pick a silent
+    /// no-op. Covers both the in-memory editor state and a save+reopen, and
+    /// doubles as the delete "x" affordance's underlying behavior, since
+    /// that button calls the very same `choose_item_icon(Default, ..)`.
+    #[gpui::test]
+    fn picking_default_after_a_local_image_clears_it_and_falls_back(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-clear-on-default", &[]);
+        let data_dir = path.parent().unwrap().to_path_buf();
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            locker
+                .upload_item_icon_bytes(&valid_test_png(), window, locker_cx)
+                .unwrap();
+        });
+        let local_key =
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().local_icon_key());
+        assert!(view.read_with(cx, |locker, _| locker
+            .local_icon_selections
+            .contains_key(&local_key)));
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.choose_item_icon(IconChoice::Default, window, locker_cx);
+        });
+        let (icon, has_local_in_editor, still_in_map) = view.read_with(cx, |locker, _| {
+            let editor = locker.item_editor().unwrap();
+            (
+                editor.icon,
+                editor.local_icon.is_some(),
+                locker.local_icon_selections.contains_key(&local_key),
+            )
+        });
+        assert_eq!(icon, IconChoice::Default);
+        assert!(!has_local_in_editor, "editor must drop the cleared local image");
+        assert!(!still_in_map, "the persisted selection map must drop the entry too");
+        assert!(matches!(
+            crate::icons::resolve_item_icon(
+                nox_core::ItemType::Login,
+                IconChoice::Default,
+                &data_dir,
+                &local_key,
+                None,
+            ),
+            crate::icons::ResolvedIcon::Svg("icons/key-square.svg")
+        ));
+        // Not just in-memory: a fresh read of the on-disk index must agree.
+        assert!(!crate::icons::load_local_selections(&data_dir).contains_key(&local_key));
+
+        set_editor_values(&view, cx, "Cleared", "alice", "secret");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.save_item(window, locker_cx);
+        });
+        let item_id = view
+            .read_with(cx, |locker, _| locker.session().unwrap().list.selected)
+            .unwrap();
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_editor_for_item(item_id, false, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| {
+            locker.item_editor().unwrap().local_icon.is_none()
+        }));
+        cleanup(&path);
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    /// Same regression as above, but for the "pick a preset" path and via a
+    /// fetched favicon instead of an upload — both non-Favicon picks must
+    /// clear a previously selected local image.
+    #[gpui::test]
+    fn picking_a_preset_after_a_fetched_favicon_clears_it(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-clear-on-preset", &[]);
+        cx.update(|_, app| {
+            app.set_http_client(gpui::http_client::FakeHttpClient::create(
+                |_req| async move {
+                    Ok(gpui::http_client::Response::builder()
+                        .status(200)
+                        .header("content-type", "image/png")
+                        .body(valid_test_png().into())
+                        .unwrap())
+                },
+            ));
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            url_input.update(locker_cx, |state, input_cx| {
+                state.set_value("https://preset-clear.test".to_owned(), window, input_cx)
+            });
+            locker.fetch_item_favicon(window, locker_cx);
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |locker, _| {
+            locker.item_editor().unwrap().local_icon.is_some()
+        }));
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.choose_item_icon(
+                nox_core::IconChoice::Preset(nox_core::PresetIcon::Briefcase),
+                window,
+                locker_cx,
+            );
+        });
+        let (icon, has_local) = view.read_with(cx, |locker, _| {
+            let editor = locker.item_editor().unwrap();
+            (editor.icon, editor.local_icon.is_some())
+        });
+        assert_eq!(
+            icon,
+            nox_core::IconChoice::Preset(nox_core::PresetIcon::Briefcase)
+        );
+        assert!(!has_local, "a preset pick must clear the fetched favicon too");
+        cleanup(&path);
     }
 
     /// C2 regression: the list/detail resolvers must look the saved item up in

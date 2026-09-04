@@ -650,10 +650,26 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Picking Default or a preset must actually replace a previously
+        // chosen local image (an upload or a fetched favicon) — otherwise
+        // `resolve_item_icon`'s local-selection lookup keeps preferring the
+        // old bytes forever, making the pick a silent no-op. `Favicon` is
+        // the one choice a local selection legitimately backs, so it is the
+        // one case that keeps it.
+        let clears_local_image = !matches!(icon, IconChoice::Favicon);
+        let local_key = clears_local_image
+            .then(|| self.item_editor().map(|editor| editor.local_icon_key()))
+            .flatten();
         if let Some(session) = self.session_mut()
             && let Some(editor) = session.item_editor.as_mut()
         {
             editor.icon = icon;
+            if clears_local_image {
+                editor.local_icon = None;
+            }
+        }
+        if let Some(local_key) = local_key {
+            self.clear_local_icon_selection(&local_key);
         }
         cx.notify();
     }
@@ -979,13 +995,17 @@ impl Nox {
             .item_editor()
             .map(|editor| editor.local_icon_key())
             .unwrap_or_else(|| crate::icons::editor_key(0));
-        let trigger_child: AnyElement = match crate::icons::resolve_item_icon(
+        let resolved_icon = crate::icons::resolve_item_icon(
             item_type,
             current_icon,
             &data_dir,
             &local_key,
             local_selection,
-        ) {
+        );
+        // Drives the delete "x": it only makes sense to offer deleting an
+        // uploaded/fetched image that is actually the thing on screen.
+        let has_local_image = matches!(resolved_icon, crate::icons::ResolvedIcon::LocalImage(_));
+        let trigger_child: AnyElement = match resolved_icon {
             crate::icons::ResolvedIcon::Svg(path) => gpui_component::Icon::empty()
                 .path(path)
                 .size(px(14.))
@@ -1008,6 +1028,7 @@ impl Nox {
             .child(trigger_child);
 
         let locker = cx.entity();
+        let locker_for_delete = locker.clone();
         let default_icon_path = self.icon_picker_default_icon_path();
         // The popover's content builder runs inside this same render pass and
         // cannot read `Nox` back, so the row's whole state is snapshotted here.
@@ -1025,7 +1046,7 @@ impl Nox {
                 offers_refetch: self.icon_picker_offers_refetch(),
             });
 
-        Popover::new("item-icon-picker")
+        let picker = Popover::new("item-icon-picker")
             .appearance(false)
             .trigger(trigger)
             .content(move |_state, _window, _cx| {
@@ -1067,7 +1088,47 @@ impl Nox {
                     .bg(theme.surface)
                     .children(rows)
             })
-            .into_any_element()
+            .into_any_element();
+
+        // The delete "x": edit-mode-and-create alike, shown only while the
+        // avatar is actually rendering a local image, so there is nothing to
+        // interpret when it's showing the type default, a preset, or an
+        // unavailable placeholder. A direct click, no popover required —
+        // per the spec's "an absolute-positioned top 'x' to delete the
+        // uploaded or fetched image".
+        if has_local_image {
+            div()
+                .relative()
+                .child(picker)
+                .child(
+                    div()
+                        .id("item-icon-delete")
+                        .absolute()
+                        .top(px(-4.))
+                        .right(px(-4.))
+                        .size(px(16.))
+                        .rounded_full()
+                        .bg(theme.danger)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .on_mouse_down(gpui::MouseButton::Left, move |_, window, app| {
+                            locker_for_delete.update(app, |locker, cx| {
+                                locker.choose_item_icon(IconChoice::Default, window, cx);
+                            });
+                        })
+                        .child(
+                            gpui_component::Icon::empty()
+                                .path("icons/x.svg")
+                                .size(px(10.))
+                                .text_color(theme.inverse),
+                        ),
+                )
+                .into_any_element()
+        } else {
+            picker
+        }
     }
 
     pub(crate) fn cancel_item_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
