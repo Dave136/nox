@@ -2949,11 +2949,12 @@ mod tests {
                 .upload_item_icon_bytes(&valid_test_png(), window, locker_cx)
                 .unwrap();
         });
-        let local_key =
-            view.read_with(cx, |locker, _| locker.item_editor().unwrap().local_icon_key());
-        assert!(view.read_with(cx, |locker, _| locker
-            .local_icon_selections
-            .contains_key(&local_key)));
+        let local_key = view.read_with(cx, |locker, _| {
+            locker.item_editor().unwrap().local_icon_key()
+        });
+        assert!(view.read_with(cx, |locker, _| {
+            locker.local_icon_selections.contains_key(&local_key)
+        }));
 
         view.update_in(cx, |locker, window, locker_cx| {
             locker.choose_item_icon(IconChoice::Default, window, locker_cx);
@@ -2967,8 +2968,14 @@ mod tests {
             )
         });
         assert_eq!(icon, IconChoice::Default);
-        assert!(!has_local_in_editor, "editor must drop the cleared local image");
-        assert!(!still_in_map, "the persisted selection map must drop the entry too");
+        assert!(
+            !has_local_in_editor,
+            "editor must drop the cleared local image"
+        );
+        assert!(
+            !still_in_map,
+            "the persisted selection map must drop the entry too"
+        );
         assert!(matches!(
             crate::icons::resolve_item_icon(
                 nox_core::ItemType::Login,
@@ -3045,7 +3052,10 @@ mod tests {
             icon,
             nox_core::IconChoice::Preset(nox_core::PresetIcon::Briefcase)
         );
-        assert!(!has_local, "a preset pick must clear the fetched favicon too");
+        assert!(
+            !has_local,
+            "a preset pick must clear the fetched favicon too"
+        );
         cleanup(&path);
     }
 
