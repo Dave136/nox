@@ -326,7 +326,7 @@ mod tests {
             );
         }
         assert!(source.contains(
-            "{field(\"CONTENT\", true, note_editor)}\n                            {error}\n                            <div flex_1 />\n                            <div flex items_center h={px(42.)}",
+            "{field(\"CONTENT\", true, None, note_editor)}\n                            {error}\n                            <div flex_1 />\n                            <div flex items_center h={px(42.)}",
         ));
     }
 

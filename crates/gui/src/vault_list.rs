@@ -619,7 +619,7 @@ impl Nox {
         cx.notify();
     }
 
-    fn register_website_blur_listener(
+    pub(crate) fn register_website_blur_listener(
         &mut self,
         uris_focus: gpui::FocusHandle,
         window: &mut Window,
@@ -653,8 +653,14 @@ impl Nox {
         self.editor_blur_subscriptions.clear();
         let mut editor = crate::item_editor::ItemEditorState::for_create(window, cx);
         editor.item_type = item_type;
-        let uris_focus = editor.uris_input.focus_handle(cx);
-        self.register_website_blur_listener(uris_focus, window, cx);
+        for uris_focus in editor
+            .uri_inputs
+            .iter()
+            .map(|input| input.focus_handle(cx))
+            .collect::<Vec<_>>()
+        {
+            self.register_website_blur_listener(uris_focus, window, cx);
+        }
         if let Some(session) = self.session_mut() {
             session.item_editor = Some(editor);
         }
@@ -692,8 +698,14 @@ impl Nox {
                     .local_icon_selections
                     .get(&editor.local_icon_key())
                     .cloned();
-                let uris_focus = editor.uris_input.focus_handle(cx);
-                self.register_website_blur_listener(uris_focus, window, cx);
+                for uris_focus in editor
+                    .uri_inputs
+                    .iter()
+                    .map(|input| input.focus_handle(cx))
+                    .collect::<Vec<_>>()
+                {
+                    self.register_website_blur_listener(uris_focus, window, cx);
+                }
                 if let Some(session) = self.session_mut() {
                     session.list.selected = Some(item_id);
                     session.item_editor = Some(editor);

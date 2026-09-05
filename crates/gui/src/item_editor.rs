@@ -2,8 +2,8 @@ use crate::app::{AppState, Nox};
 use crate::nav::ActiveView;
 use crate::theme::Theme;
 use gpui::{
-    AnyElement, App, Context, Entity, FontWeight, PathPromptOptions, SharedString, Window, div,
-    prelude::*, px,
+    AnyElement, App, Context, Entity, Focusable, FontWeight, PathPromptOptions, SharedString,
+    Window, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
@@ -102,7 +102,10 @@ pub(crate) struct ItemEditorState {
     pub(crate) title_input: Entity<InputState>,
     pub(crate) username_input: Entity<InputState>,
     pub(crate) password_input: Entity<InputState>,
-    pub(crate) uris_input: Entity<TextareaState>,
+    /// One input per website row, per `locker.pen` `S38lsY`. Never empty: the
+    /// field always renders at least one row, so clearing the last URL leaves
+    /// an empty row rather than a gap where the field used to be.
+    pub(crate) uri_inputs: Vec<Entity<InputState>>,
     pub(crate) notes_input: Entity<TextareaState>,
     pub(crate) created_at: u64,
     pub(crate) save_error: Option<SharedString>,
@@ -136,6 +139,154 @@ fn input(
     entity
 }
 
+/// The icon grid from `locker.pen` `Oh0fE`: every preset laid out as 32px
+/// swatches, ten per row, with the chosen one lifted instead of hidden behind
+/// a popover. Presets live here now, so the picker popover keeps only the
+/// choices a grid can't express — Default, the site favicon, and upload.
+fn icon_preset_grid(theme: Theme, locker: Entity<Nox>, current: IconChoice) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .children(crate::icons::ALL_PRESETS.chunks(10).map(|row| {
+            div().flex().gap(px(8.)).children(row.iter().map(|preset| {
+                let preset = *preset;
+                let selected = current == IconChoice::Preset(preset);
+                let locker = locker.clone();
+                div()
+                    .id(SharedString::from(format!("icon-swatch-{preset:?}")))
+                    .size(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(9.))
+                    .bg(if selected {
+                        theme.field_selected
+                    } else {
+                        theme.field
+                    })
+                    .when(selected, |this| {
+                        this.border_2().border_color(theme.text_muted)
+                    })
+                    .when(!selected, |this| {
+                        this.border_1().border_color(theme.field_border)
+                    })
+                    .cursor_pointer()
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, app| {
+                        locker.update(app, |locker, cx| {
+                            locker.choose_item_icon(IconChoice::Preset(preset), window, cx);
+                        });
+                    })
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path(crate::icons::preset_icon_path(preset))
+                            .size(px(15.))
+                            .text_color(if selected {
+                                theme.text_soft
+                            } else {
+                                theme.icon_muted
+                            }),
+                    )
+            }))
+        }))
+        .into_any_element()
+}
+
+/// The websites field body from `locker.pen` `S38lsY`: one 42px row per URL,
+/// each with a globe prefix and an `x` that removes it, then the "Add website"
+/// action. Shared by the login workspace and the generic editor sheet so both
+/// surfaces stay on the one `uri_inputs` model.
+fn website_rows(theme: Theme, locker: Entity<Nox>, inputs: Vec<Entity<InputState>>) -> AnyElement {
+    let add_locker = locker.clone();
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .children(inputs.into_iter().enumerate().map(|(index, uri)| {
+            let remove_locker = locker.clone();
+            div()
+                .w_full()
+                .h(px(42.))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(9.))
+                .px(px(11.))
+                .rounded(px(7.))
+                .border_1()
+                .border_color(theme.field_border)
+                .bg(theme.field)
+                .child(
+                    gpui_component::Icon::empty()
+                        .path("icons/globe.svg")
+                        .size(px(14.))
+                        .text_color(theme.icon_muted),
+                )
+                .child(div().flex_1().child(Input::new(&uri).appearance(false)))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("remove-website-{index}")))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .on_mouse_down(gpui::MouseButton::Left, move |_, window, app| {
+                            remove_locker.update(app, |locker, cx| {
+                                locker.remove_website_row(index, window, cx);
+                            });
+                        })
+                        .child(
+                            gpui_component::Icon::empty()
+                                .path("icons/x.svg")
+                                .size(px(14.))
+                                .text_color(theme.text_subtle),
+                        ),
+                )
+        }))
+        .child(
+            Button::new("add-website")
+                .ghost()
+                .h(px(28.))
+                .px(px(6.))
+                .on_click(move |_, window, app| {
+                    add_locker.update(app, |locker, cx| {
+                        locker.add_website_row(window, cx);
+                    });
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.))
+                        .child(
+                            gpui_component::Icon::empty()
+                                .path("icons/plus.svg")
+                                .size(px(14.))
+                                .text_color(theme.text_secondary),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .font_weight(FontWeight(600.))
+                                .text_color(theme.text_secondary)
+                                .child("Add website"),
+                        ),
+                ),
+        )
+        .into_any_element()
+}
+
+/// One website row's input. The placeholder is the design's `https://`
+/// (`locker.pen` `Snrrl`), not a per-row hint, so every row reads the same.
+fn uri_input(
+    value: impl Into<SharedString>,
+    window: &mut Window,
+    cx: &mut Context<Nox>,
+) -> Entity<InputState> {
+    input(value, window, cx, "https://", false)
+}
+
 fn textarea(
     value: impl Into<SharedString>,
     window: &mut Window,
@@ -161,7 +312,7 @@ impl ItemEditorState {
         let title_input = input("", window, cx, "Title", false);
         let username_input = input("", window, cx, "Username", false);
         let password_input = input("", window, cx, "Password", true);
-        let uris_input = textarea("", window, cx, "URIs (one per line)");
+        let uri_inputs = vec![uri_input("", window, cx)];
         let notes_input = textarea("", window, cx, "Notes");
         let length_input = input("20", window, cx, "Length", false);
         let favicon_url_input = input("", window, cx, "https://example.com", false);
@@ -174,7 +325,7 @@ impl ItemEditorState {
             title_input,
             username_input,
             password_input,
-            uris_input,
+            uri_inputs,
             notes_input,
             created_at: now_millis(),
             save_error: None,
@@ -197,13 +348,10 @@ impl ItemEditorState {
     /// The item's URI lines as the editor currently holds them — the same list
     /// `payload` saves, and the candidates an explicit favicon fetch walks.
     pub(crate) fn uris(&self, cx: &App) -> Vec<String> {
-        self.uris_input
-            .read(cx)
-            .value()
-            .lines()
-            .map(str::trim)
+        self.uri_inputs
+            .iter()
+            .map(|input| input.read(cx).value().trim().to_owned())
             .filter(|uri| !uri.is_empty())
-            .map(ToOwned::to_owned)
             .collect()
     }
 
@@ -300,9 +448,17 @@ impl ItemEditorState {
         editor.password_input.update(cx, |state, input_cx| {
             state.set_value(payload.password, window, input_cx)
         });
-        editor.uris_input.update(cx, |state, input_cx| {
-            state.set_value(payload.uris.join("\n"), window, input_cx)
-        });
+        // One row per saved URL, and a single empty row when the item has none
+        // — the field is never rendered without a row to type into.
+        editor.uri_inputs = if payload.uris.is_empty() {
+            vec![uri_input("", window, cx)]
+        } else {
+            payload
+                .uris
+                .iter()
+                .map(|uri| uri_input(uri.clone(), window, cx))
+                .collect()
+        };
         editor.notes_input.update(cx, |state, input_cx| {
             state.set_value(payload.notes, window, input_cx)
         });
@@ -573,7 +729,7 @@ fn upload_icon_picker_row(theme: Theme, locker: Entity<Nox>) -> AnyElement {
                     div()
                         .text_size(px(13.))
                         .text_color(theme.text)
-                        .child("Upload from file"),
+                        .child("Upload from device"),
                 ),
         )
         .into_any_element()
@@ -780,6 +936,45 @@ impl Nox {
         self.fetch_item_favicon(window, cx);
     }
 
+    /// Append an empty website row (`locker.pen` `j0b4vA`). The new row gets
+    /// its own blur listener, so a URL typed into it still triggers the
+    /// favicon auto-fetch that the first row would have.
+    pub(crate) fn add_website_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let new_input = uri_input("", window, cx);
+        let focus = new_input.focus_handle(cx);
+        if let Some(editor) = self.item_editor_mut() {
+            editor.uri_inputs.push(new_input);
+        } else {
+            return;
+        }
+        self.register_website_blur_listener(focus, window, cx);
+        cx.notify();
+    }
+
+    /// Remove one website row. The last remaining row is cleared instead of
+    /// removed, so the field always keeps a row to type into.
+    pub(crate) fn remove_website_row(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.item_editor_mut() else {
+            return;
+        };
+        if editor.uri_inputs.len() <= 1 {
+            let Some(input) = editor.uri_inputs.first().cloned() else {
+                return;
+            };
+            input.update(cx, |state, input_cx| {
+                state.set_value("", window, input_cx);
+            });
+        } else if index < editor.uri_inputs.len() {
+            editor.uri_inputs.remove(index);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn choose_uploaded_item_icon(
         &mut self,
         window: &mut Window,
@@ -980,7 +1175,12 @@ impl Nox {
     /// The item's icon, clickable to open the picker: Default, the 20
     /// presets, and — Login only — "Favicon del sitio". Secure Note gets no
     /// favicon row; it has no site identity to fetch from.
-    fn render_icon_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    ///
+    /// `avatar` renders the login form's 64px field box from `locker.pen`
+    /// `ztKOA`: the trigger *is* the box (a nested chip inside it reads as a
+    /// box-in-a-box), and a failed favicon fetch paints it as `VQgVd`.
+    /// Everywhere else the trigger stays the compact 28px chip.
+    fn render_icon_picker(&mut self, avatar: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let data_dir = self.data_dir.clone();
         let (item_type, current_icon, _uris, favicon_url_input) = self
@@ -1015,27 +1215,59 @@ impl Nox {
         // Drives the delete "x": it only makes sense to offer deleting an
         // uploaded/fetched image that is actually the thing on screen.
         let has_local_image = matches!(resolved_icon, crate::icons::ResolvedIcon::LocalImage(_));
-        let trigger_child: AnyElement = match resolved_icon {
-            crate::icons::ResolvedIcon::Svg(path) => gpui_component::Icon::empty()
-                .path(path)
-                .size(px(14.))
-                .text_color(theme.text_secondary)
-                .into_any_element(),
-            crate::icons::ResolvedIcon::LocalImage(path) => gpui::img(path)
-                .size(px(18.))
-                .rounded(px(4.))
-                .into_any_element(),
-            crate::icons::ResolvedIcon::UnavailableLocalImage => gpui_component::Icon::empty()
-                .path(crate::icons::default_type_icon(item_type))
-                .size(px(14.))
-                .text_color(theme.text_secondary)
-                .into_any_element(),
+        // `VQgVd`: a fetch that came back empty-handed swaps the icon for
+        // `image-off` and turns the box's border red, so the avatar itself
+        // carries the failure instead of only the popover.
+        let fetch_failed = avatar && self.favicon_fetch_status() == FaviconFetchStatus::Failed;
+        let (icon_size, image_size, image_radius, icon_color) = if avatar {
+            (px(28.), px(28.), px(6.), theme.text_soft)
+        } else {
+            (px(14.), px(18.), px(4.), theme.text_secondary)
         };
-        let trigger = Button::new("item-icon-picker-trigger")
-            .size(px(28.))
-            .rounded(px(8.))
-            .bg(theme.raised)
-            .child(trigger_child);
+        let trigger_child: AnyElement = if fetch_failed {
+            gpui_component::Icon::empty()
+                .path("icons/image-off.svg")
+                .size(px(22.))
+                .text_color(theme.danger)
+                .into_any_element()
+        } else {
+            match resolved_icon {
+                crate::icons::ResolvedIcon::Svg(path) => gpui_component::Icon::empty()
+                    .path(path)
+                    .size(icon_size)
+                    .text_color(icon_color)
+                    .into_any_element(),
+                crate::icons::ResolvedIcon::LocalImage(path) => gpui::img(path)
+                    .size(image_size)
+                    .rounded(image_radius)
+                    .into_any_element(),
+                crate::icons::ResolvedIcon::UnavailableLocalImage => gpui_component::Icon::empty()
+                    .path(crate::icons::default_type_icon(item_type))
+                    .size(icon_size)
+                    .text_color(icon_color)
+                    .into_any_element(),
+            }
+        };
+        let should_show_upload_row = !has_local_image;
+        let trigger = if avatar {
+            Button::new("item-icon-picker-trigger")
+                .size(px(64.))
+                .rounded(px(14.))
+                .bg(theme.field)
+                .border_1()
+                .border_color(if fetch_failed {
+                    theme.danger
+                } else {
+                    theme.field_border
+                })
+                .child(trigger_child)
+        } else {
+            Button::new("item-icon-picker-trigger")
+                .size(px(28.))
+                .rounded(px(8.))
+                .bg(theme.raised)
+                .child(trigger_child)
+        };
 
         let locker = cx.entity();
         let locker_for_delete = locker.clone();
@@ -1069,20 +1301,14 @@ impl Nox {
                     locker.clone(),
                     IconChoice::Default,
                 ));
-                for preset in crate::icons::ALL_PRESETS {
-                    rows.push(icon_picker_row(
-                        SharedString::from(format!("icon-preset-{preset:?}")),
-                        crate::icons::preset_icon_path(preset),
-                        crate::icons::preset_icon_label(preset),
-                        theme,
-                        locker.clone(),
-                        IconChoice::Preset(preset),
-                    ));
-                }
+                // No preset rows here: `icon_preset_grid` shows all 20 inline,
+                // which is what keeps this menu down to three unscrolled rows.
                 if let Some(favicon_row) = favicon_row.clone() {
                     rows.push(favicon_picker_row(favicon_row));
                 }
-                rows.push(upload_icon_picker_row(theme, locker.clone()));
+                if should_show_upload_row {
+                    rows.push(upload_icon_picker_row(theme, locker.clone()));
+                }
                 div()
                     .id("item-icon-picker-menu")
                     .w(px(220.))
@@ -1106,7 +1332,10 @@ impl Nox {
         // unavailable placeholder. A direct click, no popover required —
         // per the spec's "an absolute-positioned top 'x' to delete the
         // uploaded or fetched image".
-        if has_local_image {
+        //
+        // The avatar box is the exception: `ztKOA` puts only the edit badge on
+        // it, and clearing stays one click away as the picker's "Default" row.
+        if has_local_image && !avatar {
             div()
                 .relative()
                 .child(picker)
@@ -1449,7 +1678,7 @@ impl Nox {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (SharedString, AnyElement) {
-        let _theme = Theme::current(cx);
+        let theme = Theme::current(cx);
         let component_theme = cx.theme();
         let border = component_theme.border;
         let foreground = component_theme.foreground;
@@ -1476,7 +1705,7 @@ impl Nox {
         let title = editor.title_input.clone();
         let username = editor.username_input.clone();
         let password = editor.password_input.clone();
-        let uris = editor.uris_input.clone();
+        let uris = editor.uri_inputs.clone();
         let notes = editor.notes_input.clone();
         let generated = editor
             .generator
@@ -1654,7 +1883,7 @@ impl Nox {
                 .into_any_element()
         };
 
-        let icon_picker = self.render_icon_picker(cx);
+        let icon_picker = self.render_icon_picker(false, cx);
         let mut content = div()
             .id("item-editor")
             .flex()
@@ -1755,8 +1984,8 @@ impl Nox {
                         .flex()
                         .flex_col()
                         .gap(px(6.))
-                        .child(field_label("URIs"))
-                        .child(Textarea::new(&uris)),
+                        .child(field_label("Websites"))
+                        .child(website_rows(theme, locker.clone(), uris)),
                 );
         }
         content = content.child(
@@ -1922,7 +2151,10 @@ impl Nox {
                             .child(back_label),
                     ),
             );
-        let field = |label: &'static str, required: bool, body: AnyElement| {
+        let field = |label: &'static str,
+                     required: bool,
+                     helper: Option<&'static str>,
+                     body: AnyElement| {
             div()
                 .flex()
                 .flex_col()
@@ -1944,6 +2176,14 @@ impl Nox {
                                     .text_size(px(9.))
                                     .text_color(theme.text_ghost)
                                     .child("Required"),
+                            )
+                        })
+                        .when_some(helper.filter(|_| !required), |row, helper| {
+                            row.child(
+                                div()
+                                    .text_size(px(9.))
+                                    .text_color(theme.text_ghost)
+                                    .child(helper),
                             )
                         }),
                 )
@@ -2071,7 +2311,11 @@ impl Nox {
                     .into_any_element()
             },
         );
-        let icon_picker = self.render_icon_picker(cx);
+        let icon_picker = self.render_icon_picker(false, cx);
+        let current_icon = self
+            .item_editor()
+            .map_or(IconChoice::Default, |editor| editor.icon);
+        let preset_grid = icon_preset_grid(theme, locker.clone(), current_icon);
 
         rsx! {
             <div id="secure-note-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
@@ -2105,8 +2349,9 @@ impl Nox {
                                     </div>
                                 </div>
                             </div>
-                            {field("TITLE", true, Input::new(&title).h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
-                            {field("CONTENT", true, note_editor)}
+                            {field("ICON", false, Some("20 icons available"), preset_grid)}
+                            {field("TITLE", true, None, Input::new(&title).h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
+                            {field("CONTENT", true, None, note_editor)}
                             {error}
                             <div flex_1 />
                             <div flex items_center h={px(42.)} px={px(11.)} rounded={px(7.)} bg={theme.inset} border_1 borderColor={theme.border}>
@@ -2172,7 +2417,7 @@ impl Nox {
         let title = editor.title_input.clone();
         let username = editor.username_input.clone();
         let password = editor.password_input.clone();
-        let uris = editor.uris_input.clone();
+        let uris = editor.uri_inputs.clone();
         let notes = editor.notes_input.clone();
         let password_value = password.read(cx).value().to_string();
         let generated = editor
@@ -2574,7 +2819,98 @@ impl Nox {
 
         let error =
             save_error.map(|message| div().text_sm().text_color(theme.danger).child(message));
-        let icon_picker = self.render_icon_picker(cx);
+        let icon_picker = self.render_icon_picker(true, cx);
+        // `ztKOA` vs `VQgVd`: the edit badge and the "fetched automatically"
+        // helper belong to the resting state. Once a fetch fails, the badge
+        // gives way to an upload button that sits beside the box, because
+        // there is nothing left to fetch automatically.
+        let favicon_failed = self.favicon_fetch_status() == FaviconFetchStatus::Failed;
+        let upload_locker = locker.clone();
+        let current_icon = self
+            .item_editor()
+            .map_or(IconChoice::Default, |editor| editor.icon);
+        let preset_grid = icon_preset_grid(theme, locker.clone(), current_icon);
+        let login_icon_field = field(
+            "ICON",
+            false,
+            (!favicon_failed).then_some("Fetched automatically from website"),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(10.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .child(
+                            div()
+                                .id("login-avatar-row")
+                                .size(px(64.))
+                                .relative()
+                                .child(icon_picker)
+                                .when(!favicon_failed, |this| {
+                                    this.child(
+                                        div()
+                                            .absolute()
+                                            .right(px(0.))
+                                            .bottom(px(0.))
+                                            .size(px(20.))
+                                            .rounded_full()
+                                            .border_2()
+                                            .border_color(theme.canvas)
+                                            .bg(theme.raised)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                gpui_component::Icon::empty()
+                                                    .path("icons/image-plus.svg")
+                                                    .size(px(10.))
+                                                    .text_color(theme.text_secondary),
+                                            ),
+                                    )
+                                }),
+                        )
+                        .when(favicon_failed, |this| {
+                            this.child(
+                                Button::new("login-avatar-upload")
+                                    .h(px(34.))
+                                    .px(px(12.))
+                                    .rounded(px(8.))
+                                    .bg(theme.field)
+                                    .border_1()
+                                    .border_color(theme.field_border)
+                                    .on_click(move |_, window, app| {
+                                        upload_locker.update(app, |locker, cx| {
+                                            locker.choose_uploaded_item_icon(window, cx);
+                                        });
+                                    })
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(7.))
+                                            .child(
+                                                gpui_component::Icon::empty()
+                                                    .path("icons/upload.svg")
+                                                    .size(px(13.))
+                                                    .text_color(theme.text_secondary),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .font_weight(FontWeight(600.))
+                                                    .text_color(theme.text_soft)
+                                                    .child("Upload from device"),
+                                            ),
+                                    ),
+                            )
+                        }),
+                )
+                .child(preset_grid)
+                .into_any_element(),
+        );
 
         let form_card = div()
             .id("create-login-form")
@@ -2637,18 +2973,20 @@ impl Nox {
                         ),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(icon_picker),
-            )
+            .child(login_icon_field)
             .child(field(
                 "NAME",
                 true,
                 None,
-                dark_input_style(Input::new(&title).aria_label("Login name")).into_any_element(),
+                dark_input_style(
+                    Input::new(&title).aria_label("Login name").prefix(
+                        gpui_component::Icon::empty()
+                            .path("icons/key-round.svg")
+                            .size(px(14.))
+                            .text_color(theme.icon_muted),
+                    ),
+                )
+                .into_any_element(),
             ))
             .child(field(
                 "USERNAME",
@@ -2676,12 +3014,8 @@ impl Nox {
             .child(field(
                 "WEBSITES",
                 false,
-                Some("One per line"),
-                Textarea::new(&uris)
-                    .bg(theme.field)
-                    .border_color(theme.field)
-                    .rounded(px(8.))
-                    .into_any_element(),
+                Some("Add sign-in or app URLs"),
+                website_rows(theme, locker.clone(), uris),
             ))
             .child(field(
                 "NOTES",

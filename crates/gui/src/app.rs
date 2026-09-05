@@ -2676,6 +2676,131 @@ mod tests {
         cleanup(&path);
     }
 
+    /// `locker.pen` `S38lsY`: websites are repeatable rows. Adding appends an
+    /// empty one, every non-empty row is saved, and removing the last row
+    /// clears it instead of leaving the field with nothing to type into.
+    #[gpui::test]
+    fn website_rows_add_collect_and_never_drop_the_last_row(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "website-rows", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            assert_eq!(locker.item_editor().unwrap().uri_inputs.len(), 1);
+
+            locker.add_website_row(window, locker_cx);
+            let editor = locker.item_editor().unwrap();
+            assert_eq!(editor.uri_inputs.len(), 2);
+            let (first, second) = (editor.uri_inputs[0].clone(), editor.uri_inputs[1].clone());
+            first.update(locker_cx, |state, input_cx| {
+                state.set_value("https://one.test".to_owned(), window, input_cx)
+            });
+            second.update(locker_cx, |state, input_cx| {
+                state.set_value("https://two.test".to_owned(), window, input_cx)
+            });
+            assert_eq!(
+                locker.item_editor().unwrap().uris(locker_cx),
+                vec!["https://one.test", "https://two.test"]
+            );
+
+            locker.remove_website_row(0, window, locker_cx);
+            assert_eq!(
+                locker.item_editor().unwrap().uris(locker_cx),
+                vec!["https://two.test"]
+            );
+
+            // The last row is cleared, not removed.
+            locker.remove_website_row(0, window, locker_cx);
+            let editor = locker.item_editor().unwrap();
+            assert_eq!(editor.uri_inputs.len(), 1);
+            assert!(editor.uris(locker_cx).is_empty());
+        });
+        cleanup(&path);
+    }
+
+    /// A row added after the editor opened must get its own blur listener —
+    /// otherwise a URL typed into the second row would silently never trigger
+    /// the favicon auto-fetch that the first row does.
+    #[gpui::test]
+    fn an_added_website_row_still_auto_fetches_on_blur(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "website-row-blur", &[]);
+        let before = view.read_with(cx, |locker, _| locker.editor_blur_subscriptions.len());
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+        });
+        let opened = view.read_with(cx, |locker, _| locker.editor_blur_subscriptions.len());
+        assert_eq!(opened, before + 1, "the initial row registers one listener");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.add_website_row(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.editor_blur_subscriptions.len()),
+            opened + 1,
+            "an added row registers its own listener"
+        );
+        cleanup(&path);
+    }
+
+    /// `locker.pen` `Oh0fE`: presets are picked from an inline grid, so the
+    /// popover must no longer carry a row per preset — that list is exactly
+    /// what made the old picker a 23-row scroll.
+    #[test]
+    fn presets_live_in_the_grid_not_the_picker_menu() {
+        let source = include_str!("item_editor.rs");
+        assert!(
+            source.contains("fn icon_preset_grid("),
+            "the inline preset grid exists"
+        );
+        assert!(
+            source.contains("20 icons available"),
+            "locker.pen PIGh7 helper copy"
+        );
+        assert!(
+            !source.contains("for preset in crate::icons::ALL_PRESETS {"),
+            "the popover must not rebuild a row per preset"
+        );
+    }
+
+    /// Clicking a swatch selects that preset, and the grid reflects whatever
+    /// the editor currently holds — the selected state is the whole point of
+    /// showing the presets inline instead of behind a popover.
+    #[gpui::test]
+    fn choosing_a_preset_updates_the_editor_icon(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-grid-select", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor(window, locker_cx);
+            assert_eq!(
+                locker.item_editor().unwrap().icon,
+                nox_core::IconChoice::Default
+            );
+            locker.choose_item_icon(
+                nox_core::IconChoice::Preset(nox_core::PresetIcon::Globe),
+                window,
+                locker_cx,
+            );
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.item_editor().unwrap().icon),
+            nox_core::IconChoice::Preset(nox_core::PresetIcon::Globe)
+        );
+        cleanup(&path);
+    }
+
+    #[test]
+    fn login_websites_field_matches_design_copy() {
+        let source = include_str!("item_editor.rs");
+        assert!(
+            source.contains("Add sign-in or app URLs"),
+            "locker.pen S38lsY helper copy"
+        );
+        assert!(source.contains("Add website"), "locker.pen j0b4vA action");
+        assert!(
+            !source.contains("One per line"),
+            "the newline-separated textarea copy must not remain"
+        );
+    }
+
     #[gpui::test]
     fn login_editor_offers_favicon(cx: &mut TestAppContext) {
         init(cx);
@@ -2709,7 +2834,7 @@ mod tests {
         });
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let uris = locker.item_editor().unwrap().uris_input.clone();
+            let uris = locker.item_editor().unwrap().uri_inputs[0].clone();
             uris.update(locker_cx, |state, input_cx| {
                 state.set_value("https://auto.test".to_owned(), window, input_cx)
             });
@@ -2725,7 +2850,7 @@ mod tests {
         assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 1);
 
         view.update_in(cx, |locker, window, locker_cx| {
-            let uris = locker.item_editor().unwrap().uris_input.clone();
+            let uris = locker.item_editor().unwrap().uri_inputs[0].clone();
             uris.update(locker_cx, |state, input_cx| {
                 state.set_value("https://changed.test".to_owned(), window, input_cx)
             });
@@ -2751,7 +2876,7 @@ mod tests {
         view.update_in(cx, |locker, window, locker_cx| {
             locker.set_active_view(ActiveView::SecureNotes, locker_cx);
             locker.open_create_editor(window, locker_cx);
-            let uris = locker.item_editor().unwrap().uris_input.clone();
+            let uris = locker.item_editor().unwrap().uri_inputs[0].clone();
             uris.update(locker_cx, |state, input_cx| {
                 state.set_value("https://not-a-site.test".to_owned(), window, input_cx)
             });
@@ -3136,7 +3261,7 @@ mod tests {
             .expect("render_item_editor exists");
         let generic_render = &source[render_start..];
         let picker = generic_render
-            .find("let icon_picker = self.render_icon_picker(cx);")
+            .find("let icon_picker = self.render_icon_picker(false, cx);")
             .expect("generic sheet builds the icon picker");
         let title = generic_render
             .find(r#".child(field_label("Title"))"#)
@@ -3180,6 +3305,74 @@ mod tests {
             });
         }
         cleanup(&path);
+    }
+
+    #[test]
+    fn login_workspace_matches_avatar_design_before_name() {
+        let source = include_str!("item_editor.rs");
+        let render_start = source
+            .find("pub(crate) fn render_login_workspace")
+            .expect("login workspace renderer exists");
+        let login_render = &source[render_start..];
+        let avatar_label = login_render
+            .find("login-avatar-row")
+            .expect("login workspace renders the icon wrapper section");
+        let avatar_helper = login_render
+            .find("Fetched automatically from website")
+            .expect("login icon wrapper explains favicon behavior");
+        let avatar_picker = login_render
+            .find("let icon_picker = self.render_icon_picker(true, cx);")
+            .expect("login workspace builds the icon picker in avatar mode");
+        let name = login_render
+            .find("Login name")
+            .expect("login workspace renders the name input");
+        assert!(
+            avatar_label < name,
+            "icon wrapper section must render before name"
+        );
+        assert!(avatar_helper < name, "icon helper must render before name");
+        assert!(avatar_picker < name, "icon picker must render before name");
+        let name_input = login_render
+            .find("Input::new(&title).aria_label(\"Login name\").prefix(")
+            .expect("login name input uses a leading icon prefix");
+        let name_icon = login_render[name_input..]
+            .find("icons/key-round.svg")
+            .expect("login name input uses the key fallback icon");
+        assert!(
+            name_input + name_icon < name + 400,
+            "key fallback icon must be part of the name input"
+        );
+    }
+
+    /// `locker.pen` `VQgVd`: a failed favicon fetch repaints the avatar box
+    /// itself and offers the upload inline, instead of hiding both behind the
+    /// popover.
+    #[test]
+    fn failed_favicon_fetch_matches_the_upload_design() {
+        let source = include_str!("item_editor.rs");
+        for marker in [
+            "icons/image-off.svg",
+            "icons/upload.svg",
+            "login-avatar-upload",
+        ] {
+            assert!(
+                source.contains(marker),
+                "failed-fetch avatar state must render {marker}"
+            );
+        }
+    }
+
+    #[test]
+    fn icon_picker_upload_copy_matches_design() {
+        let source = include_str!("item_editor.rs");
+        assert!(
+            source.contains("Upload from device"),
+            "locker.pen ovlEl uses Upload from device copy"
+        );
+        assert!(
+            !source.contains("Upload from file"),
+            "old upload copy must not remain in the picker"
+        );
     }
 
     #[gpui::test]
@@ -3226,7 +3419,7 @@ mod tests {
         // Once the item has a URI of its own, the row fetches against it
         // directly — no inline field needed.
         view.update_in(cx, |locker, window, locker_cx| {
-            let uris = locker.item_editor().unwrap().uris_input.clone();
+            let uris = locker.item_editor().unwrap().uri_inputs[0].clone();
             uris.update(locker_cx, |state, input_cx| {
                 state.set_value("https://saved.test".to_owned(), window, input_cx)
             });
@@ -3277,13 +3470,7 @@ mod tests {
             valid_test_png()
         );
         assert!(view.read_with(cx, |locker, app| {
-            locker
-                .item_editor()
-                .unwrap()
-                .uris_input
-                .read(app)
-                .value()
-                .is_empty()
+            locker.item_editor().unwrap().uris(app).is_empty()
         }));
         cleanup(&path);
         let _ = fs::remove_dir_all(&data_dir);
@@ -3615,13 +3802,15 @@ mod tests {
         });
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let uris = locker.item_editor().unwrap().uris_input.clone();
-            uris.update(locker_cx, |state, input_cx| {
-                state.set_value(
-                    "https://dead.test\nhttps://alive.test".to_owned(),
-                    window,
-                    input_cx,
-                )
+            // Two rows, not two lines: each website gets its own input now.
+            locker.add_website_row(window, locker_cx);
+            let editor = locker.item_editor().unwrap();
+            let (first, second) = (editor.uri_inputs[0].clone(), editor.uri_inputs[1].clone());
+            first.update(locker_cx, |state, input_cx| {
+                state.set_value("https://dead.test".to_owned(), window, input_cx)
+            });
+            second.update(locker_cx, |state, input_cx| {
+                state.set_value("https://alive.test".to_owned(), window, input_cx)
             });
             locker.fetch_item_favicon(window, locker_cx);
         });

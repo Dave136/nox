@@ -54,6 +54,9 @@ pub(crate) struct Theme {
     pub(crate) field_border: Hsla,
     /// Focus rings and the selected row's outline.
     pub(crate) border_strong: Hsla,
+    /// Fill of a chosen swatch in the icon grid (`locker.pen` `Oh0fE`) — a
+    /// lifted, slightly blue surface that reads as "picked" next to `field`.
+    pub(crate) field_selected: Hsla,
 
     /// Primary reading color.
     pub(crate) text: Hsla,
@@ -126,6 +129,7 @@ impl Theme {
             border: rgb(0x2B3039).into(),
             field_border: rgb(0x353C47).into(),
             border_strong: rgb(0x525B69).into(),
+            field_selected: rgb(0x26313D).into(),
 
             text: rgb(0xE5E8F0).into(),
             text_soft: rgb(0xD9DEE7).into(),
