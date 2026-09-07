@@ -1593,6 +1593,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             icon: nox_core::IconChoice::Default,
+            note_color: nox_core::NoteColor::Blue,
         }
     }
 

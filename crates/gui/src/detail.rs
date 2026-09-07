@@ -15,7 +15,7 @@ use gpui_component::{
     Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
 };
-use nox_core::ItemType;
+use nox_core::{ItemType, NoteColor};
 
 impl Nox {
     pub(crate) fn render_item_detail(
@@ -77,7 +77,12 @@ impl Nox {
                 local_selection,
             ),
             18.,
-            accent,
+            if payload.item_type == ItemType::SecureNote && payload.note_color != NoteColor::Neutral
+            {
+                crate::icons::note_color_hsla(payload.note_color)
+            } else {
+                accent
+            },
         );
 
         let mut body = div()
@@ -99,11 +104,15 @@ impl Nox {
                             .size(px(40.))
                             .flex_shrink_0()
                             .rounded(px(9.))
-                            .bg(if payload.item_type == ItemType::SecureNote {
-                                theme.item_icon
-                            } else {
-                                theme.raised
-                            })
+                            .bg(
+                                if payload.item_type == ItemType::SecureNote
+                                    && payload.note_color != NoteColor::Neutral
+                                {
+                                    crate::icons::note_color_wash_hsla(payload.note_color)
+                                } else {
+                                    theme.raised
+                                },
+                            )
                             .flex()
                             .items_center()
                             .justify_center()

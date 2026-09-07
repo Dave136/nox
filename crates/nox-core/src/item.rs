@@ -33,6 +33,25 @@ pub enum IconChoice {
     Favicon,
 }
 
+/// The accent color of a secure note — the fixed Pencil "Note Color Field"
+/// choices. `gui` owns each variant's hex token; this crate only names the
+/// choice.
+///
+/// `Neutral` is the "no color" state: a new note starts here and renders
+/// with the same neutral well/glyph as every other item type, until the
+/// user explicitly picks one of the accent colors below.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteColor {
+    #[default]
+    Neutral,
+    Blue,
+    Purple,
+    Orange,
+    Gold,
+    Green,
+}
+
 /// A curated, fixed set of bundled icons the user can pick per item.
 /// `gui` owns the SVG path and label for each variant — this crate only
 /// names the choice.
@@ -85,6 +104,9 @@ pub struct ItemPayload {
     /// The user's chosen icon for this item. Additive — see [`IconChoice`].
     #[serde(default)]
     pub icon: IconChoice,
+    /// The secure note's accent color. Additive — see [`IconChoice`].
+    #[serde(default)]
+    pub note_color: NoteColor,
 }
 
 /// Errors returned while encoding or decoding an item payload.
@@ -164,6 +186,7 @@ mod tests {
             created_at: 1_700_000_000_000,
             updated_at: 1_700_000_000_001,
             icon: IconChoice::Default,
+            note_color: NoteColor::Blue,
         }
     }
 
@@ -205,6 +228,40 @@ mod tests {
 
         let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
         assert_eq!(decoded.icon, IconChoice::Default);
+        assert_eq!(decoded.schema_version, ITEM_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn note_color_round_trips_through_json_for_every_variant() {
+        for note_color in [
+            NoteColor::Neutral,
+            NoteColor::Blue,
+            NoteColor::Purple,
+            NoteColor::Orange,
+            NoteColor::Gold,
+            NoteColor::Green,
+        ] {
+            let mut original = payload(ItemType::SecureNote);
+            original.note_color = note_color;
+            let encoded = original.to_json_bytes().unwrap();
+            let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
+            assert_eq!(decoded, original);
+        }
+    }
+
+    #[test]
+    fn item_json_without_a_note_color_key_defaults_to_neutral() {
+        // Stands in for a note encrypted before this field existed: its
+        // stored JSON has no `note_color` key at all, and `schema_version`
+        // is unchanged — ITEM_SCHEMA_VERSION must not bump for this field.
+        // Neutral, not a color, so an old note keeps its plain icon instead
+        // of surfacing an accent nobody chose.
+        let mut value = serde_json::to_value(payload(ItemType::SecureNote)).unwrap();
+        value.as_object_mut().unwrap().remove("note_color");
+        let encoded = serde_json::to_vec(&value).unwrap();
+
+        let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
+        assert_eq!(decoded.note_color, NoteColor::Neutral);
         assert_eq!(decoded.schema_version, ITEM_SCHEMA_VERSION);
     }
 

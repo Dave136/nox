@@ -5,8 +5,9 @@
 //! are stored under this device's private cache and referenced only by GUI
 //! state.
 
-use gpui::{AnyElement, Hsla, IntoElement, ParentElement, Styled, div, px};
-use nox_core::{IconChoice, ItemPayload, ItemType, PresetIcon};
+use crate::theme::Theme;
+use gpui::{AnyElement, Hsla, IntoElement, ParentElement, Styled, div, px, rgb};
+use nox_core::{IconChoice, ItemPayload, ItemType, NoteColor, PresetIcon};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -201,6 +202,58 @@ pub(crate) fn resolved_item_icon(
         item_key,
         local_selection,
     )
+}
+
+/// The secure-note accent choices from the Pencil "Note Color Field"
+/// (`locker.pen` `HFk8V`/`x8fus6`), in the field's left-to-right order.
+/// `Neutral` leads the row: it is the "no color" reset, not one of the
+/// designed accents.
+pub(crate) const NOTE_COLOR_CHOICES: [NoteColor; 6] = [
+    NoteColor::Neutral,
+    NoteColor::Blue,
+    NoteColor::Purple,
+    NoteColor::Orange,
+    NoteColor::Gold,
+    NoteColor::Green,
+];
+
+/// The exact Pencil hex token for each [`NoteColor`] variant, except
+/// `Neutral`, which has no Pencil token — it borrows the app's own neutral
+/// well color so the swatch previews the plain, uncolored icon it resets to.
+pub(crate) fn note_color_hsla(color: NoteColor) -> Hsla {
+    match color {
+        NoteColor::Neutral => Theme::cipher_midnight().raised,
+        NoteColor::Blue => rgb(0x4A9FD8).into(),
+        NoteColor::Purple => rgb(0x9B7BD7).into(),
+        NoteColor::Orange => rgb(0xD98B60).into(),
+        NoteColor::Gold => rgb(0xD2B45B).into(),
+        NoteColor::Green => rgb(0x58A887).into(),
+    }
+}
+
+/// Glyph color on a colored note well — white, matching Pencil's colored
+/// tiles (e.g. the brand mark's white shield on `#4A9FD8`).
+pub(crate) const NOTE_COLOR_GLYPH: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 1.0,
+    a: 1.0,
+};
+
+/// A muted well behind a note's icon glyph: same hue as [`note_color_hsla`],
+/// darkened and desaturated so the vivid glyph painted on top of it reads
+/// clearly instead of blending in. A vivid-on-vivid well (the previous
+/// behavior) measures under 2:1 contrast against a grey glyph; this pairing
+/// measures 4.7–6.6:1 for every [`NoteColor`], clearing WCAG's 3:1 non-text
+/// minimum with room to spare.
+pub(crate) fn note_color_wash_hsla(color: NoteColor) -> Hsla {
+    let vivid = note_color_hsla(color);
+    Hsla {
+        h: vivid.h,
+        s: vivid.s * 0.5,
+        l: 0.16,
+        a: 1.0,
+    }
 }
 
 /// Render every resolver variant. The unavailable branch is intentionally
@@ -452,6 +505,49 @@ pub(crate) fn persist_local_selections(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WCAG relative luminance, then the standard (L1+0.05)/(L2+0.05) ratio.
+    fn contrast_ratio(a: Hsla, b: Hsla) -> f32 {
+        fn luminance(color: Hsla) -> f32 {
+            let rgba = color.to_rgb();
+            let channel = |c: f32| {
+                if c <= 0.03928 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(rgba.r) + 0.7152 * channel(rgba.g) + 0.0722 * channel(rgba.b)
+        }
+        let (l1, l2) = (luminance(a), luminance(b));
+        let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn note_color_wash_holds_contrast_against_its_vivid_glyph() {
+        // A note's icon well paints `note_color_wash_hsla` behind a glyph
+        // colored with the vivid `note_color_hsla` (see vault_list.rs /
+        // detail.rs) — the fix for a glyph that used to render in flat grey,
+        // never reflecting the selected color. WCAG's non-text minimum is
+        // 3:1; require every choice to clear it with margin.
+        //
+        // `Neutral` is excluded: it never reaches this pairing in
+        // production (render sites fall back to the same neutral well every
+        // other item type uses instead), and its `note_color_hsla` is
+        // already near-black, so pairing it with its own wash formula would
+        // measure a meaningless near-1:1 ratio.
+        for color in NOTE_COLOR_CHOICES
+            .into_iter()
+            .filter(|c| *c != NoteColor::Neutral)
+        {
+            let ratio = contrast_ratio(note_color_hsla(color), note_color_wash_hsla(color));
+            assert!(
+                ratio >= 4.5,
+                "{color:?} glyph/well contrast is only {ratio:.2}:1"
+            );
+        }
+    }
 
     fn temp_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

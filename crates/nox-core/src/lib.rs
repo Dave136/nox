@@ -23,7 +23,7 @@ pub use clock::{
 };
 pub use ids::{ChangeId, DeviceId, ItemId, PublicKeyBytes, PublicKeyLengthError, VaultId};
 pub use item::{
-    ITEM_SCHEMA_VERSION, IconChoice, ItemPayload, ItemPayloadError, ItemType, PresetIcon,
+    ITEM_SCHEMA_VERSION, IconChoice, ItemPayload, ItemPayloadError, ItemType, NoteColor, PresetIcon,
 };
 pub use journal::{
     ApplyResult, BatchApplyResult, Change, CursorMap, JournalError, MAX_BATCH_PLAINTEXT_BYTES,
@@ -296,6 +296,7 @@ mod task7_tests {
                 created_at: 1,
                 updated_at: 1,
                 icon: IconChoice::Default,
+                note_color: NoteColor::Blue,
             })
             .unwrap();
         let request = vault
@@ -376,6 +377,7 @@ mod task7_tests {
                 created_at: 1,
                 updated_at: 1,
                 icon: IconChoice::Default,
+                note_color: NoteColor::Blue,
             })
             .unwrap();
         source_vault
@@ -398,6 +400,7 @@ mod task7_tests {
                 created_at: 1,
                 updated_at: 1,
                 icon: IconChoice::Default,
+                note_color: NoteColor::Blue,
             })
             .unwrap();
         destination_vault.lock();

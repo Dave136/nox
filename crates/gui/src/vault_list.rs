@@ -15,7 +15,7 @@ use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
 };
-use nox_core::{ItemId, ItemPayload, ItemType, VaultError};
+use nox_core::{ItemId, ItemPayload, ItemType, NoteColor, VaultError};
 use std::collections::HashSet;
 
 use crate::assets::{IconName, icon};
@@ -483,6 +483,7 @@ fn item_row_content(
     third_column: (String, Hsla),
     updated: String,
     selected: bool,
+    icon_bg_override: Option<Hsla>,
 ) -> AnyElement {
     let (third_label, third_color) = third_column;
     // Matches the Pencil frame's selected-row treatment: the icon box
@@ -490,7 +491,7 @@ fn item_row_content(
     let icon_bg = if selected {
         theme.item_icon_selected
     } else {
-        theme.item_icon
+        icon_bg_override.unwrap_or(theme.item_icon)
     };
     div()
         .flex()
@@ -1088,7 +1089,13 @@ impl Nox {
                             local_selection,
                         ),
                         15.,
-                        theme.text_secondary,
+                        if payload.item_type == ItemType::SecureNote
+                            && payload.note_color != NoteColor::Neutral
+                        {
+                            crate::icons::note_color_hsla(payload.note_color)
+                        } else {
+                            theme.text_secondary
+                        },
                     );
                     let updated = crate::app::relative_time(payload.updated_at);
                     let (subtitle, third_column) = if is_logins_view {
@@ -1112,6 +1119,9 @@ impl Nox {
                         third_column,
                         updated,
                         selected,
+                        (payload.item_type == ItemType::SecureNote
+                            && payload.note_color != NoteColor::Neutral)
+                            .then(|| crate::icons::note_color_wash_hsla(payload.note_color)),
                     );
                     let (bg, hover_bg) = if selected {
                         (theme.raised, theme.raised)
@@ -1289,6 +1299,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             icon: nox_core::IconChoice::Default,
+            note_color: nox_core::NoteColor::Blue,
         }
     }
 

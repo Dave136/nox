@@ -3,7 +3,7 @@ use crate::nav::ActiveView;
 use crate::theme::Theme;
 use gpui::{
     AnyElement, App, Context, Entity, Focusable, FontWeight, PathPromptOptions, SharedString,
-    Window, div, prelude::*, px,
+    Window, div, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
@@ -17,7 +17,7 @@ use gpui_component::{
 use gpui_rsx::rsx;
 use nox_core::{
     CharClasses, ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType, MAX_LENGTH,
-    Password, Vault, VaultError, generate_password,
+    NoteColor, Password, Vault, VaultError, generate_password,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -50,6 +50,18 @@ fn sheet_title(mode: EditorMode, item_type: ItemType) -> &'static str {
         (EditorMode::Edit(_), ItemType::Login) => "Edit login",
         (EditorMode::Edit(_), ItemType::SecureNote) => "Edit secure note",
         (EditorMode::Restore(_), _) => "Restore item",
+    }
+}
+
+/// Stable element id for one note color swatch in the secure-note workspace.
+fn note_color_element_id(color: NoteColor) -> &'static str {
+    match color {
+        NoteColor::Neutral => "note-color-neutral",
+        NoteColor::Blue => "note-color-blue",
+        NoteColor::Purple => "note-color-purple",
+        NoteColor::Orange => "note-color-orange",
+        NoteColor::Gold => "note-color-gold",
+        NoteColor::Green => "note-color-green",
     }
 }
 
@@ -90,6 +102,8 @@ pub(crate) struct ItemEditorState {
     pub(crate) mode: EditorMode,
     pub(crate) item_type: ItemType,
     pub(crate) icon: IconChoice,
+    /// The secure note's accent color (`locker.pen` "Note Color Field").
+    pub(crate) note_color: NoteColor,
     pub(crate) local_icon: Option<crate::icons::LocalIconRef>,
     pub(crate) title_input: Entity<InputState>,
     pub(crate) username_input: Entity<InputState>,
@@ -718,6 +732,7 @@ impl ItemEditorState {
             mode: EditorMode::Create,
             item_type: ItemType::Login,
             icon: IconChoice::Default,
+            note_color: NoteColor::default(),
             local_icon: None,
             title_input,
             username_input,
@@ -792,6 +807,7 @@ impl ItemEditorState {
             created_at: self.created_at,
             updated_at: now_millis(),
             icon: self.icon,
+            note_color: self.note_color,
         }
     }
 
@@ -837,6 +853,7 @@ impl ItemEditorState {
         editor.mode = mode;
         editor.item_type = payload.item_type;
         editor.icon = payload.icon;
+        editor.note_color = payload.note_color;
         editor.created_at = payload.created_at;
         editor.title_input.update(cx, |state, input_cx| {
             state.set_value(payload.title, window, input_cx)
@@ -894,6 +911,7 @@ impl ItemEditorState {
             created_at: self.created_at,
             updated_at: now_millis(),
             icon: self.icon,
+            note_color: self.note_color,
         }
     }
 }
@@ -997,6 +1015,14 @@ impl Nox {
                 })
             ),
             _ => false,
+        }
+    }
+
+    /// Set the secure note's accent color (`locker.pen` "Note Color Field").
+    pub(crate) fn choose_note_color(&mut self, color: NoteColor, cx: &mut Context<Self>) {
+        if let Some(editor) = self.item_editor_mut() {
+            editor.note_color = color;
+            cx.notify();
         }
     }
 
@@ -1446,18 +1472,25 @@ impl Nox {
     fn render_icon_picker(&mut self, avatar: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let data_dir = self.data_dir.clone();
-        let (item_type, current_icon, _uris, _favicon_url_input) = self
+        let (item_type, current_icon, note_color, _uris, _favicon_url_input) = self
             .session()
             .and_then(|session| session.item_editor.as_ref())
             .map(|editor| {
                 (
                     editor.item_type,
                     editor.icon,
+                    editor.note_color,
                     editor.uris(cx),
                     Some(editor.favicon.url_input.clone()),
                 )
             })
-            .unwrap_or((ItemType::Login, IconChoice::Default, Vec::new(), None));
+            .unwrap_or((
+                ItemType::Login,
+                IconChoice::Default,
+                NoteColor::default(),
+                Vec::new(),
+                None,
+            ));
 
         // The trigger is the one spot that actually shows a chosen favicon
         // as an image — it's the direct feedback for "did my pick work?".
@@ -1487,6 +1520,19 @@ impl Nox {
         } else {
             (px(14.), px(18.), px(4.), theme.text_secondary)
         };
+        // The secure-note chip is the only icon preview living in the note
+        // editor itself: it's the direct answer to "what will my note's icon
+        // actually look like?" as the Note Color swatches are clicked, so it
+        // has to carry the chosen color live rather than staying the fixed
+        // neutral grey every other item's chip uses.
+        let note_tint = (item_type == ItemType::SecureNote && note_color != NoteColor::Neutral)
+            .then_some(note_color);
+        let icon_color = note_tint.map_or(icon_color, crate::icons::note_color_hsla);
+        let chip_bg = note_tint.map_or(theme.raised, crate::icons::note_color_wash_hsla);
+        // The chip's ring matches the glyph stroke, not a separate accent —
+        // otherwise the border reads as an unrelated color next to the icon
+        // it's supposed to be framing.
+        let chip_border = note_tint.map_or(theme.field_border, crate::icons::note_color_hsla);
         let trigger_child: AnyElement = if fetch_failed {
             gpui_component::Icon::empty()
                 .path("icons/image-off.svg")
@@ -1527,7 +1573,9 @@ impl Nox {
             Button::new("item-icon-picker-trigger")
                 .size(px(28.))
                 .rounded(px(8.))
-                .bg(theme.raised)
+                .bg(chip_bg)
+                .border_1()
+                .border_color(chip_border)
                 .child(trigger_child)
         };
 
@@ -2444,6 +2492,106 @@ impl Nox {
                     .text_color(theme.icon_muted),
             )
         };
+        // Pencil "Note Color Field" (`HFk8V`): five 28x28 circular swatches
+        // with a 10px gap; the selected swatch carries a 2px ring and a
+        // white check, matching the selected Color Option 1 treatment.
+        let note_color = editor.note_color;
+        let note_color_locker = locker.clone();
+        let color_swatches = crate::icons::NOTE_COLOR_CHOICES
+            .into_iter()
+            .map(|color| {
+                let selected = color == note_color;
+                let swatch_locker = note_color_locker.clone();
+                div()
+                    .id(note_color_element_id(color))
+                    .size(px(28.))
+                    .rounded(px(14.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .bg(crate::icons::note_color_hsla(color))
+                    .when(selected, |swatch| {
+                        swatch.border_2().border_color(rgb(0xD9ECF8)).child(
+                            Icon::empty()
+                                .path("icons/check.svg")
+                                .size(px(13.))
+                                .text_color(crate::icons::NOTE_COLOR_GLYPH),
+                        )
+                    })
+                    .when(!selected, |swatch| {
+                        swatch.border_1().border_color(gpui::transparent_black())
+                    })
+                    .hover(|style| style.opacity(0.9))
+                    .on_click(move |_, _window, app| {
+                        swatch_locker.update(app, |locker, cx| {
+                            locker.choose_note_color(color, cx);
+                        });
+                    })
+            })
+            .collect::<Vec<_>>();
+        let note_color_card = div()
+            .id("note-color-card")
+            .flex()
+            .flex_col()
+            .p(px(20.))
+            .gap(px(14.))
+            .rounded(px(9.))
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .child(
+                        div()
+                            .size(px(30.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(7.))
+                            .bg(theme.raised)
+                            .child(
+                                Icon::empty()
+                                    .path("icons/palette.svg")
+                                    .size(px(15.))
+                                    .text_color(theme.text_secondary),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text)
+                                    .child("Note color"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(9.))
+                                    .text_color(theme.text_ghost)
+                                    .child("Pick an accent for this note"),
+                            ),
+                    ),
+            )
+            .child(field(
+                "COLOR",
+                false,
+                None,
+                div()
+                    .id("note-color-options")
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .children(color_swatches)
+                    .into_any_element(),
+            ));
         let note_editor = div()
             .flex()
             .flex_col()
@@ -2606,6 +2754,7 @@ impl Nox {
                             </div>
                         </div>
                         <div flex flex_col flex_1 min_w={px(0.)} h_full gap={px(14.)}>
+                            {note_color_card}
                             <div flex flex_col p={px(20.)} gap={px(14.)} rounded={px(9.)} bg={theme.surface} border_1 borderColor={theme.border}>
                                 <div flex items_center justify_between>
                                     <div flex items_center gap={px(9.)}>
@@ -3715,6 +3864,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             icon: IconChoice::Default,
+            note_color: NoteColor::Blue,
         }
     }
 
@@ -3767,5 +3917,54 @@ mod tests {
         assert!(source.contains("\"generate-password-trigger-row\""));
         assert!(source.contains("\"generated-password-preview\""));
         assert!(source.contains("Generated locally"));
+    }
+
+    /// The secure-note workspace renders one swatch per Pencil "Note Color
+    /// Field" choice (`locker.pen` `HFk8V`/`x8fus6`) with the exact tokens, and
+    /// the chosen color flows into the encrypted payload and back out on edit.
+    #[test]
+    fn secure_note_workspace_has_pencil_note_color_swatches() {
+        let source = include_str!("item_editor.rs");
+        for swatch in [
+            "note-color-neutral",
+            "note-color-blue",
+            "note-color-purple",
+            "note-color-orange",
+            "note-color-gold",
+            "note-color-green",
+        ] {
+            assert!(
+                source.contains(&format!("\"{swatch}\"")),
+                "the workspace must render swatch {swatch}"
+            );
+        }
+        assert!(source.contains("note-color-options"));
+        assert!(source.contains("fn choose_note_color("));
+        assert!(source.contains("note_color: self.note_color"));
+        assert!(source.contains("editor.note_color = payload.note_color"));
+
+        // The note's own icon chip (top of "Note details") is the only icon
+        // preview living inside the editor itself, so clicking a swatch has
+        // to visibly retint it live — otherwise picking a color has no
+        // visible result until the note is saved and viewed elsewhere.
+        assert!(source.contains("let note_tint = (item_type == ItemType::SecureNote"));
+        assert!(source.contains(".bg(chip_bg)"));
+        // The chip's border rings the icon in its own stroke color, not a
+        // separate/default accent.
+        assert!(source.contains(".border_color(chip_border)"));
+
+        // The five Pencil hex tokens live with the shared render helpers.
+        let icons = include_str!("icons.rs");
+        for token in ["0x4A9FD8", "0x9B7BD7", "0xD98B60", "0xD2B45B", "0x58A887"] {
+            assert!(
+                icons.contains(token),
+                "missing Pencil note color token {token}"
+            );
+        }
+        // Stored colors reach the list and detail icon wells.
+        let vault_list = include_str!("vault_list.rs");
+        assert!(vault_list.contains("note_color_hsla(payload.note_color)"));
+        let detail = include_str!("detail.rs");
+        assert!(detail.contains("note_color_hsla(payload.note_color)"));
     }
 }

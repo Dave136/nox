@@ -2352,6 +2352,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             icon: IconChoice::Default,
+            note_color: nox_core::NoteColor::Blue,
         };
         view.update_in(cx, |locker, window, locker_cx| {
             locker.state = unlocked_state(vault, window, locker_cx);
@@ -2395,6 +2396,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             icon: IconChoice::Default,
+            note_color: nox_core::NoteColor::Blue,
         }
     }
 
@@ -2538,6 +2540,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             icon: IconChoice::Default,
+            note_color: nox_core::NoteColor::Blue,
         }];
         let (view, cx, path, _) = unlocked_view(cx, "secure-note-content-search", &payloads);
         view.update_in(cx, |locker, _window, locker_cx| {
@@ -2673,6 +2676,46 @@ mod tests {
             locker.open_create_editor(window, locker_cx);
         });
         assert!(view.read_with(cx, |locker, _| !locker.icon_picker_offers_favicon()));
+        cleanup(&path);
+    }
+
+    /// Choosing a note color updates the editor state, and saving persists the
+    /// chosen color onto the encrypted payload — `get_item` hydrates the exact
+    /// variant the workspace picked.
+    #[gpui::test]
+    fn note_color_selection_saves_to_the_payload(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "note-color", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor_as(nox_core::ItemType::SecureNote, window, locker_cx);
+            locker.choose_note_color(nox_core::NoteColor::Gold, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .note_color),
+            nox_core::NoteColor::Gold
+        );
+        view.update_in(cx, |locker, window, locker_cx| {
+            let editor = locker.session().unwrap().item_editor.as_ref().unwrap();
+            editor.title_input.update(locker_cx, |state, input_cx| {
+                state.set_value("Recovery codes".to_owned(), window, input_cx)
+            });
+            editor.notes_input.update(locker_cx, |state, input_cx| {
+                state.set_value("amber-galaxy".to_owned(), window, input_cx)
+            });
+            locker.save_item(window, locker_cx);
+        });
+        let persisted = view.read_with(cx, |locker, _| {
+            let session = locker.session().unwrap();
+            let (id, _) = *session.list.items.first().unwrap();
+            session.vault.get_item(id).unwrap().unwrap()
+        });
+        assert_eq!(persisted.note_color, nox_core::NoteColor::Gold);
         cleanup(&path);
     }
 
@@ -4034,6 +4077,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             icon: IconChoice::Default,
+            note_color: nox_core::NoteColor::Blue,
         };
         let (view, cx, path, ids) = unlocked_view(cx, "note-edit-workspace", &[payload]);
         let item_id = ids[0];

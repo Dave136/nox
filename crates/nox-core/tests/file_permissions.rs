@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
 use nox_core::{
-    Ed25519Keypair, ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType, Operation,
-    SecretKey, Vault, VaultId, export_to_path, restore_from_path, storage::Db,
+    Ed25519Keypair, ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType, NoteColor,
+    Operation, SecretKey, Vault, VaultId, export_to_path, restore_from_path, storage::Db,
 };
 use std::{
     fs, io,
@@ -240,6 +240,7 @@ fn login_payload() -> ItemPayload {
         created_at: 1,
         updated_at: 1,
         icon: IconChoice::Default,
+        note_color: NoteColor::Blue,
     }
 }
 
