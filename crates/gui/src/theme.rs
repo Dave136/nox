@@ -52,6 +52,10 @@ pub(crate) struct Theme {
     pub(crate) border: Hsla,
     /// Border of a field — heavier than `border`, lighter than focus.
     pub(crate) field_border: Hsla,
+    /// Border of a compound "smart" field and its embedded action, e.g. the
+    /// login password input and its Regenerate control (`locker.pen`
+    /// `vODLm`) — a touch lighter than `field_border`.
+    pub(crate) smart_field_border: Hsla,
     /// Focus rings and the selected row's outline.
     pub(crate) border_strong: Hsla,
     /// Fill of a chosen swatch in the icon grid (`locker.pen` `Oh0fE`) — a
@@ -128,6 +132,7 @@ impl Theme {
 
             border: rgb(0x2B3039).into(),
             field_border: rgb(0x353C47).into(),
+            smart_field_border: rgb(0x3A414D).into(),
             border_strong: rgb(0x525B69).into(),
             field_selected: rgb(0x26313D).into(),
 

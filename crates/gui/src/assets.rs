@@ -159,3 +159,19 @@ impl AssetSource for Assets {
         Ok(names)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ICONS;
+
+    #[test]
+    fn embedded_icon_svgs_do_not_contain_vue_scoped_attributes() {
+        for (path, bytes) in ICONS {
+            let svg = std::str::from_utf8(bytes).expect("embedded icon SVG should be UTF-8");
+            assert!(
+                !svg.contains("data-v-"),
+                "{path} contains a Vue scoped data-v attribute that GPUI does not render"
+            );
+        }
+    }
+}

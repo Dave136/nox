@@ -12,6 +12,7 @@ use gpui_component::{
     input::{Input, InputState, Textarea, TextareaState},
     popover::Popover,
     radio::{Radio, RadioGroup},
+    switch::Switch,
 };
 use gpui_rsx::rsx;
 use nox_core::{
@@ -1995,14 +1996,23 @@ impl Nox {
             .content(move |_popover, _window, _cx| {
                 let preview = generated.clone().unwrap_or_else(|| "Click Generate".into());
                 div()
-                    .p(px(12.))
-                    .w(px(240.))
+                    .id("password-generator-panel")
+                    .p(px(16.))
+                    .w(px(272.))
                     .flex()
                     .flex_col()
-                    .gap(px(10.))
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Password generator")
+                    .gap(px(12.))
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(theme.field_border)
+                    .bg(theme.surface)
+                    .text_color(theme.text)
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight(650.))
+                            .child("Password generator"),
+                    )
                     .child(Input::new(&length_input))
                     .child(
                         div()
@@ -2585,7 +2595,7 @@ impl Nox {
                                     </div>
                                 </div>
                             </div>
-                            {field("TITLE", true, None, Input::new(&title).h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
+                            {field("TITLE", true, None, Input::new(&title).min_h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
                             {field("CONTENT", true, None, note_editor)}
                             {error}
                             <div flex_1 />
@@ -2834,7 +2844,11 @@ impl Nox {
         };
         let dark_input_style = |input: Input| {
             input
-                .h(px(42.))
+                // `min_h`, not `h`: `Input::h` is an inherent method that only
+                // reaches the element for multi-line inputs, so a single-line
+                // field silently keeps gpui-component's 32px `input_h(size)`.
+                // The `Styled` height lands in `refine_style`, which wins.
+                .min_h(px(42.))
                 .bg(theme.field)
                 .border_color(theme.field)
                 .rounded(px(8.))
@@ -2844,22 +2858,61 @@ impl Nox {
         let generate_use_locker = locker.clone();
         let generate_run_locker = locker.clone();
         let generate_class_locker = locker.clone();
-        let class_checkbox = move |id: &'static str, label: &'static str, class: CharClasses| {
+        let generate_label = if password.read(cx).value().is_empty() {
+            "Generate"
+        } else {
+            "Regenerate"
+        };
+        let class_switch = move |id: &'static str,
+                                 label: &'static str,
+                                 sample: &'static str,
+                                 class: CharClasses| {
             let locker = generate_class_locker.clone();
-            Checkbox::new(id)
-                .label(label)
-                .checked(classes.contains(class))
-                .on_click(move |checked, _, app| {
-                    locker.update(app, |locker, cx| {
-                        locker.set_generator_class(class, *checked, cx)
-                    });
-                })
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .h(px(20.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight(550.))
+                                .text_color(theme.text_soft)
+                                .child(label),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(9.))
+                                .text_color(theme.text_ghost)
+                                .child(sample),
+                        ),
+                )
+                .child(
+                    Switch::new(id)
+                        .checked(classes.contains(class))
+                        .color(theme.border_strong)
+                        .on_click(move |checked, _, app| {
+                            locker.update(app, |locker, cx| {
+                                locker.set_generator_class(class, *checked, cx)
+                            });
+                        }),
+                )
         };
         let generate_trigger = Button::new("generate-password-trigger")
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(theme.raised)
+                    .hover(theme.row_hover),
+            )
+            .border_color(theme.smart_field_border)
             .h(px(28.))
-            .px(px(10.))
+            .px(px(8.))
             .rounded(px(6.))
-            .bg(theme.text)
             .child(
                 div()
                     .flex()
@@ -2867,69 +2920,123 @@ impl Nox {
                     .gap(px(6.))
                     .child(
                         gpui_component::Icon::empty()
-                            .path("icons/wand-sparkles.svg")
+                            .path("icons/refresh-cw.svg")
                             .size(px(12.))
-                            .text_color(theme.canvas),
+                            .text_color(theme.text_secondary),
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight(500.))
-                            .text_color(theme.canvas)
-                            .child("Generate"),
+                            .text_size(px(9.))
+                            .font_weight(FontWeight(600.))
+                            .text_color(theme.text_secondary)
+                            .child(generate_label),
                     ),
             );
         let generator_popover = Popover::new("create-login-password-generator")
+            // The panel below already paints the card. Without this the
+            // component wraps it in a second bordered surface.
+            .appearance(false)
             .trigger(generate_trigger)
             .open(generator_open)
             .on_open_change(move |open, _, app| {
                 generate_open_locker.update(app, |locker, cx| locker.set_generator_open(*open, cx));
             })
             .content(move |_popover, _window, _cx| {
-                let preview = generated.clone().unwrap_or_else(|| "Click Generate".into());
                 div()
-                    .p(px(12.))
-                    .w(px(240.))
+                    .id("password-generator-panel")
+                    .p(px(20.))
+                    .w(px(320.))
                     .flex()
                     .flex_col()
-                    .gap(px(10.))
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Password generator")
-                    .child(Input::new(&length_input))
+                    .gap(px(16.))
+                    .rounded(px(14.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface)
+                    .text_color(theme.text)
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight(650.))
+                            .child("Password generator"),
+                    )
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(4.))
-                            .font_weight(FontWeight::NORMAL)
-                            .child(class_checkbox(
-                                "cl-generator-lower",
-                                "Lowercase",
-                                CharClasses::LOWER,
-                            ))
-                            .child(class_checkbox(
-                                "cl-generator-upper",
-                                "Uppercase",
-                                CharClasses::UPPER,
-                            ))
-                            .child(class_checkbox(
-                                "cl-generator-digits",
-                                "Digits",
-                                CharClasses::DIGITS,
-                            ))
-                            .child(class_checkbox(
-                                "cl-generator-symbols",
-                                "Symbols",
-                                CharClasses::SYMBOLS,
-                            )),
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(8.))
+                                    .font_weight(FontWeight(700.))
+                                    .text_color(theme.icon_muted)
+                                    .child("LENGTH"),
+                            )
+                            .child(
+                                Input::new(&length_input)
+                                    .aria_label("Password length")
+                                    .min_h(px(40.))
+                                    .px(px(14.))
+                                    .bg(theme.field)
+                                    .border_color(theme.field_border)
+                                    .rounded(px(8.)),
+                            ),
                     )
                     .child(
                         div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(12.))
                             .font_weight(FontWeight::NORMAL)
-                            .truncate()
-                            .child(preview),
+                            .child(class_switch(
+                                "cl-generator-lower",
+                                "Lowercase",
+                                "a–z",
+                                CharClasses::LOWER,
+                            ))
+                            .child(class_switch(
+                                "cl-generator-upper",
+                                "Uppercase",
+                                "A–Z",
+                                CharClasses::UPPER,
+                            ))
+                            .child(class_switch(
+                                "cl-generator-digits",
+                                "Digits",
+                                "0–9",
+                                CharClasses::DIGITS,
+                            ))
+                            .child(class_switch(
+                                "cl-generator-symbols",
+                                "Symbols",
+                                "!@#$",
+                                CharClasses::SYMBOLS,
+                            )),
                     )
+                    // The hint only stands in until there is something to show:
+                    // a generator whose result is invisible until you commit it
+                    // is asking you to accept a password sight unseen.
+                    .child(match generated.clone() {
+                        Some(value) => div()
+                            .id("generated-password-preview")
+                            .px(px(12.))
+                            .py(px(10.))
+                            .rounded(px(8.))
+                            .bg(theme.inset)
+                            .border_1()
+                            .border_color(theme.field_border)
+                            .text_size(px(11.))
+                            .font_weight(FontWeight(550.))
+                            .text_color(theme.text_soft)
+                            .child(SharedString::from(value))
+                            .into_any_element(),
+                        None => div()
+                            .text_size(px(9.5))
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(theme.text_ghost)
+                            .child("Click Generate to create a new password")
+                            .into_any_element(),
+                    })
                     .child(
                         div()
                             .flex()
@@ -2937,8 +3044,16 @@ impl Nox {
                             .child(
                                 Button::new("cl-regenerate-password")
                                     .outline()
-                                    .small()
-                                    .label("Generate")
+                                    .h(px(36.))
+                                    .flex_1()
+                                    .border_color(theme.field_border)
+                                    .text_color(theme.text_soft)
+                                    .child(
+                                        div()
+                                            .text_size(px(10.5))
+                                            .font_weight(FontWeight(600.))
+                                            .child("Generate"),
+                                    )
                                     .disabled(classes.is_empty())
                                     .on_click({
                                         let locker = generate_run_locker.clone();
@@ -2952,8 +3067,15 @@ impl Nox {
                             .child(
                                 Button::new("cl-use-generated-password")
                                     .primary()
-                                    .small()
-                                    .label("Use this password")
+                                    .h(px(36.))
+                                    .flex_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(10.5))
+                                            .font_weight(FontWeight(650.))
+                                            .child("Use this password"),
+                                    )
+                                    .disabled(generated.is_none())
                                     .on_click({
                                         let locker = generate_use_locker.clone();
                                         move |_, window, app| {
@@ -3227,23 +3349,54 @@ impl Nox {
                 Some("Click row later to copy"),
                 dark_input_style(Input::new(&username).aria_label("Username")).into_any_element(),
             ))
-            .child(field(
-                "PASSWORD",
-                true,
-                None,
+            .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap(px(8.))
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(8.))
+                                    .font_weight(FontWeight(700.))
+                                    .text_color(theme.icon_muted)
+                                    .child("PASSWORD"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(8.))
+                                    .text_color(theme.success)
+                                    .child("Generated locally"),
+                            ),
+                    )
                     .child(
                         dark_input_style(
-                            Input::new(&password).mask_toggle().aria_label("Password"),
+                            Input::new(&password)
+                                .mask_toggle()
+                                .aria_label("Password")
+                                .prefix(
+                                    gpui_component::Icon::empty()
+                                        .path("icons/lock.svg")
+                                        .size(px(14.))
+                                        .text_color(theme.icon_muted),
+                                ),
                         )
-                        .flex_1(),
+                        .min_h(px(44.))
+                        .border_color(theme.smart_field_border)
+                        .rounded(px(7.)),
                     )
-                    .child(generator_popover)
-                    .into_any_element(),
-            ))
+                    .child(
+                        div()
+                            .id("generate-password-trigger-row")
+                            .flex()
+                            .justify_end()
+                            .child(generator_popover),
+                    ),
+            )
             .child(field(
                 "WEBSITES",
                 false,
@@ -3588,5 +3741,31 @@ mod tests {
         assert!(!password_is_reused("unused-password", &items));
         // Empty means "not set yet", not a reuse collision with other unset fields.
         assert!(!password_is_reused("", &items));
+    }
+
+    #[test]
+    fn create_login_generate_trigger_matches_pencil_smart_field() {
+        let source = include_str!("item_editor.rs");
+        assert!(source.contains("\"icons/refresh-cw.svg\""));
+        assert!(source.contains(
+            ".color(theme.raised)\n                    .hover(theme.row_hover),\n            )\n            .border_color(theme.smart_field_border)"
+        ));
+    }
+
+    #[test]
+    fn password_generator_popovers_use_nox_panel_chrome() {
+        let source = include_str!("item_editor.rs");
+        assert_eq!(
+            source.matches(".id(\"password-generator-panel\")").count(),
+            2
+        );
+        assert!(source.matches(".bg(theme.surface)").count() >= 2);
+        assert!(source.matches(".border_color(theme.field_border)").count() >= 2);
+        assert!(source.contains(".w(px(320.))"));
+        assert!(source.contains(".rounded(px(14.))"));
+        assert!(source.contains("Switch::new(id)"));
+        assert!(source.contains("\"generate-password-trigger-row\""));
+        assert!(source.contains("\"generated-password-preview\""));
+        assert!(source.contains("Generated locally"));
     }
 }
