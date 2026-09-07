@@ -250,6 +250,22 @@ fn extract_attribute(lower_tag: &str, original_tag: &str, name: &str) -> Option<
     None
 }
 
+/// Fetch an image the user pasted a direct URL to (the picker's Custom tab).
+///
+/// A URL typed by the user is exactly as untrusted as one derived from a site,
+/// so it goes through the same rails: http(s) only, no loopback/link-local/
+/// private targets, no redirects, capped size, and real image validation.
+pub(crate) async fn fetch_image_from_url(
+    client: &dyn HttpClient,
+    url: &str,
+) -> Result<Vec<u8>, FaviconError> {
+    let parsed = Url::parse(url.trim()).map_err(|_| FaviconError::NoUsableUri)?;
+    if !is_web_url(&parsed) || is_disallowed_favicon_target(&parsed) {
+        return Err(FaviconError::NoUsableUri);
+    }
+    fetch_image(client, parsed.as_str()).await
+}
+
 async fn fetch_image(client: &dyn HttpClient, url: &str) -> Result<Vec<u8>, FaviconError> {
     let response = fetch_capped(client, url, MAX_ICON_BYTES).await?;
     let Some(content_type) = response.content_type.as_deref() else {

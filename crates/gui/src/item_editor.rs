@@ -7,7 +7,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     checkbox::Checkbox,
     input::{Input, InputState, Textarea, TextareaState},
     popover::Popover,
@@ -66,19 +66,10 @@ pub(crate) enum FaviconFetchStatus {
 /// popover stays open and the item's icon is left exactly as it was.
 pub(crate) const FAVICON_FETCH_ERROR: &str = "Couldn't fetch a favicon for that address.";
 
-/// Shown under the picker's inline URL field. That URL is fetch input only: it
-/// is deliberately never appended to `item.uris` (the user owns that list
-/// through the URI field itself), so an item that should keep resolving this
-/// favicon after a cache clear or a sync to another device needs the address
-/// saved as a URI as well. Saying so beats letting the field imply it saved.
-pub(crate) const FAVICON_TYPED_URL_NOTE: &str =
-    "Used to find the icon only — save it as a URI to keep it.";
-
 pub(crate) struct FaviconPickerState {
     /// The URL typed into the row's inline field when the item has no saved
     /// URI. It feeds the fetch only — it is never added to `item.uris`.
     pub(crate) url_input: Entity<InputState>,
-    pub(crate) url_expanded: bool,
     pub(crate) status: FaviconFetchStatus,
     pub(crate) last_auto_fetch_uri: Option<String>,
 }
@@ -102,6 +93,13 @@ pub(crate) struct ItemEditorState {
     pub(crate) title_input: Entity<InputState>,
     pub(crate) username_input: Entity<InputState>,
     pub(crate) password_input: Entity<InputState>,
+    /// Which tab the icon popover is showing (`locker.pen` `MuIQg`/`kaJQk`).
+    pub(crate) picker_tab: IconPickerTab,
+    /// The Custom tab's direct image URL.
+    pub(crate) icon_url_input: Entity<InputState>,
+    /// Why the last icon attempt failed. Upload and URL errors used to be
+    /// discarded with `let _ =`, so an oversized file did nothing at all.
+    pub(crate) icon_error: Option<SharedString>,
     /// One input per website row, per `locker.pen` `S38lsY`. Never empty: the
     /// field always renders at least one row, so clearing the last URL leaves
     /// an empty row rather than a gap where the field used to be.
@@ -111,6 +109,15 @@ pub(crate) struct ItemEditorState {
     pub(crate) save_error: Option<SharedString>,
     pub(crate) generator: GeneratorPopoverState,
     pub(crate) favicon: FaviconPickerState,
+}
+
+/// The icon popover's two tabs (`locker.pen` `IKki7`): bundled presets, or an
+/// image the user supplies by drop, browse, or URL.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum IconPickerTab {
+    #[default]
+    Presets,
+    Custom,
 }
 
 pub(crate) fn now_millis() -> u64 {
@@ -139,40 +146,227 @@ fn input(
     entity
 }
 
-/// The icon grid from `locker.pen` `Oh0fE`: every preset laid out as 32px
-/// swatches, ten per row, with the chosen one lifted instead of hidden behind
-/// a popover. Presets live here now, so the picker popover keeps only the
-/// choices a grid can't express — Default, the site favicon, and upload.
-fn icon_preset_grid(theme: Theme, locker: Entity<Nox>, current: IconChoice) -> AnyElement {
+/// Everything the icon popover needs, snapshotted before its content builder
+/// runs (that closure cannot read `Nox` back mid-render).
+#[derive(Clone)]
+struct IconPickerSnapshot {
+    theme: Theme,
+    locker: Entity<Nox>,
+    tab: IconPickerTab,
+    current_icon: IconChoice,
+    offers_favicon: bool,
+    favicon_loading: bool,
+    has_uris: bool,
+    url_input: Option<Entity<InputState>>,
+    error: Option<SharedString>,
+}
+
+/// The icon picker from `locker.pen` `MuIQg`/`kaJQk`: a header, two tabs, the
+/// active tab's body, and a reset action.
+///
+/// Trimmed against the mock in two places, both to cut ceremony rather than
+/// capability: the "Done" button is gone because every choice already applies
+/// on click, and the favicon action moved next to the URL field, where the
+/// other network fetch lives, instead of sitting in the footer.
+fn icon_picker_popover(snapshot: IconPickerSnapshot, cx: &App) -> AnyElement {
+    let IconPickerSnapshot {
+        theme,
+        locker,
+        tab,
+        current_icon,
+        offers_favicon,
+        favicon_loading,
+        has_uris,
+        url_input,
+        error,
+    } = snapshot;
+
+    let tab_button = |id: &'static str, label: &'static str, this_tab: IconPickerTab| {
+        let active = tab == this_tab;
+        let locker = locker.clone();
+        // A segmented control, not two buttons: the inactive half has to melt
+        // into the track, so both halves take an explicit fill instead of the
+        // default variant's border-and-background chrome.
+        let (fill, hover) = if active {
+            (theme.pill_active, theme.pill_active)
+        } else {
+            (theme.inset, theme.raised)
+        };
+        Button::new(id)
+            .custom(ButtonCustomVariant::new(cx).color(fill).hover(hover))
+            .flex_1()
+            .h_full()
+            .rounded(px(6.))
+            .on_click(move |_, _window, app| {
+                locker.update(app, |locker, cx| locker.set_icon_picker_tab(this_tab, cx));
+            })
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .font_weight(FontWeight(if active { 650. } else { 550. }))
+                    .text_color(if active { theme.text } else { theme.icon_muted })
+                    .child(label),
+            )
+    };
+
+    let reset_locker = locker.clone();
+    div()
+        .id("item-icon-picker-menu")
+        .w(px(420.))
+        .flex()
+        .flex_col()
+        .gap(px(16.))
+        .p(px(20.))
+        .rounded(px(12.))
+        .border_1()
+        .border_color(theme.field_border)
+        .bg(theme.surface)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .font_weight(FontWeight(650.))
+                        .text_color(theme.text)
+                        .child("Choose an icon"),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.5))
+                        .text_color(theme.text_subtle)
+                        .child("Used to identify this login in your vault"),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .h(px(38.))
+                .flex()
+                .gap(px(4.))
+                .p(px(4.))
+                .rounded(px(8.))
+                .bg(theme.inset)
+                .child(tab_button(
+                    "icon-tab-presets",
+                    "Presets",
+                    IconPickerTab::Presets,
+                ))
+                .child(tab_button(
+                    "icon-tab-custom",
+                    "Custom",
+                    IconPickerTab::Custom,
+                )),
+        )
+        .child(match tab {
+            IconPickerTab::Presets => preset_tab_body(theme, locker.clone(), current_icon),
+            IconPickerTab::Custom => custom_tab_body(
+                theme,
+                locker.clone(),
+                url_input,
+                offers_favicon,
+                favicon_loading,
+                has_uris,
+            ),
+        })
+        .when_some(error, |this, message| {
+            this.child(
+                div()
+                    .text_size(px(9.5))
+                    .text_color(theme.danger)
+                    .child(message),
+            )
+        })
+        .child(
+            div().flex().child(
+                Button::new("icon-reset-default")
+                    .ghost()
+                    .h(px(34.))
+                    .px(px(8.))
+                    .on_click(move |_, window, app| {
+                        reset_locker.update(app, |locker, cx| {
+                            locker.choose_item_icon(IconChoice::Default, window, cx);
+                        });
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(7.))
+                            .child(
+                                gpui_component::Icon::empty()
+                                    .path("icons/rotate-ccw.svg")
+                                    .size(px(13.))
+                                    .text_color(theme.text_secondary),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(9.5))
+                                    .font_weight(FontWeight(550.))
+                                    .text_color(theme.text_secondary)
+                                    .child("Reset to default"),
+                            ),
+                    ),
+            ),
+        )
+        .into_any_element()
+}
+
+/// Presets tab (`locker.pen` `hSozh`): five per row, the chosen one outlined
+/// and check-badged so selection survives being one of twenty monochrome
+/// glyphs. Each swatch is a real `Button`, so it is reachable by keyboard and
+/// carries its own label.
+fn preset_tab_body(theme: Theme, locker: Entity<Nox>, current: IconChoice) -> AnyElement {
     div()
         .flex()
         .flex_col()
-        .gap(px(8.))
-        .children(crate::icons::ALL_PRESETS.chunks(10).map(|row| {
-            div().flex().gap(px(8.)).children(row.iter().map(|preset| {
+        .gap(px(10.))
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .text_size(px(8.))
+                        .font_weight(FontWeight(700.))
+                        .text_color(theme.icon_muted)
+                        .child("SELECT A PRESET"),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.))
+                        .text_color(theme.text_ghost)
+                        .child(match current {
+                            IconChoice::Preset(preset) => SharedString::from(format!(
+                                "{} selected",
+                                crate::icons::preset_icon_label(preset)
+                            )),
+                            IconChoice::Favicon => SharedString::from("Site favicon selected"),
+                            IconChoice::Default => SharedString::from("Default icon"),
+                        }),
+                ),
+        )
+        .children(crate::icons::ALL_PRESETS.chunks(5).map(|row| {
+            div().flex().gap(px(10.)).children(row.iter().map(|preset| {
                 let preset = *preset;
                 let selected = current == IconChoice::Preset(preset);
                 let locker = locker.clone();
-                div()
-                    .id(SharedString::from(format!("icon-swatch-{preset:?}")))
-                    .size(px(32.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(9.))
-                    .bg(if selected {
-                        theme.field_selected
+                Button::new(SharedString::from(format!("icon-preset-{preset:?}")))
+                    .flex_1()
+                    .h(px(54.))
+                    .rounded(px(8.))
+                    .bg(if selected { theme.raised } else { theme.field })
+                    .border_1()
+                    .border_color(if selected {
+                        theme.inverse
                     } else {
-                        theme.field
+                        theme.field_border
                     })
-                    .when(selected, |this| {
-                        this.border_2().border_color(theme.text_muted)
-                    })
-                    .when(!selected, |this| {
-                        this.border_1().border_color(theme.field_border)
-                    })
-                    .cursor_pointer()
-                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, app| {
+                    .tooltip(crate::icons::preset_icon_label(preset))
+                    .on_click(move |_, window, app| {
                         locker.update(app, |locker, cx| {
                             locker.choose_item_icon(IconChoice::Preset(preset), window, cx);
                         });
@@ -180,15 +374,216 @@ fn icon_preset_grid(theme: Theme, locker: Entity<Nox>, current: IconChoice) -> A
                     .child(
                         gpui_component::Icon::empty()
                             .path(crate::icons::preset_icon_path(preset))
-                            .size(px(15.))
+                            .size(px(20.))
                             .text_color(if selected {
-                                theme.text_soft
+                                theme.text
                             } else {
-                                theme.icon_muted
+                                theme.text_muted
                             }),
                     )
             }))
         }))
+        .into_any_element()
+}
+
+/// Custom tab (`locker.pen` `DU6wU`/`kIyq0`): drop a file, click to browse, or
+/// paste a direct image URL. For a Login the site's own favicon sits here too —
+/// it is the same "fetch an image off the network" family as the URL field, and
+/// putting it behind a button is what makes that fetch an explicit act.
+fn custom_tab_body(
+    theme: Theme,
+    locker: Entity<Nox>,
+    url_input: Option<Entity<InputState>>,
+    offers_favicon: bool,
+    favicon_loading: bool,
+    has_uris: bool,
+) -> AnyElement {
+    let browse_locker = locker.clone();
+    let drop_locker = locker.clone();
+    let apply_locker = locker.clone();
+    let favicon_locker = locker.clone();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .text_size(px(8.))
+                        .font_weight(FontWeight(700.))
+                        .text_color(theme.icon_muted)
+                        .child("CUSTOM ICON"),
+                )
+                .child(
+                    div()
+                        .text_size(px(8.))
+                        .text_color(theme.text_ghost)
+                        .child("PNG · SVG · JPG"),
+                ),
+        )
+        .child(
+            div()
+                .id("icon-dropzone")
+                .w_full()
+                .h(px(116.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(10.))
+                .rounded(px(9.))
+                .border_1()
+                .border_color(theme.field_border)
+                .bg(theme.inset)
+                .cursor_pointer()
+                .on_drop(move |paths: &gpui::ExternalPaths, window, app| {
+                    let paths = paths.paths().to_vec();
+                    drop_locker.update(app, |locker, cx| {
+                        locker.drop_item_icon_paths(&paths, window, cx);
+                    });
+                })
+                .on_click(move |_, window, app| {
+                    browse_locker.update(app, |locker, cx| {
+                        locker.choose_uploaded_item_icon(window, cx);
+                    });
+                })
+                .child(
+                    div()
+                        .size(px(38.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(8.))
+                        .bg(theme.raised)
+                        .child(
+                            gpui_component::Icon::empty()
+                                .path("icons/image-up.svg")
+                                .size(px(17.))
+                                .text_color(theme.text_soft),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight(600.))
+                        .text_color(theme.text_soft)
+                        .child("Drop an image here or browse"),
+                )
+                .child(
+                    div()
+                        .text_size(px(8.5))
+                        .text_color(theme.text_ghost)
+                        .child("Square images work best · 5 MB maximum"),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .text_size(px(8.))
+                        .font_weight(FontWeight(700.))
+                        .text_color(theme.icon_muted)
+                        .child("IMAGE URL"),
+                )
+                .child(
+                    div()
+                        .text_size(px(8.5))
+                        .text_color(theme.text_ghost)
+                        .child("Optional"),
+                ),
+        )
+        .when_some(url_input, |this, url_input| {
+            this.child(
+                div()
+                    .w_full()
+                    .h(px(40.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(11.))
+                    .rounded(px(7.))
+                    .border_1()
+                    .border_color(theme.field_border)
+                    .bg(theme.field)
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/link.svg")
+                            .size(px(13.))
+                            .text_color(theme.icon_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(Input::new(&url_input).appearance(false)),
+                    )
+                    .child(
+                        Button::new("icon-url-apply")
+                            .h(px(26.))
+                            .px(px(9.))
+                            .rounded(px(5.))
+                            .bg(theme.pill_active)
+                            .on_click(move |_, window, app| {
+                                apply_locker.update(app, |locker, cx| {
+                                    locker.apply_icon_url(window, cx);
+                                });
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(9.))
+                                    .font_weight(FontWeight(600.))
+                                    .text_color(theme.text_soft)
+                                    .child("Apply"),
+                            ),
+                    ),
+            )
+        })
+        .when(offers_favicon, |this| {
+            this.child(
+                Button::new("icon-use-favicon")
+                    .ghost()
+                    .h(px(30.))
+                    .px(px(8.))
+                    .disabled(!has_uris || favicon_loading)
+                    .on_click(move |_, window, app| {
+                        favicon_locker.update(app, |locker, cx| {
+                            locker.choose_item_icon(IconChoice::Favicon, window, cx);
+                            locker.fetch_item_favicon(window, cx);
+                        });
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(7.))
+                            .child(
+                                gpui_component::Icon::empty()
+                                    .path("icons/globe.svg")
+                                    .size(px(13.))
+                                    .text_color(theme.text_secondary),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(9.5))
+                                    .font_weight(FontWeight(550.))
+                                    .text_color(theme.text_secondary)
+                                    .child(if favicon_loading {
+                                        "Fetching the site icon…"
+                                    } else if has_uris {
+                                        "Use the site's favicon"
+                                    } else {
+                                        "Add a website first to use its favicon"
+                                    }),
+                            ),
+                    ),
+            )
+        })
         .into_any_element()
 }
 
@@ -316,6 +711,7 @@ impl ItemEditorState {
         let notes_input = textarea("", window, cx, "Notes");
         let length_input = input("20", window, cx, "Length", false);
         let favicon_url_input = input("", window, cx, "https://example.com", false);
+        let icon_url_input = input("", window, cx, "https://example.com/icon.png", false);
         Self {
             id: EditorId::next(),
             mode: EditorMode::Create,
@@ -325,6 +721,9 @@ impl ItemEditorState {
             title_input,
             username_input,
             password_input,
+            picker_tab: IconPickerTab::default(),
+            icon_url_input,
+            icon_error: None,
             uri_inputs,
             notes_input,
             created_at: now_millis(),
@@ -338,7 +737,6 @@ impl ItemEditorState {
             },
             favicon: FaviconPickerState {
                 url_input: favicon_url_input,
-                url_expanded: false,
                 status: FaviconFetchStatus::Idle,
                 last_auto_fetch_uri: None,
             },
@@ -539,202 +937,6 @@ fn password_is_reused(password: &str, items: &[(ItemId, ItemPayload)]) -> bool {
         })
 }
 
-fn icon_picker_row(
-    id: impl Into<gpui::ElementId>,
-    icon_path: &'static str,
-    label: &'static str,
-    theme: Theme,
-    locker: Entity<Nox>,
-    choice: IconChoice,
-) -> AnyElement {
-    Button::new(id)
-        .ghost()
-        .w_full()
-        .h(px(32.))
-        .px(px(8.))
-        .on_click(move |_, window, app| {
-            locker.update(app, |locker, cx| {
-                locker.choose_item_icon(choice, window, cx);
-            });
-        })
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(
-                    gpui_component::Icon::empty()
-                        .path(icon_path)
-                        .size(px(14.))
-                        .text_color(theme.text_secondary),
-                )
-                .child(div().text_size(px(13.)).text_color(theme.text).child(label)),
-        )
-        .into_any_element()
-}
-
-/// Everything the favicon row needs, snapshotted at render time: the popover's
-/// content builder runs inside `Nox`'s own render pass and so cannot read the
-/// entity back out.
-#[derive(Clone)]
-struct FaviconRow {
-    theme: Theme,
-    locker: Entity<Nox>,
-    status: FaviconFetchStatus,
-    error: Option<&'static str>,
-    needs_url_input: bool,
-    url_expanded: bool,
-    url_input: Entity<InputState>,
-    /// The "this URL isn't saved" caveat, when the inline field is showing.
-    typed_url_note: Option<&'static str>,
-    offers_refetch: bool,
-}
-
-/// The favicon row: a clickable row that fetches against the item's saved URIs,
-/// or — with no URI saved yet — expands into an inline URL field plus "Buscar"
-/// that fetches against just that typed URL. Never disabled outright, and never
-/// fetching without a click.
-fn favicon_picker_row(row: FaviconRow) -> AnyElement {
-    let FaviconRow {
-        theme,
-        locker,
-        status,
-        error,
-        needs_url_input,
-        url_expanded,
-        url_input,
-        typed_url_note,
-        offers_refetch,
-    } = row;
-    let loading = status == FaviconFetchStatus::Loading;
-    let label = if loading {
-        "Buscando…"
-    } else if offers_refetch {
-        // `IconChoice::Favicon` with no cached bytes (synced from another
-        // device, or a cleared cache) renders the type default until the user
-        // asks for the fetch again — this row is that ask.
-        "Refetch favicon"
-    } else {
-        "Favicon del sitio"
-    };
-    let locker_for_row = locker.clone();
-    let trigger_row = Button::new("icon-favicon")
-        .ghost()
-        .w_full()
-        .h(px(32.))
-        .px(px(8.))
-        .disabled(loading)
-        .on_click(move |_, window, app| {
-            locker_for_row.update(app, |locker, cx| {
-                // With no saved URI there is nothing to fetch against yet, so
-                // the row opens its inline field instead of failing a fetch.
-                if locker.icon_picker_needs_url_input(cx) {
-                    locker.expand_favicon_url_input(cx);
-                } else {
-                    locker.fetch_item_favicon(window, cx);
-                }
-            });
-        })
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(
-                    gpui_component::Icon::empty()
-                        .path("icons/globe.svg")
-                        .size(px(14.))
-                        .text_color(theme.text_secondary),
-                )
-                .child(div().text_size(px(13.)).text_color(theme.text).child(label)),
-        );
-
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .child(trigger_row)
-        .when(needs_url_input && url_expanded, |this| {
-            this.child(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.))
-                    .px(px(8.))
-                    .pb(px(4.))
-                    .child(Input::new(&url_input))
-                    .when_some(typed_url_note, |this, note| {
-                        this.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme.text_subtle)
-                                .child(note),
-                        )
-                    })
-                    .child(
-                        Button::new("icon-favicon-search")
-                            .primary()
-                            .small()
-                            .label(if loading { "Buscando…" } else { "Buscar" })
-                            .disabled(loading)
-                            .on_click(move |_, window, app| {
-                                locker.update(app, |locker, cx| {
-                                    locker.fetch_item_favicon(window, cx);
-                                });
-                            }),
-                    ),
-            )
-        })
-        .when_some(error, |this, message| {
-            this.child(
-                div()
-                    .px(px(8.))
-                    .pb(px(4.))
-                    .text_size(px(11.))
-                    .text_color(theme.danger)
-                    .child(message),
-            )
-        })
-        .into_any_element()
-}
-
-fn upload_icon_picker_row(theme: Theme, locker: Entity<Nox>) -> AnyElement {
-    Button::new("icon-upload")
-        .ghost()
-        .w_full()
-        .h(px(32.))
-        .px(px(8.))
-        .on_click(move |_, window, app| {
-            locker.update(app, |locker, cx| {
-                locker.choose_uploaded_item_icon(window, cx);
-            });
-        })
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(
-                    gpui_component::Icon::empty()
-                        .path("icons/file-sliders.svg")
-                        .size(px(14.))
-                        .text_color(theme.text_secondary),
-                )
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .text_color(theme.text)
-                        .child("Upload from device"),
-                ),
-        )
-        .into_any_element()
-}
-
 impl Nox {
     pub(crate) fn uses_secure_note_workspace(&self) -> bool {
         let Some(session) = self.session() else {
@@ -836,56 +1038,6 @@ impl Nox {
             .is_some_and(|editor| editor.item_type == ItemType::Login)
     }
 
-    /// The icon the picker's "Default" row previews: the *item type's* own
-    /// default, so a Secure Note shows `file-lock` and not Login's `key-square`.
-    pub(crate) fn icon_picker_default_icon_path(&self) -> &'static str {
-        crate::icons::default_type_icon(
-            self.item_editor()
-                .map_or(ItemType::Login, |editor| editor.item_type),
-        )
-    }
-
-    /// A Login with no URI of its own still gets a fetch path — through the
-    /// row's inline URL field rather than the item's saved URIs.
-    pub(crate) fn icon_picker_needs_url_input(&self, cx: &App) -> bool {
-        self.icon_picker_offers_favicon()
-            && self
-                .item_editor()
-                .is_some_and(|editor| editor.uris(cx).is_empty())
-    }
-
-    /// The caveat for the inline URL field, offered only while that field is
-    /// the thing on screen — an unprompted note about a field nobody opened is
-    /// just noise.
-    pub(crate) fn favicon_typed_url_note(&self, cx: &App) -> Option<&'static str> {
-        (self.icon_picker_needs_url_input(cx) && self.icon_picker_url_input_expanded())
-            .then_some(FAVICON_TYPED_URL_NOTE)
-    }
-
-    pub(crate) fn icon_picker_url_input_expanded(&self) -> bool {
-        self.item_editor()
-            .is_some_and(|editor| editor.favicon.url_expanded)
-    }
-
-    /// Reveals the inline URL field inside the still-open popover.
-    pub(crate) fn expand_favicon_url_input(&mut self, cx: &mut Context<Self>) {
-        if let Some(editor) = self.item_editor_mut() {
-            editor.favicon.url_expanded = true;
-            editor.favicon.status = FaviconFetchStatus::Idle;
-        }
-        cx.notify();
-    }
-
-    /// An item already on `IconChoice::Favicon` may be looking at a cache miss
-    /// (synced from another device, or a cleared cache); the picker offers the
-    /// same explicit fetch again rather than refetching on its own.
-    pub(crate) fn icon_picker_offers_refetch(&self) -> bool {
-        self.icon_picker_offers_favicon()
-            && self
-                .item_editor()
-                .is_some_and(|editor| editor.icon == IconChoice::Favicon)
-    }
-
     pub(crate) fn favicon_fetch_status(&self) -> FaviconFetchStatus {
         self.item_editor()
             .map_or(FaviconFetchStatus::Idle, |editor| editor.favicon.status)
@@ -903,16 +1055,11 @@ impl Nox {
         let Some(editor) = self.item_editor() else {
             return Vec::new();
         };
-        let uris = editor.uris(cx);
-        if !uris.is_empty() {
-            return uris;
-        }
-        let typed = editor.favicon.url_input.read(cx).value().trim().to_owned();
-        if typed.is_empty() {
-            Vec::new()
-        } else {
-            vec![typed]
-        }
+        // The item's own websites are the only candidates now. The picker's
+        // old typed-URL field is gone: a URL worth fetching from is a website
+        // worth saving, so the Custom tab gates the favicon action on there
+        // being a website row rather than accepting a throwaway URL.
+        editor.uris(cx)
     }
 
     /// Runs the one favicon fetch the user just asked for. Nothing here starts
@@ -975,6 +1122,109 @@ impl Nox {
         cx.notify();
     }
 
+    pub(crate) fn set_icon_picker_tab(&mut self, tab: IconPickerTab, cx: &mut Context<Self>) {
+        if let Some(editor) = self.item_editor_mut() {
+            editor.picker_tab = tab;
+            editor.icon_error = None;
+        }
+        cx.notify();
+    }
+
+    fn set_icon_error(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        if let Some(editor) = self.item_editor_mut() {
+            editor.icon_error = Some(message.into());
+        }
+        cx.notify();
+    }
+
+    /// Accept a file dropped on the Custom tab's dropzone. Same path as the
+    /// browse dialog — one image, size-checked before it is read.
+    pub(crate) fn drop_item_icon_paths(
+        &mut self,
+        paths: &[std::path::PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = paths.first() else {
+            return;
+        };
+        let Ok(metadata) = std::fs::metadata(path) else {
+            self.set_icon_error("Could not read that file.", cx);
+            return;
+        };
+        if metadata.len() > crate::icons::MAX_LOCAL_IMAGE_BYTES as u64 {
+            self.set_icon_error(crate::icons::LocalIconError::TooLarge.to_string(), cx);
+            return;
+        }
+        let Ok(bytes) = std::fs::read(path) else {
+            self.set_icon_error("Could not read that file.", cx);
+            return;
+        };
+        self.apply_icon_bytes(&bytes, window, cx);
+    }
+
+    /// Store bytes as this item's icon, surfacing any rejection instead of
+    /// swallowing it.
+    fn apply_icon_bytes(&mut self, bytes: &[u8], window: &mut Window, cx: &mut Context<Self>) {
+        match self.upload_item_icon_bytes(bytes, window, cx) {
+            Ok(()) => {
+                if let Some(editor) = self.item_editor_mut() {
+                    editor.icon_error = None;
+                }
+                cx.notify();
+            }
+            Err(error) => self.set_icon_error(error.to_string(), cx),
+        }
+    }
+
+    /// Fetch the image the user pasted into the Custom tab and use it. The
+    /// request runs through `favicon`'s guard rails, and the reply may only
+    /// touch the editor that asked for it.
+    pub(crate) fn apply_icon_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((editor_id, url)) = self.item_editor().map(|editor| {
+            (
+                editor.id,
+                editor.icon_url_input.read(cx).value().trim().to_owned(),
+            )
+        }) else {
+            return;
+        };
+        if url.is_empty() {
+            return;
+        }
+        if let Some(editor) = self.item_editor_mut() {
+            editor.icon_error = None;
+        }
+        cx.notify();
+        let client = cx.http_client();
+        cx.spawn_in(window, async move |this, cx| {
+            let fetched =
+                cx.background_executor()
+                    .spawn(async move {
+                        crate::favicon::fetch_image_from_url(client.as_ref(), &url).await
+                    })
+                    .await;
+            let _ = cx.update(|window, app| {
+                if let Some(this) = this.upgrade() {
+                    this.update(app, |locker, cx| {
+                        if !locker
+                            .item_editor()
+                            .is_some_and(|editor| editor.id == editor_id)
+                        {
+                            return;
+                        }
+                        match fetched {
+                            Ok(bytes) => locker.apply_icon_bytes(&bytes, window, cx),
+                            Err(_) => locker
+                                .set_icon_error("Couldn't load an image from that address.", cx),
+                        }
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn choose_uploaded_item_icon(
         &mut self,
         window: &mut Window,
@@ -1006,21 +1256,33 @@ impl Nox {
             let Ok(metadata) = std::fs::metadata(&path) else {
                 return;
             };
-            if metadata.len() > crate::icons::MAX_LOCAL_IMAGE_BYTES as u64 {
-                return;
-            }
-            let bytes = match std::fs::read(path) {
-                Ok(bytes) => bytes,
-                Err(_) => return,
+            let oversized = metadata.len() > crate::icons::MAX_LOCAL_IMAGE_BYTES as u64;
+            let bytes = if oversized {
+                Vec::new()
+            } else {
+                match std::fs::read(path) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return,
+                }
             };
             let _ = cx.update(|window, app| {
                 if let Some(this) = this.upgrade() {
                     this.update(app, |locker, cx| {
-                        if locker
+                        if !locker
                             .item_editor()
                             .is_some_and(|editor| editor.id == editor_id)
                         {
-                            let _ = locker.upload_item_icon_bytes(&bytes, window, cx);
+                            return;
+                        }
+                        // An oversized pick used to return silently, so nothing
+                        // happened at all and the user had no idea why.
+                        if oversized {
+                            locker.set_icon_error(
+                                crate::icons::LocalIconError::TooLarge.to_string(),
+                                cx,
+                            );
+                        } else {
+                            locker.apply_icon_bytes(&bytes, window, cx);
                         }
                     });
                 }
@@ -1183,7 +1445,7 @@ impl Nox {
     fn render_icon_picker(&mut self, avatar: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let data_dir = self.data_dir.clone();
-        let (item_type, current_icon, _uris, favicon_url_input) = self
+        let (item_type, current_icon, _uris, _favicon_url_input) = self
             .session()
             .and_then(|session| session.item_editor.as_ref())
             .map(|editor| {
@@ -1248,7 +1510,6 @@ impl Nox {
                     .into_any_element(),
             }
         };
-        let should_show_upload_row = !has_local_image;
         let trigger = if avatar {
             Button::new("item-icon-picker-trigger")
                 .size(px(64.))
@@ -1271,59 +1532,35 @@ impl Nox {
 
         let locker = cx.entity();
         let locker_for_delete = locker.clone();
-        let default_icon_path = self.icon_picker_default_icon_path();
         // The popover's content builder runs inside this same render pass and
-        // cannot read `Nox` back, so the row's whole state is snapshotted here.
-        let favicon_row = favicon_url_input
-            .filter(|_| self.icon_picker_offers_favicon())
-            .map(|url_input| FaviconRow {
-                theme,
-                locker: locker.clone(),
-                status: self.favicon_fetch_status(),
-                error: self.favicon_fetch_error(),
-                needs_url_input: self.icon_picker_needs_url_input(cx),
-                url_expanded: self.icon_picker_url_input_expanded(),
-                url_input,
-                typed_url_note: self.favicon_typed_url_note(cx),
-                offers_refetch: self.icon_picker_offers_refetch(),
-            });
+        // cannot read `Nox` back, so its whole state is snapshotted here.
+        let snapshot = IconPickerSnapshot {
+            theme,
+            locker: locker.clone(),
+            tab: self
+                .item_editor()
+                .map_or(IconPickerTab::default(), |editor| editor.picker_tab),
+            current_icon,
+            offers_favicon: self.icon_picker_offers_favicon(),
+            favicon_loading: self.favicon_fetch_status() == FaviconFetchStatus::Loading,
+            has_uris: !self
+                .item_editor()
+                .map(|editor| editor.uris(cx))
+                .unwrap_or_default()
+                .is_empty(),
+            url_input: self
+                .item_editor()
+                .map(|editor| editor.icon_url_input.clone()),
+            error: self
+                .item_editor()
+                .and_then(|editor| editor.icon_error.clone())
+                .or_else(|| self.favicon_fetch_error().map(SharedString::from)),
+        };
 
         let picker = Popover::new("item-icon-picker")
             .appearance(false)
             .trigger(trigger)
-            .content(move |_state, _window, _cx| {
-                let mut rows: Vec<AnyElement> = Vec::new();
-                rows.push(icon_picker_row(
-                    "icon-default",
-                    default_icon_path,
-                    "Default",
-                    theme,
-                    locker.clone(),
-                    IconChoice::Default,
-                ));
-                // No preset rows here: `icon_preset_grid` shows all 20 inline,
-                // which is what keeps this menu down to three unscrolled rows.
-                if let Some(favicon_row) = favicon_row.clone() {
-                    rows.push(favicon_picker_row(favicon_row));
-                }
-                if should_show_upload_row {
-                    rows.push(upload_icon_picker_row(theme, locker.clone()));
-                }
-                div()
-                    .id("item-icon-picker-menu")
-                    .w(px(220.))
-                    .max_h(px(360.))
-                    .overflow_y_scroll()
-                    .p(px(4.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.surface)
-                    .children(rows)
-            })
+            .content(move |_state, _window, cx| icon_picker_popover(snapshot.clone(), cx))
             .into_any_element();
 
         // The delete "x": edit-mode-and-create alike, shown only while the
@@ -2312,10 +2549,9 @@ impl Nox {
             },
         );
         let icon_picker = self.render_icon_picker(false, cx);
-        let current_icon = self
+        let _current_icon = self
             .item_editor()
             .map_or(IconChoice::Default, |editor| editor.icon);
-        let preset_grid = icon_preset_grid(theme, locker.clone(), current_icon);
 
         rsx! {
             <div id="secure-note-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
@@ -2349,7 +2585,6 @@ impl Nox {
                                     </div>
                                 </div>
                             </div>
-                            {field("ICON", false, Some("20 icons available"), preset_grid)}
                             {field("TITLE", true, None, Input::new(&title).h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
                             {field("CONTENT", true, None, note_editor)}
                             {error}
@@ -2826,10 +3061,9 @@ impl Nox {
         // there is nothing left to fetch automatically.
         let favicon_failed = self.favicon_fetch_status() == FaviconFetchStatus::Failed;
         let upload_locker = locker.clone();
-        let current_icon = self
+        let _current_icon = self
             .item_editor()
             .map_or(IconChoice::Default, |editor| editor.icon);
-        let preset_grid = icon_preset_grid(theme, locker.clone(), current_icon);
         let login_icon_field = field(
             "ICON",
             false,
@@ -2908,7 +3142,6 @@ impl Nox {
                             )
                         }),
                 )
-                .child(preset_grid)
                 .into_any_element(),
         );
 

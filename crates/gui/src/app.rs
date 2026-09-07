@@ -2741,23 +2741,65 @@ mod tests {
         cleanup(&path);
     }
 
-    /// `locker.pen` `Oh0fE`: presets are picked from an inline grid, so the
-    /// popover must no longer carry a row per preset — that list is exactly
-    /// what made the old picker a 23-row scroll.
+    /// `locker.pen` `MuIQg`/`kaJQk`: icon selection is a two-tab popover, and
+    /// nothing about it sits inline in the form any more — that inline grid is
+    /// what put ~165px of cosmetics above the password field.
     #[test]
-    fn presets_live_in_the_grid_not_the_picker_menu() {
+    fn icon_selection_is_a_two_tab_popover() {
+        let source = include_str!("item_editor.rs");
+        for marker in [
+            "fn icon_picker_popover(",
+            "fn preset_tab_body(",
+            "fn custom_tab_body(",
+            "\"Presets\"",
+            "\"Custom\"",
+        ] {
+            assert!(source.contains(marker), "picker must define {marker}");
+        }
+        assert!(
+            !source.contains("fn icon_preset_grid("),
+            "the inline preset grid must be gone from the form"
+        );
+        assert!(
+            !source.contains("20 icons available"),
+            "the inline field's helper copy must be gone with it"
+        );
+    }
+
+    /// The Custom tab reaches an image three ways, and every one of them lands
+    /// in the same validated sink.
+    #[test]
+    fn custom_tab_offers_drop_browse_and_url() {
+        let source = include_str!("item_editor.rs");
+        for marker in [
+            "on_drop(move |paths: &gpui::ExternalPaths",
+            "choose_uploaded_item_icon(window, cx)",
+            "fn apply_icon_url(",
+            "Drop an image here or browse",
+        ] {
+            assert!(source.contains(marker), "custom tab must offer {marker}");
+        }
+        // A pasted URL is as untrusted as a site-derived one.
+        let favicon = include_str!("favicon.rs");
+        assert!(
+            favicon.contains("fn fetch_image_from_url(")
+                && favicon.contains("is_disallowed_favicon_target(&parsed)"),
+            "URL fetch must reuse the favicon guard rails"
+        );
+    }
+
+    /// Upload and URL failures used to be discarded with `let _ =`, so an
+    /// oversized file did nothing at all and said nothing about it.
+    #[test]
+    fn icon_failures_reach_the_user() {
         let source = include_str!("item_editor.rs");
         assert!(
-            source.contains("fn icon_preset_grid("),
-            "the inline preset grid exists"
+            source.contains("icon_error: Option<SharedString>"),
+            "the editor carries an icon error"
         );
         assert!(
-            source.contains("20 icons available"),
-            "locker.pen PIGh7 helper copy"
-        );
-        assert!(
-            !source.contains("for preset in crate::icons::ALL_PRESETS {"),
-            "the popover must not rebuild a row per preset"
+            !source.contains("let _ = locker.upload_item_icon_bytes("),
+            "upload errors must not be swallowed"
         );
     }
 
@@ -2997,7 +3039,7 @@ mod tests {
         });
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            let url_input = locker.item_editor().unwrap().uri_inputs[0].clone();
             url_input.update(locker_cx, |state, input_cx| {
                 state.set_value("https://selection.test".to_owned(), window, input_cx)
             });
@@ -3151,7 +3193,7 @@ mod tests {
         });
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            let url_input = locker.item_editor().unwrap().uri_inputs[0].clone();
             url_input.update(locker_cx, |state, input_cx| {
                 state.set_value("https://preset-clear.test".to_owned(), window, input_cx)
             });
@@ -3383,7 +3425,9 @@ mod tests {
             locker.open_create_editor(window, locker_cx);
         });
         assert_eq!(
-            view.read_with(cx, |locker, _| locker.icon_picker_default_icon_path()),
+            view.read_with(cx, |locker, _| {
+                crate::icons::default_type_icon(locker.item_editor().unwrap().item_type)
+            }),
             "icons/key-square.svg"
         );
         cleanup(&path);
@@ -3394,44 +3438,45 @@ mod tests {
             locker.open_create_editor(window, locker_cx);
         });
         assert_eq!(
-            view.read_with(cx, |locker, _| locker.icon_picker_default_icon_path()),
+            view.read_with(cx, |locker, _| {
+                crate::icons::default_type_icon(locker.item_editor().unwrap().item_type)
+            }),
             "icons/file-lock.svg"
         );
         cleanup(&path);
     }
 
-    /// A Login with no saved URI is not a dead end: the favicon row expands into
-    /// an inline URL field the user can search from.
+    /// A login with no website cannot fetch a favicon: the Custom tab's
+    /// favicon action is gated on there being a website to fetch from. The old
+    /// inline "type a URL just for the fetch" field is gone — a URL worth
+    /// fetching from is one worth saving as a website row.
     #[gpui::test]
-    fn a_login_without_a_saved_uri_offers_an_inline_url_field(cx: &mut TestAppContext) {
+    fn a_login_without_a_website_cannot_fetch_a_favicon(cx: &mut TestAppContext) {
         init(cx);
-        let (view, cx, path, _) = unlocked_view(cx, "icon-inline-url", &[]);
+        let (view, cx, path, _) = unlocked_view(cx, "icon-no-uri", &[]);
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
         });
-        assert!(view.read_with(cx, |locker, app| locker.icon_picker_needs_url_input(app)));
-        assert!(!view.read_with(cx, |locker, _| locker.icon_picker_url_input_expanded()));
-        view.update(cx, |locker, locker_cx| {
-            locker.expand_favicon_url_input(locker_cx);
-        });
-        assert!(view.read_with(cx, |locker, _| locker.icon_picker_url_input_expanded()));
+        assert!(view.read_with(cx, |locker, app| {
+            locker.item_editor().unwrap().uris(app).is_empty()
+        }));
 
-        // Once the item has a URI of its own, the row fetches against it
-        // directly — no inline field needed.
         view.update_in(cx, |locker, window, locker_cx| {
             let uris = locker.item_editor().unwrap().uri_inputs[0].clone();
             uris.update(locker_cx, |state, input_cx| {
                 state.set_value("https://saved.test".to_owned(), window, input_cx)
             });
         });
-        assert!(!view.read_with(cx, |locker, app| locker.icon_picker_needs_url_input(app)));
+        assert!(!view.read_with(cx, |locker, app| {
+            locker.item_editor().unwrap().uris(app).is_empty()
+        }));
         cleanup(&path);
     }
 
     /// The typed URL drives the fetch and nothing else: it is never appended to
     /// the item's own URI list.
     #[gpui::test]
-    fn searching_a_typed_url_sets_the_favicon_icon(cx: &mut TestAppContext) {
+    fn fetching_from_a_saved_website_sets_the_favicon_icon(cx: &mut TestAppContext) {
         init(cx);
         let (view, cx, path, _) = unlocked_view(cx, "icon-typed-url", &[]);
         let data_dir = path.parent().unwrap().to_path_buf();
@@ -3449,7 +3494,7 @@ mod tests {
         });
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            let url_input = locker.item_editor().unwrap().uri_inputs[0].clone();
             url_input.update(locker_cx, |state, input_cx| {
                 state.set_value("https://typed.test".to_owned(), window, input_cx)
             });
@@ -3469,9 +3514,12 @@ mod tests {
             fs::read(crate::favicon::favicon_cache_path(&data_dir, "typed.test")).unwrap(),
             valid_test_png()
         );
-        assert!(view.read_with(cx, |locker, app| {
-            locker.item_editor().unwrap().uris(app).is_empty()
-        }));
+        // The website the fetch used is the item's own saved website now —
+        // the old flow fetched from a URL it deliberately threw away.
+        assert_eq!(
+            view.read_with(cx, |locker, app| locker.item_editor().unwrap().uris(app)),
+            vec!["https://typed.test"]
+        );
         cleanup(&path);
         let _ = fs::remove_dir_all(&data_dir);
     }
@@ -3494,7 +3542,7 @@ mod tests {
         });
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            let url_input = locker.item_editor().unwrap().uri_inputs[0].clone();
             url_input.update(locker_cx, |state, input_cx| {
                 state.set_value("https://dead.test".to_owned(), window, input_cx)
             });
@@ -3543,7 +3591,7 @@ mod tests {
         });
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            let url_input = locker.item_editor().unwrap().uri_inputs[0].clone();
             url_input.update(locker_cx, |state, input_cx| {
                 state.set_value("https://slow.test".to_owned(), window, input_cx)
             });
@@ -3598,7 +3646,7 @@ mod tests {
         // A Login editor asks for a favicon and the fetch parks in flight.
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            let url_input = locker.item_editor().unwrap().uri_inputs[0].clone();
             url_input.update(locker_cx, |state, input_cx| {
                 state.set_value("https://slow.test".to_owned(), window, input_cx)
             });
@@ -3638,31 +3686,8 @@ mod tests {
         let _ = fs::remove_dir_all(&data_dir);
     }
 
-    /// The inline URL feeds the fetch and nothing else, which is easy to read as
-    /// "the URL is now saved". The row says so, and only while that field is the
-    /// thing the user is looking at.
-    #[gpui::test]
-    fn the_inline_url_field_says_the_typed_url_is_not_saved(cx: &mut TestAppContext) {
-        init(cx);
-        let (view, cx, path, _) = unlocked_view(cx, "icon-typed-url-note", &[]);
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_create_editor(window, locker_cx);
-        });
-        // Nothing to caveat until the field is actually on screen.
-        assert_eq!(
-            view.read_with(cx, |locker, app| locker.favicon_typed_url_note(app)),
-            None
-        );
-
-        view.update(cx, |locker, locker_cx| {
-            locker.expand_favicon_url_input(locker_cx);
-        });
-        assert_eq!(
-            view.read_with(cx, |locker, app| locker.favicon_typed_url_note(app)),
-            Some(item_editor::FAVICON_TYPED_URL_NOTE)
-        );
-        cleanup(&path);
-    }
+    // Removed with the old picker: the note it asserted (FAVICON_TYPED_URL_NOTE) existed only for the
+    // inline typed-URL field, which the two-tab picker replaced.
 
     /// The other way an editor stops being the one that asked: `set_editor_type`
     /// flips the *same* editor to Secure Note in place, so the id still matches
@@ -3693,7 +3718,7 @@ mod tests {
 
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            let url_input = locker.item_editor().unwrap().uri_inputs[0].clone();
             url_input.update(locker_cx, |state, input_cx| {
                 state.set_value("https://slow.test".to_owned(), window, input_cx)
             });
@@ -3745,7 +3770,7 @@ mod tests {
 
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_create_editor(window, locker_cx);
-            let url_input = locker.item_editor().unwrap().favicon.url_input.clone();
+            let url_input = locker.item_editor().unwrap().uri_inputs[0].clone();
             url_input.update(locker_cx, |state, input_cx| {
                 state.set_value("https://slow.test".to_owned(), window, input_cx)
             });
@@ -3829,22 +3854,8 @@ mod tests {
         let _ = fs::remove_dir_all(&data_dir);
     }
 
-    /// A cache miss on a synced `Favicon` choice needs a way back: the picker
-    /// offers a refetch once the item is already on a favicon.
-    #[gpui::test]
-    fn refetch_is_offered_once_the_icon_is_a_favicon(cx: &mut TestAppContext) {
-        init(cx);
-        let (view, cx, path, _) = unlocked_view(cx, "icon-refetch", &[]);
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_create_editor(window, locker_cx);
-        });
-        assert!(!view.read_with(cx, |locker, _| locker.icon_picker_offers_refetch()));
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.choose_item_icon(IconChoice::Favicon, window, locker_cx);
-        });
-        assert!(view.read_with(cx, |locker, _| locker.icon_picker_offers_refetch()));
-        cleanup(&path);
-    }
+    // Removed with the old picker: "refetch" is no longer a distinct state; the Custom tab offers the
+    // favicon action whenever the login has a website.
 
     #[gpui::test]
     fn secure_note_creation_uses_the_dedicated_workspace(cx: &mut TestAppContext) {
