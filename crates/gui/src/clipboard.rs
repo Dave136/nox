@@ -108,6 +108,18 @@ impl Nox {
         self.show_copy_feedback(item_id, CopyField::Note, window, cx);
     }
 
+    pub(crate) fn copy_secure_note_block(
+        &mut self,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if value.is_empty() {
+            return;
+        }
+        self.copy_secret(SecretBytes::new(value.as_bytes()), window, cx);
+    }
+
     /// Websites aren't secrets, so this skips `copy_secret`'s auto-clear
     /// timeout — just a plain clipboard write plus the same row feedback.
     pub(crate) fn copy_uri(

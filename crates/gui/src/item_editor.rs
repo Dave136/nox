@@ -99,6 +99,8 @@ enum NoteMarkdownFormat {
     Italic,
     List,
     Code,
+    CopyBlock,
+    LockedCopyBlock,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -113,12 +115,16 @@ enum NotePreviewBlockKind {
     ListItem,
     Code,
     Paragraph,
+    CopyBlock,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NotePreviewBlock {
     kind: NotePreviewBlockKind,
     spans: Vec<NotePreviewSpan>,
+    label: Option<String>,
+    locked: bool,
+    copy_text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,40 +156,94 @@ fn secure_note_has_markdown(value: &str) -> bool {
             || trimmed.starts_with("- ")
             || trimmed.starts_with("* ")
             || trimmed.starts_with("```")
+            || trimmed.starts_with(":::copy")
     }) || value.contains("**")
         || value.contains('`')
         || (value.contains('[') && value.contains("]("))
 }
 
 fn secure_note_markdown_preview_blocks(value: &str) -> Vec<NotePreviewBlock> {
-    value
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed == "```" {
-                return None;
+    let mut blocks = Vec::new();
+    let mut lines = value.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed == "```" {
+            continue;
+        }
+        if let Some((locked, label)) = parse_copy_block_opening(trimmed) {
+            let mut content = Vec::new();
+            let mut closed = false;
+            for inner in lines.by_ref() {
+                if inner.trim() == ":::" {
+                    closed = true;
+                    break;
+                }
+                content.push(inner);
             }
-            let (kind, text) = if let Some(text) = trimmed.strip_prefix("### ") {
-                (NotePreviewBlockKind::Heading, text)
-            } else if let Some(text) = trimmed.strip_prefix("## ") {
-                (NotePreviewBlockKind::Heading, text)
-            } else if let Some(text) = trimmed.strip_prefix("# ") {
-                (NotePreviewBlockKind::Heading, text)
-            } else if let Some(text) = trimmed.strip_prefix("- ") {
-                (NotePreviewBlockKind::ListItem, text)
-            } else if let Some(text) = trimmed.strip_prefix("* ") {
-                (NotePreviewBlockKind::ListItem, text)
-            } else if trimmed.starts_with("    ") {
-                (NotePreviewBlockKind::Code, trimmed)
-            } else {
-                (NotePreviewBlockKind::Paragraph, trimmed)
-            };
-            Some(NotePreviewBlock {
-                kind,
-                spans: parse_inline_markdown(text),
-            })
-        })
-        .collect()
+            if closed {
+                let copy_text = content.join("\n");
+                blocks.push(NotePreviewBlock {
+                    kind: NotePreviewBlockKind::CopyBlock,
+                    spans: parse_inline_markdown(&copy_text),
+                    label,
+                    locked,
+                    copy_text: Some(copy_text),
+                });
+                continue;
+            }
+            blocks.push(plain_note_preview_block(trimmed));
+            for inner in content {
+                blocks.push(plain_note_preview_block(inner.trim()));
+            }
+            continue;
+        }
+
+        let (kind, text) = if let Some(text) = trimmed.strip_prefix("### ") {
+            (NotePreviewBlockKind::Heading, text)
+        } else if let Some(text) = trimmed.strip_prefix("## ") {
+            (NotePreviewBlockKind::Heading, text)
+        } else if let Some(text) = trimmed.strip_prefix("# ") {
+            (NotePreviewBlockKind::Heading, text)
+        } else if let Some(text) = trimmed.strip_prefix("- ") {
+            (NotePreviewBlockKind::ListItem, text)
+        } else if let Some(text) = trimmed.strip_prefix("* ") {
+            (NotePreviewBlockKind::ListItem, text)
+        } else if trimmed.starts_with("    ") {
+            (NotePreviewBlockKind::Code, trimmed)
+        } else {
+            (NotePreviewBlockKind::Paragraph, trimmed)
+        };
+        blocks.push(NotePreviewBlock {
+            kind,
+            spans: parse_inline_markdown(text),
+            label: None,
+            locked: false,
+            copy_text: None,
+        });
+    }
+    blocks
+}
+
+fn parse_copy_block_opening(line: &str) -> Option<(bool, Option<String>)> {
+    let (locked, rest) = if let Some(rest) = line.strip_prefix(":::copy-locked") {
+        (true, rest)
+    } else if let Some(rest) = line.strip_prefix(":::copy") {
+        (false, rest)
+    } else {
+        return None;
+    };
+    let label = rest.trim();
+    Some((locked, (!label.is_empty()).then(|| label.to_owned())))
+}
+
+fn plain_note_preview_block(text: &str) -> NotePreviewBlock {
+    NotePreviewBlock {
+        kind: NotePreviewBlockKind::Paragraph,
+        spans: parse_inline_markdown(text),
+        label: None,
+        locked: false,
+        copy_text: None,
+    }
 }
 
 fn parse_inline_markdown(value: &str) -> Vec<NotePreviewSpan> {
@@ -242,6 +302,12 @@ fn apply_note_markdown_format(
         NoteMarkdownFormat::Italic => wrap_note_markdown_selection(value, selected_range, "*", "*"),
         NoteMarkdownFormat::Code => wrap_note_markdown_selection(value, selected_range, "`", "`"),
         NoteMarkdownFormat::List => list_note_markdown_selection(value, selected_range),
+        NoteMarkdownFormat::CopyBlock => {
+            insert_note_markdown_copy_block(value, selected_range, false)
+        }
+        NoteMarkdownFormat::LockedCopyBlock => {
+            insert_note_markdown_copy_block(value, selected_range, true)
+        }
     }
 }
 
@@ -264,6 +330,33 @@ fn wrap_note_markdown_selection(
     NoteMarkdownEdit {
         text,
         selection: selection_start..selection_end,
+    }
+}
+
+fn insert_note_markdown_copy_block(
+    value: &str,
+    selected_range: Range<usize>,
+    locked: bool,
+) -> NoteMarkdownEdit {
+    let range = note_markdown_target_range(value, selected_range);
+    let opening = if locked { ":::copy-locked" } else { ":::copy" };
+    let selected = &value[range.clone()];
+    let body = if selected.is_empty() {
+        "content"
+    } else {
+        selected
+    };
+    let replacement = format!("{opening}\n{body}\n:::");
+
+    let mut text = String::with_capacity(value.len() + replacement.len());
+    text.push_str(&value[..range.start]);
+    text.push_str(&replacement);
+    text.push_str(&value[range.end..]);
+
+    let body_start = range.start + opening.len() + 1;
+    NoteMarkdownEdit {
+        text,
+        selection: body_start..(body_start + body.len()),
     }
 }
 
@@ -368,6 +461,7 @@ pub(crate) struct ItemEditorState {
     pub(crate) note_tags: Vec<String>,
     pub(crate) note_tag_input: Entity<InputState>,
     pub(crate) markdown_preview_open: bool,
+    pub(crate) revealed_copy_blocks: std::collections::BTreeSet<usize>,
     pub(crate) local_icon: Option<crate::icons::LocalIconRef>,
     pub(crate) title_input: Entity<InputState>,
     pub(crate) username_input: Entity<InputState>,
@@ -1001,6 +1095,7 @@ impl ItemEditorState {
             note_tags: Vec::new(),
             note_tag_input,
             markdown_preview_open: false,
+            revealed_copy_blocks: std::collections::BTreeSet::new(),
             local_icon: None,
             title_input,
             username_input,
@@ -1125,6 +1220,7 @@ impl ItemEditorState {
         editor.note_color = payload.note_color;
         editor.note_tags = payload.note_tags;
         editor.markdown_preview_open = false;
+        editor.revealed_copy_blocks.clear();
         editor.created_at = payload.created_at;
         editor.title_input.update(cx, |state, input_cx| {
             state.set_value(payload.title, window, input_cx)
@@ -1419,6 +1515,15 @@ impl Nox {
             let has_markdown =
                 secure_note_has_markdown(editor.notes_input.read(cx).value().as_ref());
             editor.markdown_preview_open = has_markdown && !editor.markdown_preview_open;
+            cx.notify();
+        }
+    }
+
+    fn toggle_secure_note_copy_block_reveal(&mut self, block_index: usize, cx: &mut Context<Self>) {
+        if let Some(editor) = self.item_editor_mut() {
+            if !editor.revealed_copy_blocks.insert(block_index) {
+                editor.revealed_copy_blocks.remove(&block_index);
+            }
             cx.notify();
         }
     }
@@ -2731,6 +2836,7 @@ impl Nox {
         let notes_value = notes.read(cx).value().to_string();
         let note_has_markdown = secure_note_has_markdown(&notes_value);
         let note_preview_open = editor.markdown_preview_open && note_has_markdown;
+        let revealed_copy_blocks = editor.revealed_copy_blocks.clone();
         let character_count = notes_value.chars().count();
         let save_error = editor.save_error.clone();
         let editing = matches!(editor.mode, EditorMode::Edit(_));
@@ -3330,6 +3436,18 @@ impl Nox {
                         "Code",
                         NoteMarkdownFormat::Code,
                     ))
+                    .child(tool(
+                        "note-format-copy-block",
+                        "icons/copy.svg",
+                        "Copy block",
+                        NoteMarkdownFormat::CopyBlock,
+                    ))
+                    .child(tool(
+                        "note-format-copy-locked-block",
+                        "icons/eye-off.svg",
+                        "Locked copy block",
+                        NoteMarkdownFormat::LockedCopyBlock,
+                    ))
                     .child(div().w(px(1.)).h(px(16.)).mx(px(4.)).bg(theme.field_border))
                     .child(
                         div()
@@ -3461,6 +3579,126 @@ impl Nox {
                 let block_id =
                     SharedString::from(format!("secure-note-markdown-preview-block-{index}"));
                 match block.kind {
+                    NotePreviewBlockKind::CopyBlock => {
+                        let copy_text = block.copy_text.clone().unwrap_or_default();
+                        let label = block.label.clone();
+                        let locked = block.locked;
+                        let revealed = revealed_copy_blocks.contains(&index);
+                        let copy_locker = locker.clone();
+                        let reveal_locker = locker.clone();
+                        div()
+                            .id(block_id)
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.))
+                            .p(px(12.))
+                            .rounded(px(8.))
+                            .bg(theme.inset)
+                            .border_1()
+                            .border_color(theme.field_border)
+                            .when_some(label, |card, label| {
+                                card.child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme.text_soft)
+                                        .child(label),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.))
+                                            .text_size(px(11.))
+                                            .text_color(theme.text_subtle)
+                                            .child(if locked && !revealed {
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(theme.text_secondary)
+                                                    .child("••••••••••••••••")
+                                                    .into_any_element()
+                                            } else {
+                                                preview_spans(
+                                                    block.spans,
+                                                    theme.text_subtle,
+                                                    px(11.),
+                                                )
+                                                .into_any_element()
+                                            }),
+                                    )
+                                    .when(locked, |row| {
+                                        row.child(
+                                            Button::new(SharedString::from(format!(
+                                                "secure-note-copy-block-reveal-{index}"
+                                            )))
+                                            .ghost()
+                                            .size(px(26.))
+                                            .rounded(px(6.))
+                                            .tooltip(if revealed { "Hide" } else { "Reveal" })
+                                            .on_click(move |_, _window, app| {
+                                                reveal_locker.update(app, |locker, cx| {
+                                                    locker.toggle_secure_note_copy_block_reveal(
+                                                        index, cx,
+                                                    );
+                                                });
+                                            })
+                                            .child(
+                                                Icon::empty()
+                                                    .path(if revealed {
+                                                        "icons/scan-eye.svg"
+                                                    } else {
+                                                        "icons/eye-off.svg"
+                                                    })
+                                                    .size(px(14.))
+                                                    .text_color(theme.icon_muted),
+                                            ),
+                                        )
+                                    })
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "secure-note-copy-block-copy-{index}"
+                                        )))
+                                        .ghost()
+                                        .h(px(26.))
+                                        .px(px(8.))
+                                        .rounded(px(6.))
+                                        .tooltip("Copy block")
+                                        .on_click(move |_, window, app| {
+                                            let copy_text = copy_text.clone();
+                                            copy_locker.update(app, |locker, cx| {
+                                                locker
+                                                    .copy_secure_note_block(copy_text, window, cx);
+                                            });
+                                        })
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(5.))
+                                                .child(
+                                                    Icon::empty()
+                                                        .path("icons/copy.svg")
+                                                        .size(px(12.))
+                                                        .text_color(theme.text_secondary),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(9.))
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(theme.text_secondary)
+                                                        .child("Copy"),
+                                                ),
+                                        ),
+                                    ),
+                            )
+                            .into_any_element()
+                    }
                     NotePreviewBlockKind::Heading => div()
                         .id(block_id)
                         .text_size(px(18.))
@@ -5033,6 +5271,33 @@ mod tests {
     }
 
     #[test]
+    fn secure_note_copy_blocks_parse_as_independent_preview_cards() {
+        let blocks = secure_note_markdown_preview_blocks(
+            ":::copy API token\nvisible-token\n:::\n:::copy-locked\nsecret-token\n:::",
+        );
+        assert_eq!(blocks[0].kind, NotePreviewBlockKind::CopyBlock);
+        assert_eq!(blocks[0].label.as_deref(), Some("API token"));
+        assert!(!blocks[0].locked);
+        assert_eq!(blocks[0].copy_text.as_deref(), Some("visible-token"));
+        assert_eq!(blocks[0].text(), "visible-token");
+        assert_eq!(blocks[1].kind, NotePreviewBlockKind::CopyBlock);
+        assert_eq!(blocks[1].label, None);
+        assert!(blocks[1].locked);
+        assert_eq!(blocks[1].copy_text.as_deref(), Some("secret-token"));
+    }
+
+    #[test]
+    fn secure_note_copy_block_toolbar_inserts_directive_snippets() {
+        let copy = apply_note_markdown_format("token", 0..5, NoteMarkdownFormat::CopyBlock);
+        assert_eq!(copy.text, ":::copy\ntoken\n:::");
+        assert_eq!(copy.selection, 8..13);
+
+        let locked = apply_note_markdown_format("token", 0..5, NoteMarkdownFormat::LockedCopyBlock);
+        assert_eq!(locked.text, ":::copy-locked\ntoken\n:::");
+        assert_eq!(locked.selection, 15..20);
+    }
+
+    #[test]
     fn secure_note_markdown_preview_renders_basic_markdown() {
         let blocks = secure_note_markdown_preview_blocks("# Title\n- one\nUse `code` and **bold**");
         assert_eq!(blocks[0].kind, NotePreviewBlockKind::Heading);
@@ -5056,11 +5321,20 @@ mod tests {
             "NoteMarkdownFormat::Italic",
             "NoteMarkdownFormat::List",
             "NoteMarkdownFormat::Code",
+            "NoteMarkdownFormat::CopyBlock",
+            "NoteMarkdownFormat::LockedCopyBlock",
         ] {
             assert!(source.contains(action), "missing toolbar action {action}");
         }
         assert!(source.contains(".tooltip(tooltip)"));
-        for tooltip in ["Bold", "Italic", "List", "Code"] {
+        for tooltip in [
+            "Bold",
+            "Italic",
+            "List",
+            "Code",
+            "Copy block",
+            "Locked copy block",
+        ] {
             assert!(source.contains(&format!("\"{tooltip}\",")));
         }
         assert!(source.contains("format_secure_note_markdown"));
@@ -5068,6 +5342,9 @@ mod tests {
         assert!(source.contains("secure-note-markdown-preview-toggle"));
         assert!(source.contains("icons/scan-eye.svg"));
         assert!(source.contains("secure-note-markdown-preview-panel"));
+        assert!(source.contains("secure-note-copy-block-copy-{index}"));
+        assert!(source.contains("secure-note-copy-block-reveal-{index}"));
+        assert!(source.contains("copy_secure_note_block(copy_text"));
         assert!(source.contains("span.text_size(text_size)"));
         assert!(source.contains("span.font_weight(FontWeight(800.))"));
         assert!(source.contains("span.italic()"));
