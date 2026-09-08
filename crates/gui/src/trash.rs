@@ -3,13 +3,99 @@
 
 use crate::app::{AppState, Nox, relative_time};
 use crate::theme::Theme;
-use gpui::{AnyElement, Context, FontWeight, SharedString, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, App, ClickEvent, Context, ElementId, FontWeight, SharedString, Window, div,
+    prelude::*, px,
+};
 use gpui_component::{
-    Icon, Sizable,
-    button::{Button, ButtonVariants as _},
+    Icon,
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
 };
 use gpui_rsx::rsx;
 use nox_core::{ItemId, ItemType};
+
+/// Height of the "Recently deleted" heading block. The preview column is
+/// offset by the same amount so its panel top lines up with the list table's,
+/// rather than with the heading above it.
+const LIST_HEADING_HEIGHT: f32 = 42.;
+
+/// The design's primary Restore control: a light-filled pill with a dark
+/// `rotate-ccw` glyph and label. Shared by the list rows and the preview
+/// panel's action bar, which differ only in size.
+fn restore_button(
+    id: impl Into<ElementId>,
+    theme: Theme,
+    height: f32,
+    font_size: f32,
+    icon_size: f32,
+    cx: &mut App,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    Button::new(id)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(theme.inverse)
+                .hover(theme.inverse_hover)
+                .active(theme.inverse_press)
+                .foreground(theme.on_inverse),
+        )
+        .h(px(height))
+        .px(px(12.))
+        .rounded(px(7.))
+        .on_click(on_click)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .child(
+                    Icon::empty()
+                        .path("icons/rotate-ccw.svg")
+                        .size(px(icon_size))
+                        .text_color(theme.on_inverse),
+                )
+                .child(
+                    div()
+                        .text_size(px(font_size))
+                        .font_weight(FontWeight(650.))
+                        .text_color(theme.on_inverse)
+                        .child("Restore"),
+                ),
+        )
+        .into_any_element()
+}
+
+/// The design's secondary action: surface fill with a visible outline, used
+/// for the preview panel's Cancel.
+fn cancel_button(
+    id: impl Into<ElementId>,
+    theme: Theme,
+    cx: &mut App,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    Button::new(id)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(theme.surface)
+                .hover(theme.row_hover)
+                .active(theme.raised)
+                .foreground(theme.text_soft),
+        )
+        .h(px(36.))
+        .px(px(12.))
+        .rounded(px(7.))
+        .border_1()
+        .border_color(theme.border_strong)
+        .on_click(on_click)
+        .child(
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight(600.))
+                .text_color(theme.text_soft)
+                .child("Cancel"),
+        )
+        .into_any_element()
+}
 
 impl Nox {
     /// Restore a tombstoned item by appending a fresh upsert of its last known
@@ -64,6 +150,7 @@ impl Nox {
             .map(|session| session.list.deleted.clone())
             .unwrap_or_default();
         let count = deleted.len();
+        let data_dir = self.data_dir.clone();
         let locker = cx.entity();
 
         let rows = deleted
@@ -73,11 +160,20 @@ impl Nox {
                 let select_locker = locker.clone();
                 let item_id = item.item_id;
                 let is_login = item.payload.item_type == ItemType::Login;
-                let type_icon = if is_login {
-                    "icons/key-round.svg"
-                } else {
-                    "icons/file-lock.svg"
-                };
+                // A deleted item keeps its fetched favicon until it is purged;
+                // `resolved_item_icon` falls back to the type's default glyph
+                // when there is no cached image.
+                let row_icon = crate::icons::render_resolved_icon(
+                    crate::icons::resolved_item_icon(
+                        &data_dir,
+                        &crate::icons::item_key(item_id),
+                        &item.payload,
+                        self.local_icon_selections
+                            .get(&crate::icons::item_key(item_id)),
+                    ),
+                    17.,
+                    theme.text_secondary,
+                );
                 let type_label = if is_login { "Login" } else { "Secure note" };
                 let subtitle = if is_login && !item.payload.username.is_empty() {
                     item.payload.username.clone()
@@ -100,9 +196,9 @@ impl Nox {
                     >
                         <div
                             flex items_center justify_center flex_shrink_0
-                            w={px(36.)} h={px(36.)} rounded={px(8.)} bg={theme.raised}
+                            w={px(36.)} h={px(36.)} rounded={px(8.)} bg={theme.item_icon}
                         >
-                            <Icon base={Icon::empty().path(type_icon).size(px(17.)).text_color(theme.item_icon)} />
+                            {row_icon}
                         </div>
                         <div flex flex_col gap={px(4.)} flex_1 min_w={px(0.)}>
                             <div flex items_center gap={px(8.)}>
@@ -117,15 +213,17 @@ impl Nox {
                             <div fontSize={px(11.)} textColor={theme.text_muted}>{subtitle}</div>
                         </div>
                         <div fontSize={px(11.)} textColor={theme.text_muted} flex_shrink_0>{when}</div>
-                        <Button
-                            base={Button::new(SharedString::from(format!("trash-restore-{item_id}")))
-                                .icon(Icon::empty().path("icons/rotate-ccw.svg").size(px(13.)))
-                                .label("Restore")
-                                .small()
-                                .on_click(move |_, _window, app| {
-                                    restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
-                                })}
-                        />
+                        {restore_button(
+                            SharedString::from(format!("trash-restore-{item_id}")),
+                            theme,
+                            32.,
+                            11.,
+                            13.,
+                            cx,
+                            move |_, _window, app| {
+                                restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
+                            },
+                        )}
                     </div>
                 }
             })
@@ -158,7 +256,7 @@ impl Nox {
                 </div>
                 <div flex flex_1 min_h={px(0.)} gap={px(16.)} p={px(28.)} pt={px(20.)}>
                     <div flex flex_col gap={px(12.)} flex_1 min_w={px(0.)}>
-                        <div flex flex_col gap={px(4.)} flex_shrink_0>
+                        <div flex flex_col gap={px(4.)} flex_shrink_0 h={px(LIST_HEADING_HEIGHT)}>
                             <div flex items_center gap={px(8.)}>
                                 <div fontSize={px(16.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>
                                     "Recently deleted"
@@ -192,7 +290,12 @@ impl Nox {
                             }}
                         </div>
                     </div>
-                    {preview}
+                    <div flex flex_col gap={px(12.)} w={px(392.)} flex_shrink_0>
+                        // Spacer mirroring the list's heading block, so the
+                        // preview panel starts level with the table itself.
+                        <div h={px(LIST_HEADING_HEIGHT)} flex_shrink_0 />
+                        {preview}
+                    </div>
                 </div>
             </div>
         }
@@ -216,7 +319,7 @@ impl Nox {
                 <div
                     id="trash-preview-empty"
                     flex flex_col items_center justify_center gap={px(10.)}
-                    w={px(392.)} h_full flex_shrink_0
+                    w_full flex_1 min_h={px(0.)}
                     bg={theme.surface} rounded={px(10.)}
                     border_1 borderColor={theme.border}
                 >
@@ -235,11 +338,17 @@ impl Nox {
             "Deleted secure note"
         };
         let type_label = if is_login { "Login" } else { "Secure note" };
-        let type_icon = if is_login {
-            "icons/key-round.svg"
-        } else {
-            "icons/file-lock.svg"
-        };
+        let identity_icon = crate::icons::render_resolved_icon(
+            crate::icons::resolved_item_icon(
+                &self.data_dir,
+                &crate::icons::item_key(item_id),
+                &item.payload,
+                self.local_icon_selections
+                    .get(&crate::icons::item_key(item_id)),
+            ),
+            20.,
+            theme.text_secondary,
+        );
         let when = format!("Deleted {}", relative_time(item.deleted_at_ms));
         let title = item.payload.title.clone();
 
@@ -297,7 +406,7 @@ impl Nox {
         rsx! {
             <div
                 id="trash-preview"
-                flex flex_col w={px(392.)} h_full flex_shrink_0
+                flex flex_col w_full flex_1 min_h={px(0.)}
                 bg={theme.surface} rounded={px(10.)}
                 border_1 borderColor={theme.border}
             >
@@ -327,9 +436,9 @@ impl Nox {
                     <div flex items_center gap={px(12.)} w_full>
                         <div
                             flex items_center justify_center flex_shrink_0
-                            w={px(44.)} h={px(44.)} rounded={px(10.)} bg={theme.raised}
+                            w={px(44.)} h={px(44.)} rounded={px(10.)} bg={theme.item_icon}
                         >
-                            <Icon base={Icon::empty().path(type_icon).size(px(20.)).text_color(theme.item_icon)} />
+                            {identity_icon}
                         </div>
                         <div flex flex_col gap={px(3.)} flex_1 min_w={px(0.)}>
                             <div fontSize={px(15.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text} truncate>{title}</div>
@@ -365,23 +474,20 @@ impl Nox {
                     h={px(76.)} px={px(16.)} flex_shrink_0
                     border_t_1 borderColor={theme.border}
                 >
-                    <Button
-                        base={Button::new("trash-preview-cancel")
-                            .outline()
-                            .label("Cancel")
-                            .on_click(move |_, _window, app| {
-                                cancel_locker.update(app, |locker, cx| locker.clear_trash_selection(cx));
-                            })}
-                    />
-                    <Button
-                        base={Button::new("trash-preview-restore")
-                            .primary()
-                            .icon(Icon::empty().path("icons/rotate-ccw.svg").size(px(14.)))
-                            .label("Restore")
-                            .on_click(move |_, _window, app| {
-                                restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
-                            })}
-                    />
+                    {cancel_button("trash-preview-cancel", theme, cx, move |_, _window, app| {
+                        cancel_locker.update(app, |locker, cx| locker.clear_trash_selection(cx));
+                    })}
+                    {restore_button(
+                        "trash-preview-restore",
+                        theme,
+                        36.,
+                        11.,
+                        14.,
+                        cx,
+                        move |_, _window, app| {
+                            restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
+                        },
+                    )}
                 </div>
             </div>
         }
