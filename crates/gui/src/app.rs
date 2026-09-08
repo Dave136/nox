@@ -4625,6 +4625,32 @@ mod tests {
     }
 
     #[gpui::test]
+    fn restoring_the_previewed_item_clears_the_trash_selection(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, ids) =
+            unlocked_view(cx, "trash-preview", &[login_payload("One", "one")]);
+        let item_id = ids[0];
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.delete_item(item_id, window, locker_cx)
+        });
+        view.update(cx, |locker, locker_cx| {
+            locker.select_trash_item(item_id, locker_cx)
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.session().unwrap().trash_selected),
+            Some(item_id)
+        );
+        view.update(cx, |locker, locker_cx| {
+            locker.restore_item(item_id, locker_cx)
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.session().unwrap().trash_selected),
+            None
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn restoring_from_trash_returns_the_item_to_the_live_list(cx: &mut TestAppContext) {
         init(cx);
         let payloads = [login_payload("One", "one"), login_payload("Two", "two")];

@@ -4,7 +4,10 @@
 use crate::app::{AppState, Nox, relative_time};
 use crate::theme::Theme;
 use gpui::{AnyElement, Context, FontWeight, SharedString, Window, div, prelude::*, px};
-use gpui_component::{Icon, Sizable, button::Button};
+use gpui_component::{
+    Icon, Sizable,
+    button::{Button, ButtonVariants as _},
+};
 use gpui_rsx::rsx;
 use nox_core::{ItemId, ItemType};
 
@@ -198,12 +201,189 @@ impl Nox {
 
     fn render_trash_preview(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
+        let selected = self.session().and_then(|session| {
+            let item_id = session.trash_selected?;
+            session
+                .list
+                .deleted
+                .iter()
+                .find(|deleted| deleted.item_id == item_id)
+                .cloned()
+        });
+
+        let Some(item) = selected else {
+            return rsx! {
+                <div
+                    id="trash-preview-empty"
+                    flex flex_col items_center justify_center gap={px(10.)}
+                    w={px(392.)} h_full flex_shrink_0
+                    bg={theme.surface} rounded={px(10.)}
+                    border_1 borderColor={theme.border}
+                >
+                    <Icon base={Icon::empty().path("icons/trash-2.svg").size(px(24.)).text_color(theme.text_ghost)} />
+                    <div text_xs textColor={theme.text_muted}>"Select a deleted item to preview it"</div>
+                </div>
+            }
+            .into_any_element();
+        };
+
+        let item_id = item.item_id;
+        let is_login = item.payload.item_type == ItemType::Login;
+        let heading = if is_login {
+            "Deleted login"
+        } else {
+            "Deleted secure note"
+        };
+        let type_label = if is_login { "Login" } else { "Secure note" };
+        let type_icon = if is_login {
+            "icons/key-round.svg"
+        } else {
+            "icons/file-lock.svg"
+        };
+        let when = format!("Deleted {}", relative_time(item.deleted_at_ms));
+        let title = item.payload.title.clone();
+
+        // Read-only preview: the password is never revealed here, only in the
+        // item editor once the item has actually been restored.
+        let fields: Vec<(&'static str, &'static str, String)> = if is_login {
+            vec![
+                (
+                    "WEBSITE",
+                    "icons/globe.svg",
+                    item.payload.uris.first().cloned().unwrap_or_default(),
+                ),
+                (
+                    "USERNAME",
+                    "icons/user-round.svg",
+                    item.payload.username.clone(),
+                ),
+                ("PASSWORD", "icons/lock.svg", "••••••••••••••••".to_string()),
+            ]
+        } else {
+            vec![(
+                "NOTE",
+                "icons/file-lock.svg",
+                item.payload.notes.lines().next().unwrap_or("").to_string(),
+            )]
+        };
+
+        let field_rows = fields
+            .into_iter()
+            .filter(|(label, _, value)| *label == "PASSWORD" || !value.is_empty())
+            .map(|(label, icon, value)| {
+                rsx! {
+                    <div flex flex_col gap={px(7.)} w_full>
+                        <div
+                            fontFamily="Geist Mono" fontSize={px(9.)}
+                            fontWeight={FontWeight::BOLD} textColor={theme.text_subtle}
+                        >{label}</div>
+                        <div
+                            flex items_center gap={px(9.)} w_full
+                            h={px(42.)} px={px(11.)} rounded={px(7.)}
+                            bg={theme.field} border_1 borderColor={theme.field_border}
+                        >
+                            <Icon base={Icon::empty().path(icon).size(px(14.)).text_color(theme.icon_muted)} />
+                            <div fontSize={px(12.)} textColor={theme.text_soft} truncate>{value}</div>
+                        </div>
+                    </div>
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let close_locker = cx.entity();
+        let cancel_locker = cx.entity();
+        let restore_locker = cx.entity();
+
         rsx! {
             <div
-                w={px(392.)} h_full flex_shrink_0
+                id="trash-preview"
+                flex flex_col w={px(392.)} h_full flex_shrink_0
                 bg={theme.surface} rounded={px(10.)}
                 border_1 borderColor={theme.border}
-            />
+            >
+                <div
+                    flex items_center justify_between w_full
+                    h={px(64.)} px={px(18.)} flex_shrink_0
+                    border_b_1 borderColor={theme.border}
+                >
+                    <div flex flex_col gap={px(3.)}>
+                        <div
+                            fontFamily="Geist Mono" fontSize={px(9.)}
+                            fontWeight={FontWeight::BOLD} textColor={theme.text_muted}
+                        >"PREVIEW RESTORE"</div>
+                        <div fontSize={px(15.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{heading}</div>
+                    </div>
+                    <Button
+                        base={Button::new("trash-preview-close")
+                            .ghost()
+                            .icon(Icon::empty().path("icons/x.svg").size(px(15.)).text_color(theme.icon_muted))
+                            .tooltip("Close preview")
+                            .on_click(move |_, _window, app| {
+                                close_locker.update(app, |locker, cx| locker.clear_trash_selection(cx));
+                            })}
+                    />
+                </div>
+                <div flex flex_col gap={px(22.)} flex_1 min_h={px(0.)} overflow_y_scroll py={px(22.)} px={px(20.)}>
+                    <div flex items_center gap={px(12.)} w_full>
+                        <div
+                            flex items_center justify_center flex_shrink_0
+                            w={px(44.)} h={px(44.)} rounded={px(10.)} bg={theme.raised}
+                        >
+                            <Icon base={Icon::empty().path(type_icon).size(px(20.)).text_color(theme.item_icon)} />
+                        </div>
+                        <div flex flex_col gap={px(3.)} flex_1 min_w={px(0.)}>
+                            <div fontSize={px(15.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text} truncate>{title}</div>
+                            <div fontSize={px(11.)} textColor={theme.text_muted}>{when}</div>
+                        </div>
+                    </div>
+                    <div
+                        flex items_center gap={px(8.)} w_full
+                        h={px(40.)} px={px(11.)} rounded={px(8.)}
+                        bg={theme.raised} border_1 borderColor={theme.border}
+                    >
+                        <Icon base={Icon::empty().path("icons/lock.svg").size(px(14.)).text_color(theme.icon_muted)} />
+                        <div fontSize={px(11.)} fontWeight={FontWeight::MEDIUM} textColor={theme.text_secondary}>
+                            "Read-only preview"
+                        </div>
+                    </div>
+                    {div().flex().flex_col().gap(px(14.)).w_full().children(field_rows)}
+                    <div flex flex_col gap={px(8.)} w_full>
+                        <div flex items_center justify_between w_full>
+                            <div fontSize={px(11.)} textColor={theme.text_muted}>"Item type"</div>
+                            <div fontSize={px(11.)} fontWeight={FontWeight::MEDIUM} textColor={theme.text_soft}>{type_label}</div>
+                        </div>
+                        <div flex items_center justify_between w_full>
+                            <div fontSize={px(11.)} textColor={theme.text_muted}>"Deleted"</div>
+                            <div fontSize={px(11.)} fontWeight={FontWeight::MEDIUM} textColor={theme.text_soft}>
+                                {relative_time(item.deleted_at_ms)}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div
+                    flex items_center justify_end gap={px(10.)} w_full
+                    h={px(76.)} px={px(16.)} flex_shrink_0
+                    border_t_1 borderColor={theme.border}
+                >
+                    <Button
+                        base={Button::new("trash-preview-cancel")
+                            .outline()
+                            .label("Cancel")
+                            .on_click(move |_, _window, app| {
+                                cancel_locker.update(app, |locker, cx| locker.clear_trash_selection(cx));
+                            })}
+                    />
+                    <Button
+                        base={Button::new("trash-preview-restore")
+                            .primary()
+                            .icon(Icon::empty().path("icons/rotate-ccw.svg").size(px(14.)))
+                            .label("Restore")
+                            .on_click(move |_, _window, app| {
+                                restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
+                            })}
+                    />
+                </div>
+            </div>
         }
         .into_any_element()
     }
