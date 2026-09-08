@@ -225,6 +225,11 @@ impl Nox {
             let home = self.render_home(window, cx);
             return rsx! { <div id="home-shell" size_full flex bg={theme.canvas}>{nav}{home}</div> };
         }
+        if active_view == ActiveView::Trash {
+            let nav = self.render_sidebar_nav(cx);
+            let trash = self.render_trash(window, cx);
+            return rsx! { <div id="trash-shell" size_full flex bg={theme.canvas}>{nav}{trash}</div> };
+        }
         if self
             .session()
             .is_some_and(|session| session.item_editor.is_some())
@@ -270,6 +275,8 @@ impl Nox {
             ActiveView::Logins => ("Logins", logins, "logins"),
             ActiveView::SecureNotes => ("Secure Notes", notes, "encrypted notes"),
             ActiveView::Favorites => ("Favorites", favorites_count, "items saved for quick access"),
+            // Unreachable: Trash returns its own shell above, before this point.
+            ActiveView::Trash => ("Trash", 0, "items"),
         };
         rsx! {
             <div

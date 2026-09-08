@@ -4839,7 +4839,10 @@ mod tests {
             locker.arm_inactivity_timer(window, locker_cx);
         });
         cx.update(|window, _| window.blur());
-        for _ in 0..7 {
+        // One tab per focusable sidebar link (Home, All items, Favorites,
+        // Logins, Secure notes, Trash, Settings), landing on the lock button.
+        // Bump this when a clickable sidebar row is added or removed.
+        for _ in 0..8 {
             cx.update(|window, app| window.focus_next(app));
         }
         cx.simulate_keystrokes("enter");
@@ -4862,7 +4865,7 @@ mod tests {
             locker.arm_inactivity_timer(window, locker_cx);
         });
         cx.update(|window, _| window.blur());
-        for _ in 0..7 {
+        for _ in 0..8 {
             cx.update(|window, app| window.focus_next(app));
         }
         cx.simulate_keystrokes("a");

@@ -20,6 +20,7 @@ pub(crate) enum ActiveView {
     Logins,
     SecureNotes,
     Favorites,
+    Trash,
 }
 
 impl ActiveView {
@@ -30,6 +31,7 @@ impl ActiveView {
             ActiveView::Logins => Some(ItemType::Login),
             ActiveView::SecureNotes => Some(ItemType::SecureNote),
             ActiveView::Favorites => None,
+            ActiveView::Trash => None,
         }
     }
 }
@@ -75,6 +77,7 @@ impl Nox {
         let locker_logins = locker.clone();
         let locker_notes = locker.clone();
         let locker_favorites = locker.clone();
+        let locker_trash = locker.clone();
         let locker_settings = locker.clone();
 
         rsx! {
@@ -105,6 +108,9 @@ impl Nox {
                         locker_notes.update(app, |locker, cx| locker.set_active_view(ActiveView::SecureNotes, cx));
                     }, cx)}
                     {sidebar_static_item(theme, "icons/contact.svg", "Identities")}
+                    {sidebar_link("sidebar-trash", "icons/trash-2.svg", "Trash", active == ActiveView::Trash, move |_, _window, app| {
+                        locker_trash.update(app, |locker, cx| locker.set_active_view(ActiveView::Trash, cx));
+                    }, cx)}
                 </div>
                 // The Pencil frame positions the Tools group 92px below the end
                 // of the Vault group (y 442 vs 350).
@@ -345,5 +351,10 @@ mod tests {
             ActiveView::SecureNotes.item_type(),
             Some(ItemType::SecureNote)
         );
+    }
+
+    #[test]
+    fn trash_view_has_no_item_type_filter() {
+        assert_eq!(ActiveView::Trash.item_type(), None);
     }
 }

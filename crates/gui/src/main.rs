@@ -11,6 +11,7 @@ mod locked;
 mod nav;
 mod settings;
 mod theme;
+mod trash;
 mod ui;
 mod vault_dialogs;
 mod vault_list;
