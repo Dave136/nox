@@ -1166,6 +1166,7 @@ mod tests {
             updated_at: 2,
             icon: IconChoice::Default,
             note_color: NoteColor::Blue,
+            note_tags: vec![],
         }
     }
 

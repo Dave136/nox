@@ -241,6 +241,7 @@ fn login_payload() -> ItemPayload {
         updated_at: 1,
         icon: IconChoice::Default,
         note_color: NoteColor::Blue,
+        note_tags: vec![],
     }
 }
 

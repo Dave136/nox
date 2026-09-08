@@ -1,7 +1,10 @@
 //! Versioned encrypted item payloads.
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{collections::HashSet, fmt};
+
+pub const MAX_NOTE_TAGS: usize = 12;
+pub const MAX_NOTE_TAG_CHARS: usize = 32;
 
 /// The only item payload schema supported by this release.
 pub const ITEM_SCHEMA_VERSION: u16 = 1;
@@ -107,6 +110,9 @@ pub struct ItemPayload {
     /// The secure note's accent color. Additive — see [`IconChoice`].
     #[serde(default)]
     pub note_color: NoteColor,
+    /// Free-form tags for secure notes. Additive; Logins ignore this field.
+    #[serde(default)]
+    pub note_tags: Vec<String>,
 }
 
 /// Errors returned while encoding or decoding an item payload.
@@ -145,6 +151,26 @@ impl From<serde_json::Error> for ItemPayloadError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
     }
+}
+
+pub fn normalize_note_tags(tags: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for tag in tags {
+        if normalized.len() >= MAX_NOTE_TAGS {
+            break;
+        }
+        let tag = tag.as_ref().trim();
+        if tag.is_empty() {
+            continue;
+        }
+        let tag = tag.chars().take(MAX_NOTE_TAG_CHARS).collect::<String>();
+        let key = tag.to_lowercase();
+        if seen.insert(key) {
+            normalized.push(tag);
+        }
+    }
+    normalized
 }
 
 impl ItemPayload {
@@ -187,6 +213,7 @@ mod tests {
             updated_at: 1_700_000_000_001,
             icon: IconChoice::Default,
             note_color: NoteColor::Blue,
+            note_tags: vec![],
         }
     }
 
@@ -263,6 +290,57 @@ mod tests {
         let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
         assert_eq!(decoded.note_color, NoteColor::Neutral);
         assert_eq!(decoded.schema_version, ITEM_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn note_tags_round_trip_through_json() {
+        let mut original = payload(ItemType::SecureNote);
+        original.note_tags = vec!["recovery".into(), "wifi".into()];
+
+        let encoded = original.to_json_bytes().unwrap();
+        let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
+
+        assert_eq!(decoded.note_tags, ["recovery", "wifi"]);
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn item_json_without_note_tags_defaults_to_empty_tags() {
+        let mut value = serde_json::to_value(payload(ItemType::SecureNote)).unwrap();
+        value.as_object_mut().unwrap().remove("note_tags");
+        let encoded = serde_json::to_vec(&value).unwrap();
+
+        let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
+        assert!(decoded.note_tags.is_empty());
+        assert_eq!(decoded.schema_version, ITEM_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn normalize_note_tags_trims_dedupes_case_insensitively_and_caps_limits() {
+        let tags = normalize_note_tags([
+            " recovery ",
+            "RECOVERY",
+            "",
+            "wifi-router-name-that-is-far-too-long-for-the-tag-chip",
+            "bank",
+            "personal",
+            "pin",
+            "codes",
+            "device",
+            "email",
+            "backup",
+            "router",
+            "server",
+            "ssh",
+            "ignored-after-limit",
+        ]);
+
+        assert_eq!(tags.len(), 12);
+        assert_eq!(tags[0], "recovery");
+        assert_eq!(tags[1], "wifi-router-name-that-is-far-too");
+        assert!(!tags.iter().any(|tag| tag == "RECOVERY"));
+        assert!(!tags.iter().any(|tag| tag.is_empty()));
+        assert!(!tags.iter().any(|tag| tag == "ignored-after-limit"));
     }
 
     #[test]

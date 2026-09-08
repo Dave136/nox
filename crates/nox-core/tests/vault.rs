@@ -37,6 +37,7 @@ fn payload(title: &str, password: &str) -> ItemPayload {
         updated_at: 11,
         icon: IconChoice::Default,
         note_color: NoteColor::Blue,
+        note_tags: vec![],
     }
 }
 

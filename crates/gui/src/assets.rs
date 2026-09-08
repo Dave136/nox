@@ -84,6 +84,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "shield-check",
     "shield-plus",
     "shopping-cart",
+    "sliders-horizontal",
     "star",
     "store",
     "tag",

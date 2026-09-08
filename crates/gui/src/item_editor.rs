@@ -2,8 +2,8 @@ use crate::app::{AppState, Nox};
 use crate::nav::ActiveView;
 use crate::theme::Theme;
 use gpui::{
-    AnyElement, App, Context, Entity, Focusable, FontWeight, PathPromptOptions, SharedString,
-    Window, div, prelude::*, px, rgb,
+    Animation, AnimationExt, AnyElement, App, Context, Entity, Focusable, FontWeight,
+    PathPromptOptions, SharedString, Window, div, ease_out_quint, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
@@ -17,10 +17,11 @@ use gpui_component::{
 use gpui_rsx::rsx;
 use nox_core::{
     CharClasses, ITEM_SCHEMA_VERSION, IconChoice, ItemId, ItemPayload, ItemType, MAX_LENGTH,
-    NoteColor, Password, Vault, VaultError, generate_password,
+    NoteColor, Password, Vault, VaultError, generate_password, normalize_note_tags,
 };
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Identifies one *opening* of the editor, which `EditorMode` cannot: two
 /// successive `Create` editors are equal as modes but are different editors,
@@ -29,6 +30,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) struct EditorId(u64);
 
 static NEXT_EDITOR_ID: AtomicU64 = AtomicU64::new(0);
+const NOTE_PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(190);
 
 impl EditorId {
     fn next() -> Self {
@@ -63,6 +65,264 @@ fn note_color_element_id(color: NoteColor) -> &'static str {
         NoteColor::Gold => "note-color-gold",
         NoteColor::Green => "note-color-green",
     }
+}
+
+/// Stable element id for one tag suggestion chip. Tags are short free text
+/// (max 32 chars, trimmed), so the id folds the tag to lowercase with
+/// non-alphanumeric characters as dashes — stable enough for tests and
+/// tooling to address a suggestion by name.
+fn note_tag_id(prefix: &str, tag: &str) -> SharedString {
+    let sanitized = tag
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    SharedString::from(format!("{prefix}-{sanitized}"))
+}
+
+fn note_tag_suggestion_element_id(tag: &str) -> SharedString {
+    note_tag_id("note-tag-suggestion", tag)
+}
+
+fn note_tag_filter_option_element_id(tag: &str) -> SharedString {
+    note_tag_id("note-tag-filter-option", tag)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NoteMarkdownFormat {
+    Bold,
+    Italic,
+    List,
+    Code,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct NoteMarkdownEdit {
+    text: String,
+    selection: Range<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NotePreviewBlockKind {
+    Heading,
+    ListItem,
+    Code,
+    Paragraph,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NotePreviewBlock {
+    kind: NotePreviewBlockKind,
+    spans: Vec<NotePreviewSpan>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NotePreviewSpanStyle {
+    Plain,
+    Bold,
+    Italic,
+    Code,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NotePreviewSpan {
+    style: NotePreviewSpanStyle,
+    text: String,
+}
+
+impl NotePreviewBlock {
+    fn text(&self) -> String {
+        self.spans.iter().map(|span| span.text.as_str()).collect()
+    }
+}
+
+fn secure_note_has_markdown(value: &str) -> bool {
+    value.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("# ")
+            || trimmed.starts_with("## ")
+            || trimmed.starts_with("### ")
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("```")
+    }) || value.contains("**")
+        || value.contains('`')
+        || (value.contains('[') && value.contains("]("))
+}
+
+fn secure_note_markdown_preview_blocks(value: &str) -> Vec<NotePreviewBlock> {
+    value
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed == "```" {
+                return None;
+            }
+            let (kind, text) = if let Some(text) = trimmed.strip_prefix("### ") {
+                (NotePreviewBlockKind::Heading, text)
+            } else if let Some(text) = trimmed.strip_prefix("## ") {
+                (NotePreviewBlockKind::Heading, text)
+            } else if let Some(text) = trimmed.strip_prefix("# ") {
+                (NotePreviewBlockKind::Heading, text)
+            } else if let Some(text) = trimmed.strip_prefix("- ") {
+                (NotePreviewBlockKind::ListItem, text)
+            } else if let Some(text) = trimmed.strip_prefix("* ") {
+                (NotePreviewBlockKind::ListItem, text)
+            } else if trimmed.starts_with("    ") {
+                (NotePreviewBlockKind::Code, trimmed)
+            } else {
+                (NotePreviewBlockKind::Paragraph, trimmed)
+            };
+            Some(NotePreviewBlock {
+                kind,
+                spans: parse_inline_markdown(text),
+            })
+        })
+        .collect()
+}
+
+fn parse_inline_markdown(value: &str) -> Vec<NotePreviewSpan> {
+    let mut spans = Vec::new();
+    let mut remaining = value;
+    while !remaining.is_empty() {
+        let markers = [
+            (remaining.find("**"), "**", NotePreviewSpanStyle::Bold),
+            (remaining.find('`'), "`", NotePreviewSpanStyle::Code),
+            (remaining.find('*'), "*", NotePreviewSpanStyle::Italic),
+        ];
+        let Some((start, marker, style)) = markers
+            .into_iter()
+            .filter_map(|(index, marker, style)| index.map(|index| (index, marker, style)))
+            .min_by_key(|(index, _, _)| *index)
+        else {
+            push_note_preview_span(&mut spans, NotePreviewSpanStyle::Plain, remaining);
+            break;
+        };
+        if start > 0 {
+            push_note_preview_span(&mut spans, NotePreviewSpanStyle::Plain, &remaining[..start]);
+        }
+        let content_start = start + marker.len();
+        let Some(relative_end) = remaining[content_start..].find(marker) else {
+            push_note_preview_span(&mut spans, NotePreviewSpanStyle::Plain, &remaining[start..]);
+            break;
+        };
+        let content_end = content_start + relative_end;
+        push_note_preview_span(&mut spans, style, &remaining[content_start..content_end]);
+        remaining = &remaining[(content_end + marker.len())..];
+    }
+    spans
+}
+
+fn push_note_preview_span(
+    spans: &mut Vec<NotePreviewSpan>,
+    style: NotePreviewSpanStyle,
+    text: &str,
+) {
+    if text.is_empty() {
+        return;
+    }
+    spans.push(NotePreviewSpan {
+        style,
+        text: text.replace('[', "").replace("](", " ").replace(')', ""),
+    });
+}
+
+fn apply_note_markdown_format(
+    value: &str,
+    selected_range: Range<usize>,
+    format: NoteMarkdownFormat,
+) -> NoteMarkdownEdit {
+    match format {
+        NoteMarkdownFormat::Bold => wrap_note_markdown_selection(value, selected_range, "**", "**"),
+        NoteMarkdownFormat::Italic => wrap_note_markdown_selection(value, selected_range, "*", "*"),
+        NoteMarkdownFormat::Code => wrap_note_markdown_selection(value, selected_range, "`", "`"),
+        NoteMarkdownFormat::List => list_note_markdown_selection(value, selected_range),
+    }
+}
+
+fn wrap_note_markdown_selection(
+    value: &str,
+    selected_range: Range<usize>,
+    prefix: &str,
+    suffix: &str,
+) -> NoteMarkdownEdit {
+    let range = note_markdown_target_range(value, selected_range);
+    let mut text = String::with_capacity(value.len() + prefix.len() + suffix.len());
+    text.push_str(&value[..range.start]);
+    text.push_str(prefix);
+    text.push_str(&value[range.clone()]);
+    text.push_str(suffix);
+    text.push_str(&value[range.end..]);
+
+    let selection_start = range.start + prefix.len();
+    let selection_end = selection_start + range.len();
+    NoteMarkdownEdit {
+        text,
+        selection: selection_start..selection_end,
+    }
+}
+
+fn list_note_markdown_selection(value: &str, selected_range: Range<usize>) -> NoteMarkdownEdit {
+    let range = note_markdown_target_range(value, selected_range);
+    let line_start = value[..range.start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let line_end = value[range.end..]
+        .find('\n')
+        .map_or(value.len(), |index| range.end + index);
+    let block = &value[line_start..line_end];
+    let line_count = block.split('\n').count().max(1);
+    let mut listed = String::with_capacity(block.len() + (line_count * 2));
+    for (index, line) in block.split('\n').enumerate() {
+        if index > 0 {
+            listed.push('\n');
+        }
+        listed.push_str("- ");
+        listed.push_str(line);
+    }
+
+    let mut text = String::with_capacity(value.len() + (line_count * 2));
+    text.push_str(&value[..line_start]);
+    text.push_str(&listed);
+    text.push_str(&value[line_end..]);
+
+    NoteMarkdownEdit {
+        text,
+        selection: (range.start + 2)..(range.end + (line_count * 2)),
+    }
+}
+
+fn note_markdown_target_range(value: &str, selected_range: Range<usize>) -> Range<usize> {
+    let start = clamp_note_markdown_offset(value, selected_range.start);
+    let end = clamp_note_markdown_offset(value, selected_range.end);
+    if start != end {
+        return start.min(end)..start.max(end);
+    }
+
+    let cursor = start;
+    let before = value[..cursor]
+        .char_indices()
+        .rev()
+        .find(|(_, character)| character.is_whitespace())
+        .map_or(0, |(index, character)| index + character.len_utf8());
+    let after = value[cursor..]
+        .char_indices()
+        .find(|(_, character)| character.is_whitespace())
+        .map_or(value.len(), |(index, _)| cursor + index);
+    before..after
+}
+
+fn clamp_note_markdown_offset(value: &str, offset: usize) -> usize {
+    let mut offset = offset.min(value.len());
+    while offset > 0 && !value.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 /// What the picker's "Favicon del sitio" row is doing right now. Only an
@@ -104,6 +364,10 @@ pub(crate) struct ItemEditorState {
     pub(crate) icon: IconChoice,
     /// The secure note's accent color (`locker.pen` "Note Color Field").
     pub(crate) note_color: NoteColor,
+    /// Free-form secure-note tags shown as chips in the Note settings combobox.
+    pub(crate) note_tags: Vec<String>,
+    pub(crate) note_tag_input: Entity<InputState>,
+    pub(crate) markdown_preview_open: bool,
     pub(crate) local_icon: Option<crate::icons::LocalIconRef>,
     pub(crate) title_input: Entity<InputState>,
     pub(crate) username_input: Entity<InputState>,
@@ -727,12 +991,16 @@ impl ItemEditorState {
         let length_input = input("20", window, cx, "Length", false);
         let favicon_url_input = input("", window, cx, "https://example.com", false);
         let icon_url_input = input("", window, cx, "https://example.com/icon.png", false);
+        let note_tag_input = input("", window, cx, "Add tag...", false);
         Self {
             id: EditorId::next(),
             mode: EditorMode::Create,
             item_type: ItemType::Login,
             icon: IconChoice::Default,
             note_color: NoteColor::default(),
+            note_tags: Vec::new(),
+            note_tag_input,
+            markdown_preview_open: false,
             local_icon: None,
             title_input,
             username_input,
@@ -808,6 +1076,7 @@ impl ItemEditorState {
             updated_at: now_millis(),
             icon: self.icon,
             note_color: self.note_color,
+            note_tags: normalize_note_tags(&self.note_tags),
         }
     }
 
@@ -854,6 +1123,8 @@ impl ItemEditorState {
         editor.item_type = payload.item_type;
         editor.icon = payload.icon;
         editor.note_color = payload.note_color;
+        editor.note_tags = payload.note_tags;
+        editor.markdown_preview_open = false;
         editor.created_at = payload.created_at;
         editor.title_input.update(cx, |state, input_cx| {
             state.set_value(payload.title, window, input_cx)
@@ -912,6 +1183,7 @@ impl ItemEditorState {
             updated_at: now_millis(),
             icon: self.icon,
             note_color: self.note_color,
+            note_tags: normalize_note_tags(&self.note_tags),
         }
     }
 }
@@ -1022,6 +1294,131 @@ impl Nox {
     pub(crate) fn choose_note_color(&mut self, color: NoteColor, cx: &mut Context<Self>) {
         if let Some(editor) = self.item_editor_mut() {
             editor.note_color = color;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn add_note_tag(&mut self, tag: impl AsRef<str>, cx: &mut Context<Self>) {
+        if let Some(editor) = self.item_editor_mut() {
+            let mut tags = editor.note_tags.clone();
+            tags.push(tag.as_ref().to_owned());
+            editor.note_tags = normalize_note_tags(tags);
+            cx.notify();
+        }
+    }
+
+    /// Tags already saved on other secure notes in this vault, as a stable
+    /// click-to-add suggestion list. With no query it shows the top three tags
+    /// by usage, then recency; while typing it filters that same list by the
+    /// input text. Logins never contribute — tags are a secure-note concept.
+    pub(crate) fn note_tag_suggestions(&self) -> Vec<String> {
+        self.note_tag_suggestions_for_query("")
+    }
+
+    pub(crate) fn note_tag_suggestions_for_query(&self, query: &str) -> Vec<String> {
+        let Some(session) = self.session() else {
+            return Vec::new();
+        };
+        let on_editor: std::collections::HashSet<String> = self
+            .item_editor()
+            .map(|editor| {
+                editor
+                    .note_tags
+                    .iter()
+                    .map(|tag| tag.to_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let query = query.trim().to_lowercase();
+        let mut stats: std::collections::HashMap<String, (String, usize, u64)> =
+            std::collections::HashMap::new();
+        for (_, payload) in session
+            .list
+            .items
+            .iter()
+            .filter(|(_, payload)| payload.item_type == ItemType::SecureNote)
+        {
+            for tag in normalize_note_tags(&payload.note_tags) {
+                let key = tag.to_lowercase();
+                if on_editor.contains(&key) || (!query.is_empty() && !key.contains(&query)) {
+                    continue;
+                }
+                let entry = stats.entry(key).or_insert((tag, 0, 0));
+                entry.1 += 1;
+                entry.2 = entry.2.max(payload.updated_at);
+            }
+        }
+        let mut suggestions = stats.into_values().collect::<Vec<_>>();
+        suggestions.sort_by(|left, right| {
+            right
+                .1
+                .cmp(&left.1)
+                .then_with(|| right.2.cmp(&left.2))
+                .then_with(|| left.0.to_lowercase().cmp(&right.0.to_lowercase()))
+        });
+        suggestions
+            .into_iter()
+            .take(3)
+            .map(|(tag, _, _)| tag)
+            .collect()
+    }
+
+    /// Click-to-add from the suggestions list. The same normalization as
+    /// typing applies, so a suggestion that is already a chip (or a case
+    /// variant of one) is a no-op.
+    pub(crate) fn select_note_tag_suggestion(&mut self, tag: &str, cx: &mut Context<Self>) {
+        self.add_note_tag(tag, cx);
+    }
+
+    pub(crate) fn remove_note_tag(&mut self, tag: &str, cx: &mut Context<Self>) {
+        if let Some(editor) = self.item_editor_mut() {
+            let key = tag.to_lowercase();
+            editor
+                .note_tags
+                .retain(|existing| existing.to_lowercase() != key);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn commit_note_tag_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tag) = self
+            .item_editor()
+            .map(|editor| editor.note_tag_input.read(cx).value().to_string())
+        else {
+            return;
+        };
+        self.add_note_tag(tag, cx);
+        if let Some(editor) = self.item_editor() {
+            editor.note_tag_input.update(cx, |state, input_cx| {
+                state.set_value("".to_owned(), window, input_cx)
+            });
+        }
+    }
+
+    fn format_secure_note_markdown(
+        &mut self,
+        format: NoteMarkdownFormat,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(notes_input) = self.item_editor().map(|editor| editor.notes_input.clone()) else {
+            return;
+        };
+        notes_input.update(cx, |state, input_cx| {
+            let edit =
+                apply_note_markdown_format(state.value().as_ref(), state.selected_range(), format);
+            state.replace_all(edit.text, window, input_cx);
+            state.set_selected_range(edit.selection, input_cx);
+            state.focus(window, input_cx);
+        });
+        cx.notify();
+    }
+
+    fn toggle_secure_note_markdown_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = self.item_editor_mut() {
+            let has_markdown =
+                secure_note_has_markdown(editor.notes_input.read(cx).value().as_ref());
+            editor.markdown_preview_open = has_markdown && !editor.markdown_preview_open;
             cx.notify();
         }
     }
@@ -2329,7 +2726,12 @@ impl Nox {
         };
         let title = editor.title_input.clone();
         let notes = editor.notes_input.clone();
-        let character_count = notes.read(cx).value().chars().count();
+        let note_tag_input = editor.note_tag_input.clone();
+        let note_tags = editor.note_tags.clone();
+        let notes_value = notes.read(cx).value().to_string();
+        let note_has_markdown = secure_note_has_markdown(&notes_value);
+        let note_preview_open = editor.markdown_preview_open && note_has_markdown;
+        let character_count = notes_value.chars().count();
         let save_error = editor.save_error.clone();
         let editing = matches!(editor.mode, EditorMode::Edit(_));
         let workspace_title = if editing {
@@ -2484,13 +2886,51 @@ impl Nox {
                 )
                 .child(body)
         };
-        let tool = |id: &'static str, icon: &'static str| {
-            Button::new(id).ghost().size(px(26.)).rounded(px(6.)).child(
-                Icon::empty()
-                    .path(icon)
-                    .size(px(14.))
-                    .text_color(theme.icon_muted),
-            )
+        let tool = |id: &'static str,
+                    icon: &'static str,
+                    tooltip: &'static str,
+                    format: NoteMarkdownFormat| {
+            let format_locker = locker.clone();
+            Button::new(id)
+                .ghost()
+                .size(px(26.))
+                .rounded(px(6.))
+                .tooltip(tooltip)
+                .on_click(move |_, window, app| {
+                    format_locker.update(app, |locker, cx| {
+                        locker.format_secure_note_markdown(format, window, cx);
+                    });
+                })
+                .child(
+                    Icon::empty()
+                        .path(icon)
+                        .size(px(14.))
+                        .text_color(theme.icon_muted),
+                )
+        };
+        let preview_toggle = |active: bool| {
+            let preview_locker = locker.clone();
+            Button::new("secure-note-markdown-preview-toggle")
+                .ghost()
+                .size(px(26.))
+                .rounded(px(6.))
+                .tooltip("Preview")
+                .when(active, |button| button.bg(theme.raised))
+                .on_click(move |_, _window, app| {
+                    preview_locker.update(app, |locker, cx| {
+                        locker.toggle_secure_note_markdown_preview(cx);
+                    });
+                })
+                .child(
+                    Icon::empty()
+                        .path("icons/scan-eye.svg")
+                        .size(px(14.))
+                        .text_color(if active {
+                            theme.text_secondary
+                        } else {
+                            theme.icon_muted
+                        }),
+                )
         };
         // Pencil "Note Color Field" (`HFk8V`): five 28x28 circular swatches
         // with a 10px gap; the selected swatch carries a 2px ring and a
@@ -2530,8 +2970,155 @@ impl Nox {
                     })
             })
             .collect::<Vec<_>>();
-        let note_color_card = div()
-            .id("note-color-card")
+        let note_tag_query = note_tag_input.read(cx).value().to_string();
+        let fixed_suggestion_tags = self.note_tag_suggestions();
+        let filtered_tag_options = if note_tag_query.trim().is_empty() {
+            Vec::new()
+        } else {
+            self.note_tag_suggestions_for_query(&note_tag_query)
+        };
+        let tag_chips = note_tags
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, tag)| {
+                let tag_for_remove = tag.clone();
+                let remove_locker = locker.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .h(px(24.))
+                    .px(px(8.))
+                    .rounded(px(12.))
+                    .bg(theme.raised)
+                    .border_1()
+                    .border_color(theme.field_border)
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(theme.text_soft)
+                            .child(tag),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("note-tag-remove-{index}")))
+                            .debug_selector(move || format!("note-tag-remove-{index}"))
+                            .ghost()
+                            .size(px(22.))
+                            .rounded(px(11.))
+                            .tooltip("Remove tag")
+                            .on_click(move |_, _window, app| {
+                                remove_locker.update(app, |locker, cx| {
+                                    locker.remove_note_tag(&tag_for_remove, cx);
+                                });
+                            })
+                            .child(
+                                Icon::empty()
+                                    .path("icons/x.svg")
+                                    .size(px(12.))
+                                    .text_color(theme.text_ghost),
+                            ),
+                    )
+            })
+            .collect::<Vec<_>>();
+        let suggestion_chips = fixed_suggestion_tags
+            .iter()
+            .cloned()
+            .map(|tag| {
+                let tag_for_label = tag.clone();
+                let add_locker = locker.clone();
+                Button::new(note_tag_suggestion_element_id(&tag))
+                    .debug_selector({
+                        let selector = note_tag_suggestion_element_id(&tag).to_string();
+                        move || selector
+                    })
+                    .ghost()
+                    .h(px(22.))
+                    .px(px(8.))
+                    .rounded(px(11.))
+                    .tooltip(SharedString::from(format!("Add tag {tag}")))
+                    .on_click(move |_, _window, app| {
+                        add_locker.update(app, |locker, cx| {
+                            locker.select_note_tag_suggestion(&tag, cx);
+                        });
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(
+                                Icon::empty()
+                                    .path("icons/plus.svg")
+                                    .size(px(10.))
+                                    .text_color(theme.icon_muted),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(theme.text_soft)
+                                    .child(tag_for_label),
+                            ),
+                    )
+            })
+            .collect::<Vec<_>>();
+        let filtered_option_chips = filtered_tag_options
+            .iter()
+            .cloned()
+            .map(|tag| {
+                let tag_for_label = tag.clone();
+                let tag_input = note_tag_input.clone();
+                let add_locker = locker.clone();
+                Button::new(note_tag_filter_option_element_id(&tag))
+                    .debug_selector({
+                        let selector = note_tag_filter_option_element_id(&tag).to_string();
+                        move || selector
+                    })
+                    .custom(
+                        ButtonCustomVariant::new(cx)
+                            .color(theme.surface)
+                            .hover(theme.row_hover),
+                    )
+                    .w_full()
+                    .h(px(28.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .on_click(move |_, window, app| {
+                        add_locker.update(app, |locker, cx| {
+                            locker.select_note_tag_suggestion(&tag, cx);
+                            tag_input.update(cx, |state, input_cx| {
+                                state.set_value("".to_owned(), window, input_cx)
+                            });
+                        });
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .w_full()
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(theme.text_soft)
+                                    .child(tag_for_label),
+                            )
+                            .child(
+                                Icon::empty()
+                                    .path("icons/check.svg")
+                                    .size(px(12.))
+                                    .text_color(theme.text_ghost),
+                            ),
+                    )
+            })
+            .collect::<Vec<_>>();
+        let tag_filter_top = if note_tags.is_empty() {
+            px(42.)
+        } else {
+            px(74.)
+        };
+        let note_settings_card = div()
+            .id("note-settings-card")
             .flex()
             .flex_col()
             .p(px(20.))
@@ -2555,7 +3142,7 @@ impl Nox {
                             .bg(theme.raised)
                             .child(
                                 Icon::empty()
-                                    .path("icons/palette.svg")
+                                    .path("icons/sliders-horizontal.svg")
                                     .size(px(15.))
                                     .text_color(theme.text_secondary),
                             ),
@@ -2570,13 +3157,13 @@ impl Nox {
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text)
-                                    .child("Note color"),
+                                    .child("Note settings"),
                             )
                             .child(
                                 div()
                                     .text_size(px(9.))
                                     .text_color(theme.text_ghost)
-                                    .child("Pick an accent for this note"),
+                                    .child("Customize this secure note"),
                             ),
                     ),
             )
@@ -2591,11 +3178,119 @@ impl Nox {
                     .gap(px(10.))
                     .children(color_swatches)
                     .into_any_element(),
+            ))
+            .child(field(
+                "TAGS",
+                false,
+                Some("Free-form"),
+                div()
+                    .id("note-tags-combobox")
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .on_key_down({
+                        let tag_locker = locker.clone();
+                        move |event: &gpui::KeyDownEvent, window, app| {
+                            if event.keystroke.key.as_str() == "enter" {
+                                window.prevent_default();
+                                tag_locker.update(app, |locker, cx| {
+                                    locker.commit_note_tag_input(window, cx);
+                                });
+                            }
+                        }
+                    })
+                    .child(
+                        div()
+                            .id("note-tags-value")
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(6.))
+                            .children(tag_chips),
+                    )
+                    .child(
+                        div()
+                            .id("note-tags-input-shell")
+                            .flex()
+                            .flex_1()
+                            .w_full()
+                            .child(
+                                div().id("note-tags-input").flex().flex_1().w_full().child(
+                                    Input::new(&note_tag_input)
+                                        .min_h(px(34.))
+                                        .px(px(10.))
+                                        .bg(theme.field)
+                                        .border_color(theme.field_border)
+                                        .rounded(px(7.)),
+                                ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("note-tags-suggestions")
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(div().text_size(px(9.)).text_color(theme.text_ghost).child(
+                                if fixed_suggestion_tags.is_empty() {
+                                    "Create tags freely; press Enter to add one."
+                                } else {
+                                    "Suggestions — most used or latest"
+                                },
+                            ))
+                            .when(!fixed_suggestion_tags.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .gap(px(6.))
+                                        .children(suggestion_chips),
+                                )
+                            }),
+                    )
+                    .when(!note_tag_query.trim().is_empty(), |this| {
+                        this.child(
+                            div()
+                                .id("note-tags-filter-list")
+                                .absolute()
+                                .top(tag_filter_top)
+                                .left_0()
+                                .right_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.))
+                                .p(px(4.))
+                                .rounded(px(7.))
+                                .bg(theme.surface)
+                                .border_1()
+                                .border_color(theme.border)
+                                .shadow_lg()
+                                .when(filtered_option_chips.is_empty(), |this| {
+                                    this.child(
+                                        div()
+                                            .id("note-tags-not-found")
+                                            .bg(theme.surface)
+                                            .h(px(28.))
+                                            .px(px(8.))
+                                            .flex()
+                                            .items_center()
+                                            .text_size(px(10.))
+                                            .text_color(theme.text_ghost)
+                                            .child("Not found"),
+                                    )
+                                })
+                                .when(!filtered_option_chips.is_empty(), |this| {
+                                    this.children(filtered_option_chips)
+                                }),
+                        )
+                    })
+                    .into_any_element(),
             ));
         let note_editor = div()
             .flex()
             .flex_col()
-            .h(px(220.))
+            .flex_1()
+            .min_h(px(320.))
             .rounded(px(7.))
             .bg(theme.field)
             .border_1()
@@ -2611,17 +3306,41 @@ impl Nox {
                     .flex_shrink_0()
                     .border_b_1()
                     .border_color(theme.field_border)
-                    .child(tool("note-format-bold", "icons/bold.svg"))
-                    .child(tool("note-format-italic", "icons/italic.svg"))
-                    .child(tool("note-format-list", "icons/list.svg"))
-                    .child(tool("note-format-code", "icons/code.svg"))
+                    .child(tool(
+                        "note-format-bold",
+                        "icons/bold.svg",
+                        "Bold",
+                        NoteMarkdownFormat::Bold,
+                    ))
+                    .child(tool(
+                        "note-format-italic",
+                        "icons/italic.svg",
+                        "Italic",
+                        NoteMarkdownFormat::Italic,
+                    ))
+                    .child(tool(
+                        "note-format-list",
+                        "icons/list.svg",
+                        "List",
+                        NoteMarkdownFormat::List,
+                    ))
+                    .child(tool(
+                        "note-format-code",
+                        "icons/code.svg",
+                        "Code",
+                        NoteMarkdownFormat::Code,
+                    ))
                     .child(div().w(px(1.)).h(px(16.)).mx(px(4.)).bg(theme.field_border))
                     .child(
                         div()
                             .text_size(px(9.))
                             .text_color(theme.text_ghost)
                             .child("Markdown supported"),
-                    ),
+                    )
+                    .child(div().flex_1())
+                    .when(note_has_markdown, |toolbar| {
+                        toolbar.child(preview_toggle(note_preview_open))
+                    }),
             )
             .child(
                 Textarea::new(&notes)
@@ -2710,6 +3429,326 @@ impl Nox {
         let _current_icon = self
             .item_editor()
             .map_or(IconChoice::Default, |editor| editor.icon);
+        let preview_spans = |spans: Vec<NotePreviewSpan>, text_color, text_size| {
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(0.))
+                .children(spans.into_iter().map(move |span| {
+                    div()
+                        .text_size(text_size)
+                        .text_color(text_color)
+                        .font_family("Inter")
+                        .when(span.style == NotePreviewSpanStyle::Bold, |span| {
+                            span.font_weight(FontWeight::BOLD)
+                        })
+                        .when(span.style == NotePreviewSpanStyle::Italic, |span| {
+                            span.italic()
+                        })
+                        .when(span.style == NotePreviewSpanStyle::Code, |span| {
+                            span.px(px(4.))
+                                .rounded(px(4.))
+                                .bg(theme.inset)
+                                .text_color(theme.text_secondary)
+                        })
+                        .child(span.text)
+                }))
+        };
+        let preview_blocks = secure_note_markdown_preview_blocks(&notes_value)
+            .into_iter()
+            .enumerate()
+            .map(|(index, block)| {
+                let block_id =
+                    SharedString::from(format!("secure-note-markdown-preview-block-{index}"));
+                match block.kind {
+                    NotePreviewBlockKind::Heading => div()
+                        .id(block_id)
+                        .text_size(px(18.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(preview_spans(block.spans, theme.text, px(18.)))
+                        .into_any_element(),
+                    NotePreviewBlockKind::ListItem => div()
+                        .id(block_id)
+                        .flex()
+                        .gap(px(8.))
+                        .text_size(px(11.))
+                        .text_color(theme.text_soft)
+                        .child(
+                            div()
+                                .mt(px(7.))
+                                .size(px(4.))
+                                .rounded_full()
+                                .bg(theme.text_secondary),
+                        )
+                        .child(preview_spans(block.spans, theme.text_soft, px(11.)))
+                        .into_any_element(),
+                    NotePreviewBlockKind::Code => div()
+                        .id(block_id)
+                        .p(px(10.))
+                        .rounded(px(7.))
+                        .bg(theme.inset)
+                        .border_1()
+                        .border_color(theme.field_border)
+                        .text_size(px(10.))
+                        .text_color(theme.text_secondary)
+                        .child(preview_spans(block.spans, theme.text_secondary, px(10.)))
+                        .into_any_element(),
+                    NotePreviewBlockKind::Paragraph => div()
+                        .id(block_id)
+                        .text_size(px(11.))
+                        .line_height(px(18.))
+                        .text_color(theme.text_subtle)
+                        .child(preview_spans(block.spans, theme.text_subtle, px(11.)))
+                        .into_any_element(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let note_preview_panel = div()
+            .id("secure-note-markdown-preview-panel")
+            .flex()
+            .flex_col()
+            .h_full()
+            .p(px(20.))
+            .gap(px(16.))
+            .rounded(px(9.))
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.border)
+            .occlude()
+            .with_animation(
+                "secure-note-markdown-preview-enter",
+                Animation::new(NOTE_PREVIEW_TRANSITION_DURATION).with_easing(ease_out_quint()),
+                |panel, delta| panel.opacity(delta).left(px((1. - delta) * 18.)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(9.))
+                            .child(
+                                div()
+                                    .size(px(30.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(7.))
+                                    .bg(theme.raised)
+                                    .child(
+                                        Icon::empty()
+                                            .path("icons/scan-eye.svg")
+                                            .size(px(15.))
+                                            .text_color(theme.text_secondary),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.text)
+                                            .child("Markdown preview"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(9.))
+                                            .text_color(theme.text_ghost)
+                                            .child("Rendered from the encrypted note body"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h(px(24.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(6.))
+                            .bg(theme.raised)
+                            .text_size(px(8.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_secondary)
+                            .child("PREVIEW"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .children(preview_blocks),
+            )
+            .into_any_element();
+        let note_cards_panel = div()
+            .id("secure-note-helper-cards")
+            .flex()
+            .flex_col()
+            .h_full()
+            .gap(px(14.))
+            .occlude()
+            .with_animation(
+                "secure-note-helper-cards-enter",
+                Animation::new(NOTE_PREVIEW_TRANSITION_DURATION).with_easing(ease_out_quint()),
+                |panel, delta| panel.opacity(delta).left(px((1. - delta) * -14.)),
+            )
+            .child(note_settings_card)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .p(px(20.))
+                    .gap(px(14.))
+                    .rounded(px(9.))
+                    .bg(theme.surface)
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(9.))
+                                    .child(
+                                        div()
+                                            .size(px(30.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(px(7.))
+                                            .bg(theme.raised)
+                                            .child(
+                                                Icon::empty()
+                                                    .path("icons/shield-check.svg")
+                                                    .size(px(15.))
+                                                    .text_color(theme.text_secondary),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(2.))
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(theme.text)
+                                                    .child("Note privacy"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(9.))
+                                                    .text_color(theme.text_ghost)
+                                                    .child("Encrypted the moment you type"),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .h(px(24.))
+                                    .px(px(8.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(6.))
+                                    .bg(theme.raised)
+                                    .text_size(px(8.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.success_bright)
+                                    .child("ENCRYPTED"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(theme.text_subtle)
+                            .child("Notes are encrypted locally before they ever leave this device, and stay unreadable without your master password."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(9.))
+                            .text_size(px(10.))
+                            .text_color(theme.text_muted)
+                            .child(div().flex().items_center().gap(px(8.)).child(Icon::empty().path("icons/key-round.svg").size(px(13.)).text_color(theme.text_ghost)).child("Wi-Fi passwords and PINs"))
+                            .child(div().flex().items_center().gap(px(8.)).child(Icon::empty().path("icons/key-round.svg").size(px(13.)).text_color(theme.text_ghost)).child("Recovery and backup codes"))
+                            .child(div().flex().items_center().gap(px(8.)).child(Icon::empty().path("icons/shield-check.svg").size(px(13.)).text_color(theme.text_ghost)).child("Security question answers")),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .p(px(20.))
+                    .gap(px(13.))
+                    .rounded(px(9.))
+                    .bg(theme.surface)
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child("After saving"),
+                    )
+                    .child(outcome("icons/copy-plus.svg", "Quick copy", "The note content becomes a quick copy target."))
+                    .child(outcome("icons/search.svg", "Full-text search", "Find this note instantly across your vault."))
+                    .child(outcome("icons/refresh-cw.svg", "Sync securely", "The encrypted note syncs with your vault devices.")),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(px(70.))
+                    .px(px(16.))
+                    .rounded(px(9.))
+                    .bg(theme.inset)
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text_soft)
+                                    .child("Keyboard friendly"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(9.))
+                                    .text_color(theme.text_ghost)
+                                    .child("Tab between fields · Esc to cancel"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_secondary)
+                            .child("⌘ ↵"),
+                    ),
+            )
+            .into_any_element();
 
         rsx! {
             <div id="secure-note-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
@@ -2744,9 +3783,8 @@ impl Nox {
                                 </div>
                             </div>
                             {field("TITLE", true, None, Input::new(&title).min_h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
-                            {field("CONTENT", true, None, note_editor)}
+                            {field("CONTENT", true, None, note_editor).flex_1().min_h(px(0.))}
                             {error}
-                            <div flex_1 />
                             <div flex items_center h={px(42.)} px={px(11.)} rounded={px(7.)} bg={theme.inset} border_1 borderColor={theme.border}>
                                 {Icon::empty().path("icons/lock-keyhole.svg").size(px(13.)).text_color(theme.success)}
                                 <div ml={px(8.)} text_size={px(9.)} textColor={theme.text_subtle}>{"Encrypted before it leaves this device"}</div>
@@ -2754,33 +3792,7 @@ impl Nox {
                             </div>
                         </div>
                         <div flex flex_col flex_1 min_w={px(0.)} h_full gap={px(14.)}>
-                            {note_color_card}
-                            <div flex flex_col p={px(20.)} gap={px(14.)} rounded={px(9.)} bg={theme.surface} border_1 borderColor={theme.border}>
-                                <div flex items_center justify_between>
-                                    <div flex items_center gap={px(9.)}>
-                                        <div size={px(30.)} flex items_center justify_center rounded={px(7.)} bg={theme.raised}>{Icon::empty().path("icons/shield-check.svg").size(px(15.)).text_color(theme.text_secondary)}</div>
-                                        <div flex flex_col gap={px(2.)}><div text_size={px(12.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"Note privacy"}</div><div text_size={px(9.)} textColor={theme.text_ghost}>{"Encrypted the moment you type"}</div></div>
-                                    </div>
-                                    <div h={px(24.)} px={px(8.)} flex items_center rounded={px(6.)} bg={theme.raised} text_size={px(8.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.success_bright}>{"ENCRYPTED"}</div>
-                                </div>
-                                <div text_size={px(10.)} textColor={theme.text_subtle}>{"Notes are encrypted locally before they ever leave this device, and stay unreadable without your master password."}</div>
-                                <div flex flex_col gap={px(9.)} text_size={px(10.)} textColor={theme.text_muted}>
-                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/key-round.svg").size(px(13.)).text_color(theme.text_ghost)}{"Wi-Fi passwords and PINs"}</div>
-                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/key-round.svg").size(px(13.)).text_color(theme.text_ghost)}{"Recovery and backup codes"}</div>
-                                    <div flex items_center gap={px(8.)}>{Icon::empty().path("icons/shield-check.svg").size(px(13.)).text_color(theme.text_ghost)}{"Security question answers"}</div>
-                                </div>
-                            </div>
-                            <div flex flex_col p={px(20.)} gap={px(13.)} rounded={px(9.)} bg={theme.surface} border_1 borderColor={theme.border}>
-                                <div text_size={px(12.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{"After saving"}</div>
-                                {outcome("icons/copy-plus.svg", "Quick copy", "The note content becomes a quick copy target.")}
-                                {outcome("icons/search.svg", "Full-text search", "Find this note instantly across your vault.")}
-                                {outcome("icons/refresh-cw.svg", "Sync securely", "The encrypted note syncs with your vault devices.")}
-                            </div>
-                            <div flex_1 />
-                            <div flex items_center justify_between h={px(70.)} px={px(16.)} rounded={px(9.)} bg={theme.inset} border_1 borderColor={theme.border}>
-                                <div flex flex_col gap={px(3.)}><div text_size={px(10.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_soft}>{"Keyboard friendly"}</div><div text_size={px(9.)} textColor={theme.text_ghost}>{"Tab between fields · Esc to cancel"}</div></div>
-                                <div text_size={px(11.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{"⌘ ↵"}</div>
-                            </div>
+                            {if note_preview_open { note_preview_panel } else { note_cards_panel }}
                         </div>
                     </div>
                 </div>
@@ -3865,6 +4877,7 @@ mod tests {
             updated_at: 1,
             icon: IconChoice::Default,
             note_color: NoteColor::Blue,
+            note_tags: vec![],
         }
     }
 
@@ -3938,10 +4951,22 @@ mod tests {
                 "the workspace must render swatch {swatch}"
             );
         }
+        assert!(source.contains("Note settings"));
+        assert!(source.contains("Customize this secure note"));
         assert!(source.contains("note-color-options"));
+        assert!(source.contains("note-tags-combobox"));
+        assert!(source.contains("note-tags-input"));
+        assert!(source.contains("commit_note_tag_input(window, cx)"));
+        assert!(source.contains(".flex_1()"));
+        assert!(!source.contains("Button::new(\"note-tags-add\")"));
+        assert!(!source.contains(".child(\"Add\")"));
         assert!(source.contains("fn choose_note_color("));
+        assert!(source.contains("fn add_note_tag("));
+        assert!(source.contains("fn remove_note_tag("));
         assert!(source.contains("note_color: self.note_color"));
+        assert!(source.contains("note_tags: nox_core::normalize_note_tags(&self.note_tags)"));
         assert!(source.contains("editor.note_color = payload.note_color"));
+        assert!(source.contains("editor.note_tags = payload.note_tags"));
 
         // The note's own icon chip (top of "Note details") is the only icon
         // preview living inside the editor itself, so clicking a swatch has
@@ -3966,5 +4991,123 @@ mod tests {
         assert!(vault_list.contains("note_color_hsla(payload.note_color)"));
         let detail = include_str!("detail.rs");
         assert!(detail.contains("note_color_hsla(payload.note_color)"));
+    }
+
+    /// The tags combobox keeps shadcn multiple-combobox semantics: chips carry
+    /// a real remove button with a stable per-chip id, saved secure-note tags
+    /// render under the input as selectable suggestions, and Enter — never an
+    /// "Add" button — commits typed text.
+    #[test]
+    fn secure_note_markdown_toolbar_formats_selected_text() {
+        let bold = apply_note_markdown_format("alpha beta", 6..10, NoteMarkdownFormat::Bold);
+        assert_eq!(bold.text, "alpha **beta**");
+        assert_eq!(bold.selection, 8..12);
+
+        let italic = apply_note_markdown_format("alpha beta", 6..10, NoteMarkdownFormat::Italic);
+        assert_eq!(italic.text, "alpha *beta*");
+        assert_eq!(italic.selection, 7..11);
+
+        let code = apply_note_markdown_format("alpha beta", 6..10, NoteMarkdownFormat::Code);
+        assert_eq!(code.text, "alpha `beta`");
+        assert_eq!(code.selection, 7..11);
+    }
+
+    #[test]
+    fn secure_note_markdown_toolbar_formats_current_word_and_lines() {
+        let bold = apply_note_markdown_format("alpha beta", 8..8, NoteMarkdownFormat::Bold);
+        assert_eq!(bold.text, "alpha **beta**");
+        assert_eq!(bold.selection, 8..12);
+
+        let list = apply_note_markdown_format("first\nsecond", 0..12, NoteMarkdownFormat::List);
+        assert_eq!(list.text, "- first\n- second");
+        assert_eq!(list.selection, 2..16);
+    }
+
+    #[test]
+    fn secure_note_markdown_detection_controls_preview_toggle() {
+        assert!(!secure_note_has_markdown("plain private note"));
+        assert!(secure_note_has_markdown("# Recovery\n- code one"));
+        assert!(secure_note_has_markdown("Store **important** value"));
+        assert!(secure_note_has_markdown("Use `ssh-keygen`"));
+        assert!(secure_note_has_markdown("Read [docs](https://example.com)"));
+    }
+
+    #[test]
+    fn secure_note_markdown_preview_renders_basic_markdown() {
+        let blocks = secure_note_markdown_preview_blocks("# Title\n- one\nUse `code` and **bold**");
+        assert_eq!(blocks[0].kind, NotePreviewBlockKind::Heading);
+        assert_eq!(blocks[0].text(), "Title");
+        assert_eq!(blocks[1].kind, NotePreviewBlockKind::ListItem);
+        assert_eq!(blocks[1].text(), "one");
+        assert_eq!(blocks[2].kind, NotePreviewBlockKind::Paragraph);
+        assert_eq!(blocks[2].text(), "Use code and bold");
+        assert_eq!(blocks[2].spans[1].style, NotePreviewSpanStyle::Code);
+        assert_eq!(blocks[2].spans[3].style, NotePreviewSpanStyle::Bold);
+
+        let italic = secure_note_markdown_preview_blocks("*italic*");
+        assert_eq!(italic[0].spans[0].style, NotePreviewSpanStyle::Italic);
+    }
+
+    #[test]
+    fn secure_note_markdown_toolbar_buttons_are_wired_to_editor_state() {
+        let source = include_str!("item_editor.rs");
+        for action in [
+            "NoteMarkdownFormat::Bold",
+            "NoteMarkdownFormat::Italic",
+            "NoteMarkdownFormat::List",
+            "NoteMarkdownFormat::Code",
+        ] {
+            assert!(source.contains(action), "missing toolbar action {action}");
+        }
+        assert!(source.contains(".tooltip(tooltip)"));
+        for tooltip in ["Bold", "Italic", "List", "Code"] {
+            assert!(source.contains(&format!("\"{tooltip}\",")));
+        }
+        assert!(source.contains("format_secure_note_markdown"));
+        assert!(source.contains("toggle_secure_note_markdown_preview"));
+        assert!(source.contains("secure-note-markdown-preview-toggle"));
+        assert!(source.contains("icons/scan-eye.svg"));
+        assert!(source.contains("secure-note-markdown-preview-panel"));
+        assert!(source.contains("span.text_size(text_size)"));
+        assert!(source.contains("span.font_weight(FontWeight(800.))"));
+        assert!(source.contains("span.italic()"));
+        assert!(
+            source.contains("field(\"CONTENT\", true, None, note_editor).flex_1().min_h(px(0.))")
+        );
+        assert!(source.contains(".min_h(px(320.))"));
+        assert!(source.contains("state.replace_all(edit.text"));
+        assert!(source.contains("state.set_selected_range(edit.selection"));
+    }
+
+    #[test]
+    fn note_tags_combobox_has_selectable_suggestions_and_real_remove_buttons() {
+        let source = include_str!("item_editor.rs");
+        assert!(source.contains("note-tags-combobox"));
+        assert!(source.contains("note-tags-suggestions"));
+        assert!(source.contains("note-tags-filter-list"));
+        assert!(source.contains("note-tags-not-found"));
+        assert!(source.contains(".bg(theme.surface)"));
+        assert!(source.contains(".border_color(theme.border)"));
+        assert!(source.contains("Not found"));
+        assert!(source.contains(".absolute()"));
+        assert!(source.contains(".top(tag_filter_top)"));
+        // No Add button: Enter commits typed text; chips and suggestions are
+        // the only controls.
+        assert!(!source.contains("Button::new(\"note-tags-add\")"));
+        assert!(!source.contains(".child(\"Add\")"));
+        // Every chip's remove affordance is a real button with a unique
+        // per-chip id, sized for a pointer — not a tiny clickable div.
+        assert!(
+            source
+                .contains("Button::new(SharedString::from(format!(\"note-tag-remove-{index}\")))")
+        );
+        assert!(source.contains("remove_note_tag(&tag_for_remove, cx)"));
+        // Suggestions are selectable chips fed by saved secure-note tags, not
+        // static helper text alone.
+        assert!(source.contains("note-tag-suggestion-{sanitized}"));
+        assert!(source.contains("note-tag-filter-option-{sanitized}"));
+        assert!(source.contains("fn note_tag_suggestions("));
+        assert!(source.contains("fn select_note_tag_suggestion("));
+        assert!(source.contains("payload.item_type == ItemType::SecureNote"));
     }
 }

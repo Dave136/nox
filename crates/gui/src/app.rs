@@ -2353,6 +2353,7 @@ mod tests {
             updated_at: 1,
             icon: IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
+            note_tags: vec![],
         };
         view.update_in(cx, |locker, window, locker_cx| {
             locker.state = unlocked_state(vault, window, locker_cx);
@@ -2397,6 +2398,7 @@ mod tests {
             updated_at: 1,
             icon: IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
+            note_tags: vec![],
         }
     }
 
@@ -2541,6 +2543,7 @@ mod tests {
             updated_at: 1,
             icon: IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
+            note_tags: vec![],
         }];
         let (view, cx, path, _) = unlocked_view(cx, "secure-note-content-search", &payloads);
         view.update_in(cx, |locker, _window, locker_cx| {
@@ -2716,6 +2719,244 @@ mod tests {
             session.vault.get_item(id).unwrap().unwrap()
         });
         assert_eq!(persisted.note_color, nox_core::NoteColor::Gold);
+        cleanup(&path);
+    }
+
+    /// Free-created tags normalize into the secure-note payload and hydrate back
+    /// into the edit workspace as chips.
+    #[gpui::test]
+    fn note_tags_save_and_hydrate_from_the_payload(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "note-tags", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_create_editor_as(nox_core::ItemType::SecureNote, window, locker_cx);
+            locker.add_note_tag(" recovery ", locker_cx);
+            locker.add_note_tag("RECOVERY", locker_cx);
+            locker.add_note_tag("wifi", locker_cx);
+            let editor = locker.session().unwrap().item_editor.as_ref().unwrap();
+            editor.title_input.update(locker_cx, |state, input_cx| {
+                state.set_value("Recovery codes".to_owned(), window, input_cx)
+            });
+            editor.notes_input.update(locker_cx, |state, input_cx| {
+                state.set_value("amber-galaxy".to_owned(), window, input_cx)
+            });
+            locker.save_item(window, locker_cx);
+        });
+        let (item_id, persisted) = view.read_with(cx, |locker, _| {
+            let session = locker.session().unwrap();
+            let (id, _) = *session.list.items.first().unwrap();
+            (id, session.vault.get_item(id).unwrap().unwrap())
+        });
+        assert_eq!(persisted.note_tags, ["recovery", "wifi"]);
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_editor_for_item(item_id, false, window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .note_tags
+                .clone()),
+            ["recovery", "wifi"]
+        );
+        cleanup(&path);
+    }
+
+    /// Tags are removable chips and saved secure-note tags are offered as
+    /// selectable suggestions: adding two tags and removing one leaves only
+    /// the other, and selecting a suggestion from another secure note adds
+    /// it unless it is already present. Login payloads never contribute
+    /// suggestions — tags are secure-note-only.
+    #[gpui::test]
+    fn note_tags_remove_and_suggestions_track_editor_state(cx: &mut TestAppContext) {
+        init(cx);
+        let payloads = [
+            ItemPayload {
+                schema_version: ITEM_SCHEMA_VERSION,
+                item_type: ItemType::SecureNote,
+                title: "Work Wi-Fi".into(),
+                username: String::new(),
+                password: String::new(),
+                uris: Vec::new(),
+                notes: String::new(),
+                created_at: 1,
+                updated_at: 1,
+                icon: IconChoice::Default,
+                note_color: nox_core::NoteColor::Blue,
+                note_tags: vec!["wifi".into(), " shared ".into()],
+            },
+            ItemPayload {
+                schema_version: ITEM_SCHEMA_VERSION,
+                item_type: ItemType::SecureNote,
+                title: "Router".into(),
+                username: String::new(),
+                password: String::new(),
+                uris: Vec::new(),
+                notes: String::new(),
+                created_at: 2,
+                updated_at: 2,
+                icon: IconChoice::Default,
+                note_color: nox_core::NoteColor::Blue,
+                note_tags: vec!["wifi".into()],
+            },
+            {
+                // A login whose payload happens to carry a tag-shaped string
+                // must never surface it as a suggestion.
+                let mut login = login_payload("GitHub", "alice");
+                login.note_tags = vec!["login-only".into()];
+                login
+            },
+        ];
+        let (view, cx, path, _) = unlocked_view(cx, "note-tags-remove", &payloads);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_create_editor_as(ItemType::SecureNote, window, locker_cx);
+
+            locker.add_note_tag("recovery", locker_cx);
+            locker.add_note_tag("bank", locker_cx);
+            locker.remove_note_tag("RECOVERY", locker_cx);
+            assert_eq!(locker.item_editor().unwrap().note_tags, ["bank"]);
+
+            // Suggestions come from other secure notes only, normalized and
+            // deduped, exclude tags already on the editor, and default to the
+            // top entries by usage/recency.
+            assert_eq!(locker.note_tag_suggestions(), ["wifi", "shared"]);
+
+            assert_eq!(locker.note_tag_suggestions_for_query("sha"), ["shared"]);
+
+            locker.select_note_tag_suggestion("wifi", locker_cx);
+            assert_eq!(locker.item_editor().unwrap().note_tags, ["bank", "wifi"]);
+            assert_eq!(locker.note_tag_suggestions(), ["shared"]);
+
+            // A suggestion that is already a chip (or a case variant of one)
+            // is not added twice.
+            locker.select_note_tag_suggestion("WiFi", locker_cx);
+            assert_eq!(locker.item_editor().unwrap().note_tags, ["bank", "wifi"]);
+        });
+        cleanup(&path);
+    }
+
+    /// The workspace renders suggestions as clickable chips and each tag
+    /// chip's remove affordance as a real clickable button.
+    #[gpui::test]
+    fn note_tags_suggestions_and_chip_remove_work_via_clicks(cx: &mut TestAppContext) {
+        init(cx);
+        let payloads = [
+            ItemPayload {
+                schema_version: ITEM_SCHEMA_VERSION,
+                item_type: ItemType::SecureNote,
+                title: "Wallet".into(),
+                username: String::new(),
+                password: String::new(),
+                uris: Vec::new(),
+                notes: String::new(),
+                created_at: 1,
+                updated_at: 1,
+                icon: IconChoice::Default,
+                note_color: nox_core::NoteColor::Blue,
+                note_tags: vec!["bank".into()],
+            },
+            ItemPayload {
+                schema_version: ITEM_SCHEMA_VERSION,
+                item_type: ItemType::SecureNote,
+                title: "Office door".into(),
+                username: String::new(),
+                password: String::new(),
+                uris: Vec::new(),
+                notes: String::new(),
+                created_at: 1,
+                updated_at: 1,
+                icon: IconChoice::Default,
+                note_color: nox_core::NoteColor::Blue,
+                note_tags: vec![" work wifi ".into()],
+            },
+        ];
+        let (view, cx, path, ids) = unlocked_view(cx, "note-tags-clicks", &payloads);
+        cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::SecureNotes, locker_cx);
+            locker.open_editor_for_item(ids[0], false, window, locker_cx);
+        });
+        cx.run_until_parked();
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            let input = locker.item_editor().unwrap().note_tag_input.clone();
+            input.update(locker_cx, |state, input_cx| {
+                state.set_value("wo".to_owned(), window, input_cx)
+            });
+        });
+        cx.run_until_parked();
+        let typed_option = cx
+            .debug_bounds("note-tag-filter-option-work-wifi")
+            .expect("typing must open a filtered combobox list");
+        cx.simulate_click(typed_option.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .note_tags
+                .clone()),
+            ["bank", "work wifi"]
+        );
+
+        // Once selected, the tag is a chip — it is no longer a suggestion.
+        assert!(
+            cx.debug_bounds("note-tag-filter-option-work-wifi")
+                .is_none()
+        );
+        assert!(cx.debug_bounds("note-tag-suggestion-work-wifi").is_none());
+
+        view.update_in(cx, |locker, _window, locker_cx| {
+            locker.remove_note_tag("work wifi", locker_cx);
+        });
+        cx.run_until_parked();
+
+        // The other note's tag is still rendered as a fixed suggestion chip when
+        // the input is empty; this bottom suggestion list is not the typed list.
+        let suggestion = cx
+            .debug_bounds("note-tag-suggestion-work-wifi")
+            .expect("the saved tag must render as a suggestion chip");
+        cx.simulate_click(suggestion.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .note_tags
+                .clone()),
+            ["bank", "work wifi"]
+        );
+        // Once selected, the tag is a chip — it is no longer a suggestion.
+        assert!(cx.debug_bounds("note-tag-suggestion-work-wifi").is_none());
+
+        // The first chip's remove button removes that tag.
+        let remove = cx
+            .debug_bounds("note-tag-remove-0")
+            .expect("each chip must render a remove button");
+        cx.simulate_click(remove.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .item_editor
+                .as_ref()
+                .unwrap()
+                .note_tags
+                .clone()),
+            ["work wifi"]
+        );
         cleanup(&path);
     }
 
@@ -4078,6 +4319,7 @@ mod tests {
             updated_at: 1,
             icon: IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
+            note_tags: vec![],
         };
         let (view, cx, path, ids) = unlocked_view(cx, "note-edit-workspace", &[payload]);
         let item_id = ids[0];

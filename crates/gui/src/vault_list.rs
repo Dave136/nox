@@ -635,6 +635,19 @@ impl Nox {
         self.editor_blur_subscriptions.push(subscription);
     }
 
+    pub(crate) fn register_note_tag_input_listener(
+        &mut self,
+        input: Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription = cx.subscribe(&input, |_locker, _input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
+        self.editor_blur_subscriptions.push(subscription);
+    }
+
     pub(crate) fn open_create_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active_view = self
             .session()
@@ -661,6 +674,9 @@ impl Nox {
             .collect::<Vec<_>>()
         {
             self.register_website_blur_listener(uris_focus, window, cx);
+        }
+        if item_type == ItemType::SecureNote {
+            self.register_note_tag_input_listener(editor.note_tag_input.clone(), cx);
         }
         if let Some(session) = self.session_mut() {
             session.item_editor = Some(editor);
@@ -706,6 +722,9 @@ impl Nox {
                     .collect::<Vec<_>>()
                 {
                     self.register_website_blur_listener(uris_focus, window, cx);
+                }
+                if editor.item_type == ItemType::SecureNote {
+                    self.register_note_tag_input_listener(editor.note_tag_input.clone(), cx);
                 }
                 if let Some(session) = self.session_mut() {
                     session.list.selected = Some(item_id);
@@ -1300,6 +1319,7 @@ mod tests {
             updated_at: 1,
             icon: nox_core::IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
+            note_tags: vec![],
         }
     }
 
