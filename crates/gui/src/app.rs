@@ -485,6 +485,8 @@ pub(crate) struct VaultSession {
     pub(crate) list: VaultListState,
     pub(crate) item_editor: Option<ItemEditorState>,
     pub(crate) active_view: ActiveView,
+    /// The deleted item previewed in the Trash view, if any.
+    pub(crate) trash_selected: Option<nox_core::ItemId>,
     /// Whether the selected item's password is shown in plaintext in the detail panel.
     pub(crate) reveal_password: bool,
 }
@@ -1035,6 +1037,7 @@ impl Nox {
                                 list,
                                 item_editor: None,
                                 active_view: ActiveView::Home,
+                                trash_selected: None,
                                 reveal_password: false,
                             });
                             crate::theme::apply(ThemeMode::Dark, Some(window), cx);
@@ -1106,6 +1109,7 @@ impl Nox {
                                 list,
                                 item_editor: None,
                                 active_view: ActiveView::Home,
+                                trash_selected: None,
                                 reveal_password: false,
                             });
                             crate::theme::apply(ThemeMode::Dark, Some(window), cx);
@@ -1465,6 +1469,7 @@ mod tests {
             list: VaultListState::from_initial_load(Ok(Vec::new()), Ok(Vec::new()), window, cx),
             item_editor: None,
             active_view: ActiveView::AllItems,
+            trash_selected: None,
             reveal_password: false,
         })
     }
@@ -2429,6 +2434,7 @@ mod tests {
                 ),
                 item_editor: None,
                 active_view: ActiveView::AllItems,
+            trash_selected: None,
                 reveal_password: false,
             });
         });
@@ -4615,6 +4621,38 @@ mod tests {
         assert!(titles.contains(&"Original".to_owned()));
         assert!(titles.contains(&"Original (copy)".to_owned()));
         assert!(selected_is_new);
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn restoring_from_trash_returns_the_item_to_the_live_list(cx: &mut TestAppContext) {
+        init(cx);
+        let payloads = [login_payload("One", "one"), login_payload("Two", "two")];
+        let (view, cx, path, ids) = unlocked_view(cx, "trash-restore", &payloads);
+        for item_id in ids.iter().copied() {
+            view.update_in(cx, |locker, window, locker_cx| {
+                locker.delete_item(item_id, window, locker_cx)
+            });
+        }
+        assert!(view.read_with(cx, |locker, _| {
+            let list = &locker.session().unwrap().list;
+            list.items.is_empty() && list.deleted.len() == 2
+        }));
+
+        let restored = ids[0];
+        view.update(cx, |locker, locker_cx| {
+            locker.restore_item(restored, locker_cx)
+        });
+
+        assert!(view.read_with(cx, |locker, _| {
+            let list = &locker.session().unwrap().list;
+            list.deleted.len() == 1
+                && list.deleted[0].item_id == ids[1]
+                && list
+                    .items
+                    .iter()
+                    .any(|(id, item)| *id == restored && item.title == "One")
+        }));
         cleanup(&path);
     }
 

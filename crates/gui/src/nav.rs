@@ -48,6 +48,7 @@ impl Nox {
         }
         session.active_view = view;
         session.reveal_password = false;
+        session.trash_selected = None;
         session.list.set_type_filter(view.item_type());
         session
             .list
