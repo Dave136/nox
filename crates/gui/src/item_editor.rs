@@ -3587,17 +3587,11 @@ impl Nox {
                         let copy_locker = locker.clone();
                         let reveal_locker = locker.clone();
                         div()
-                            .id(block_id)
                             .flex()
                             .flex_col()
-                            .gap(px(10.))
-                            .p(px(12.))
-                            .rounded(px(8.))
-                            .bg(theme.inset)
-                            .border_1()
-                            .border_color(theme.field_border)
-                            .when_some(label, |card, label| {
-                                card.child(
+                            .gap(px(8.))
+                            .when_some(label.clone(), |container, label| {
+                                container.child(
                                     div()
                                         .text_size(px(10.))
                                         .font_weight(FontWeight::SEMIBOLD)
@@ -3607,95 +3601,94 @@ impl Nox {
                             })
                             .child(
                                 div()
+                                    .id(block_id)
                                     .flex()
-                                    .items_center()
-                                    .gap(px(8.))
+                                    .flex_col()
+                                    .gap(px(10.))
+                                    .p(px(12.))
+                                    .rounded(px(8.))
+                                    .bg(theme.inset)
+                                    .border_1()
+                                    .border_color(theme.field_border)
                                     .child(
                                         div()
-                                            .flex_1()
-                                            .min_w(px(0.))
-                                            .text_size(px(11.))
-                                            .text_color(theme.text_subtle)
-                                            .child(if locked && !revealed {
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(8.))
+                                            .child(
                                                 div()
-                                                    .text_size(px(12.))
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(theme.text_secondary)
-                                                    .child("••••••••••••••••")
-                                                    .into_any_element()
-                                            } else {
-                                                preview_spans(
-                                                    block.spans,
-                                                    theme.text_subtle,
-                                                    px(11.),
+                                                    .flex_1()
+                                                    .min_w(px(0.))
+                                                    .text_size(px(11.))
+                                                    .text_color(theme.text_subtle)
+                                                    .child(if locked && !revealed {
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .text_color(theme.text_secondary)
+                                                            .child("••••••••••••••••")
+                                                            .into_any_element()
+                                                    } else {
+                                                        preview_spans(
+                                                            block.spans,
+                                                            theme.text_subtle,
+                                                            px(11.),
+                                                        )
+                                                        .into_any_element()
+                                                    }),
+                                            )
+                                            .when(locked, |row| {
+                                                row.child(
+                                                    Button::new(SharedString::from(format!(
+                                                        "secure-note-copy-block-reveal-{index}"
+                                                    )))
+                                                    .ghost()
+                                                    .size(px(26.))
+                                                    .rounded(px(6.))
+                                                    .tooltip(if revealed { "Hide" } else { "Reveal" })
+                                                    .on_click(move |_, _window, app| {
+                                                        reveal_locker.update(app, |locker, cx| {
+                                                            locker.toggle_secure_note_copy_block_reveal(
+                                                                index, cx,
+                                                            );
+                                                        });
+                                                    })
+                                                    .child(
+                                                        Icon::empty()
+                                                            .path(if revealed {
+                                                                "icons/scan-eye.svg"
+                                                            } else {
+                                                                "icons/eye-off.svg"
+                                                            })
+                                                            .size(px(14.))
+                                                            .text_color(theme.icon_muted),
+                                                    ),
                                                 )
-                                                .into_any_element()
-                                            }),
-                                    )
-                                    .when(locked, |row| {
-                                        row.child(
-                                            Button::new(SharedString::from(format!(
-                                                "secure-note-copy-block-reveal-{index}"
-                                            )))
-                                            .ghost()
-                                            .size(px(26.))
-                                            .rounded(px(6.))
-                                            .tooltip(if revealed { "Hide" } else { "Reveal" })
-                                            .on_click(move |_, _window, app| {
-                                                reveal_locker.update(app, |locker, cx| {
-                                                    locker.toggle_secure_note_copy_block_reveal(
-                                                        index, cx,
-                                                    );
-                                                });
                                             })
                                             .child(
-                                                Icon::empty()
-                                                    .path(if revealed {
-                                                        "icons/scan-eye.svg"
-                                                    } else {
-                                                        "icons/eye-off.svg"
-                                                    })
-                                                    .size(px(14.))
-                                                    .text_color(theme.icon_muted),
-                                            ),
-                                        )
-                                    })
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "secure-note-copy-block-copy-{index}"
-                                        )))
-                                        .ghost()
-                                        .h(px(26.))
-                                        .px(px(8.))
-                                        .rounded(px(6.))
-                                        .tooltip("Copy block")
-                                        .on_click(move |_, window, app| {
-                                            let copy_text = copy_text.clone();
-                                            copy_locker.update(app, |locker, cx| {
-                                                locker
-                                                    .copy_secure_note_block(copy_text, window, cx);
-                                            });
-                                        })
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap(px(5.))
+                                                Button::new(SharedString::from(format!(
+                                                    "secure-note-copy-block-copy-{index}"
+                                                )))
+                                                .ghost()
+                                                .h(px(26.))
+                                                .px(px(8.))
+                                                .rounded(px(6.))
+                                                .tooltip("Copy block")
+                                                .on_click(move |_, window, app| {
+                                                    let copy_text = copy_text.clone();
+                                                    copy_locker.update(app, |locker, cx| {
+                                                        locker
+                                                            .copy_secure_note_block(copy_text, window, cx);
+                                                    });
+                                                })
                                                 .child(
                                                     Icon::empty()
                                                         .path("icons/copy.svg")
                                                         .size(px(12.))
                                                         .text_color(theme.text_secondary),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(9.))
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_color(theme.text_secondary)
-                                                        .child("Copy"),
                                                 ),
-                                        ),
-                                    ),
+                                            ),
+                                    )
                             )
                             .into_any_element()
                     }
