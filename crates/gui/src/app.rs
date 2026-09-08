@@ -13,7 +13,7 @@ use crate::vaults::{
 };
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, Entity, FocusHandle, FontWeight, Hsla,
+    Animation, AnimationExt, AnyElement, Context, ElementId, Entity, FocusHandle, FontWeight, Hsla,
     KeyBinding, Render, Rgba, SharedString, Subscription, Task, Window, div, ease_out_quint,
     prelude::*, px,
 };
@@ -220,19 +220,23 @@ impl SelectDelegate for VaultDelegate {
 }
 
 pub(crate) fn animated_auth_button(
-    id: &'static str,
+    id: impl Into<SharedString>,
     button: Button,
     hovered: Option<bool>,
     colors: (Hsla, Hsla, Hsla, Hsla),
     cx: &mut Context<Nox>,
 ) -> AnyElement {
+    let id: SharedString = id.into();
     let (base, hover, active, foreground) = colors;
     let variant = ButtonCustomVariant::new(cx)
         .foreground(foreground)
         .active(active);
-    let button = button.on_hover(cx.listener(move |this, is_hovered, _, cx| {
-        this.auth_hovered.insert(id, *is_hovered);
-        cx.notify();
+    let button = button.on_hover(cx.listener({
+        let id = id.clone();
+        move |this, is_hovered, _, cx| {
+            this.auth_hovered.insert(id.to_string(), *is_hovered);
+            cx.notify();
+        }
     }));
     let Some(hovered) = hovered else {
         return button
@@ -246,7 +250,7 @@ pub(crate) fn animated_auth_button(
     };
     button
         .with_animation(
-            (id, u32::from(hovered)),
+            ElementId::NamedInteger(id, u64::from(hovered)),
             Animation::new(AUTH_HOVER_DURATION).with_easing(ease_out_quint()),
             move |button, delta| {
                 let amount = if hovered { delta } else { 1. - delta };
@@ -573,7 +577,9 @@ pub struct Nox {
     pub(crate) remove_vault_cancel_focus: FocusHandle,
     pub(crate) remove_vault_confirm_focus: FocusHandle,
     pub(crate) remove_vault_prior_focus: Option<FocusHandle>,
-    pub(crate) auth_hovered: HashMap<&'static str, bool>,
+    /// Hover state per animated button id. Keyed by `String` rather than
+    /// `&'static str` so per-row buttons (the Trash list) can take part too.
+    pub(crate) auth_hovered: HashMap<String, bool>,
     /// Subscriptions for the website-blur listener on the current editor.
     pub(crate) editor_blur_subscriptions: Vec<Subscription>,
     /// Locally cached favicon/upload selections, keyed by item key (or, for

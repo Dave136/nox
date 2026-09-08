@@ -19,52 +19,6 @@ use nox_core::{ItemId, ItemType};
 /// rather than with the heading above it.
 const LIST_HEADING_HEIGHT: f32 = 42.;
 
-/// The design's primary Restore control: a light-filled pill with a dark
-/// `rotate-ccw` glyph and label. Shared by the list rows and the preview
-/// panel's action bar, which differ only in size.
-fn restore_button(
-    id: impl Into<ElementId>,
-    theme: Theme,
-    height: f32,
-    font_size: f32,
-    icon_size: f32,
-    cx: &mut App,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    Button::new(id)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .color(theme.inverse)
-                .hover(theme.inverse_hover)
-                .active(theme.inverse_press)
-                .foreground(theme.on_inverse),
-        )
-        .h(px(height))
-        .px(px(12.))
-        .rounded(px(7.))
-        .on_click(on_click)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(7.))
-                .child(
-                    Icon::empty()
-                        .path("icons/rotate-ccw.svg")
-                        .size(px(icon_size))
-                        .text_color(theme.on_inverse),
-                )
-                .child(
-                    div()
-                        .text_size(px(font_size))
-                        .font_weight(FontWeight(650.))
-                        .text_color(theme.on_inverse)
-                        .child("Restore"),
-                ),
-        )
-        .into_any_element()
-}
-
 /// The design's secondary action: surface fill with a visible outline, used
 /// for the preview panel's Cancel.
 fn cancel_button(
@@ -81,6 +35,9 @@ fn cancel_button(
                 .active(theme.raised)
                 .foreground(theme.text_soft),
         )
+        // Same trap as the primary buttons: the Custom variant washes the
+        // resting fill out unless an explicit `.bg()` overrides it.
+        .bg(theme.surface)
         .h(px(36.))
         .px(px(12.))
         .rounded(px(7.))
@@ -98,6 +55,57 @@ fn cancel_button(
 }
 
 impl Nox {
+    /// The design's primary Restore control, built on the same
+    /// `animated_auth_button` the "+ Add item" headers use, so it shares their
+    /// solid resting fill and eased hover.
+    fn restore_button(
+        &mut self,
+        id: SharedString,
+        theme: Theme,
+        height: f32,
+        icon_size: f32,
+        cx: &mut Context<Self>,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> AnyElement {
+        let hovered = self.auth_hovered.get(id.as_ref()).copied();
+        let button = Button::new(ElementId::Name(id.clone()))
+            .h(px(height))
+            .px(px(12.))
+            .rounded(px(7.))
+            .on_click(on_click)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(
+                        Icon::empty()
+                            .path("icons/rotate-ccw.svg")
+                            .size(px(icon_size))
+                            .text_color(theme.on_inverse),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight(650.))
+                            .text_color(theme.on_inverse)
+                            .child("Restore"),
+                    ),
+            );
+        crate::app::animated_auth_button(
+            id,
+            button,
+            hovered,
+            (
+                theme.inverse,
+                theme.inverse_hover,
+                theme.inverse_press,
+                theme.on_inverse,
+            ),
+            cx,
+        )
+    }
+
     /// Restore a tombstoned item by appending a fresh upsert of its last known
     /// payload. Sync converges on its own: the new change carries a later HLC,
     /// so it wins the projection on every device.
@@ -153,9 +161,11 @@ impl Nox {
         let data_dir = self.data_dir.clone();
         let locker = cx.entity();
 
-        let rows = deleted
-            .into_iter()
-            .map(|item| {
+        // A plain loop rather than `map`, because each row's Restore button
+        // needs `&mut self` (for its hover state) alongside `cx`.
+        let mut rows = Vec::with_capacity(count);
+        for item in deleted {
+            let row = {
                 let restore_locker = locker.clone();
                 let select_locker = locker.clone();
                 let item_id = item.item_id;
@@ -182,6 +192,16 @@ impl Nox {
                 };
                 let when = format!("Deleted {}", relative_time(item.deleted_at_ms));
                 let title = item.payload.title.clone();
+                let restore = self.restore_button(
+                    SharedString::from(format!("trash-restore-{item_id}")),
+                    theme,
+                    32.,
+                    13.,
+                    cx,
+                    move |_, _window, app| {
+                        restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
+                    },
+                );
 
                 rsx! {
                     <div
@@ -213,21 +233,12 @@ impl Nox {
                             <div fontSize={px(11.)} textColor={theme.text_muted}>{subtitle}</div>
                         </div>
                         <div fontSize={px(11.)} textColor={theme.text_muted} flex_shrink_0>{when}</div>
-                        {restore_button(
-                            SharedString::from(format!("trash-restore-{item_id}")),
-                            theme,
-                            32.,
-                            11.,
-                            13.,
-                            cx,
-                            move |_, _window, app| {
-                                restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
-                            },
-                        )}
+                        {restore}
                     </div>
                 }
-            })
-            .collect::<Vec<_>>();
+            };
+            rows.push(row);
+        }
 
         let preview = self.render_trash_preview(cx);
 
@@ -402,6 +413,16 @@ impl Nox {
         let close_locker = cx.entity();
         let cancel_locker = cx.entity();
         let restore_locker = cx.entity();
+        let restore = self.restore_button(
+            SharedString::from("trash-preview-restore"),
+            theme,
+            36.,
+            14.,
+            cx,
+            move |_, _window, app| {
+                restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
+            },
+        );
 
         rsx! {
             <div
@@ -477,17 +498,7 @@ impl Nox {
                     {cancel_button("trash-preview-cancel", theme, cx, move |_, _window, app| {
                         cancel_locker.update(app, |locker, cx| locker.clear_trash_selection(cx));
                     })}
-                    {restore_button(
-                        "trash-preview-restore",
-                        theme,
-                        36.,
-                        11.,
-                        14.,
-                        cx,
-                        move |_, _window, app| {
-                            restore_locker.update(app, |locker, cx| locker.restore_item(item_id, cx));
-                        },
-                    )}
+                    {restore}
                 </div>
             </div>
         }
