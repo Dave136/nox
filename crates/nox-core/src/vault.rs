@@ -52,6 +52,10 @@ const LAST_UPSERT_QUERY: &str = "SELECT changes.change_id, changes.vault_id, cha
     ORDER BY changes.hlc_physical_ms DESC, changes.hlc_logical DESC,
              changes.origin_device_id DESC, changes.origin_seq DESC
     LIMIT 1";
+const DELETED_ITEMS_QUERY: &str = "SELECT items.item_id, changes.hlc_physical_ms
+    FROM items JOIN changes ON changes.change_id = items.winning_change_id
+    WHERE items.deleted = 1
+    ORDER BY changes.hlc_physical_ms DESC, changes.hlc_logical DESC";
 
 /// Errors returned by vault lifecycle operations.
 #[derive(Debug)]
@@ -195,6 +199,18 @@ impl From<MembershipError> for VaultError {
     fn from(error: MembershipError) -> Self {
         Self::Membership(error)
     }
+}
+
+/// A tombstoned item, carrying the payload it held before deletion so the
+/// Trash view can show a real title instead of a bare id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeletedItem {
+    /// The tombstoned item's id — pass it to `update_item` to restore.
+    pub item_id: ItemId,
+    /// The most recent upsert payload, retained in the journal by the tombstone.
+    pub payload: ItemPayload,
+    /// Wall-clock milliseconds of the winning tombstone change.
+    pub deleted_at_ms: u64,
 }
 
 /// An unlocked vault and the secrets required to operate on it.
@@ -940,13 +956,16 @@ impl Vault {
             .transpose()
     }
 
-    /// List ids whose current projection is tombstoned.
-    pub fn list_deleted_items(&self) -> Result<Vec<ItemId>, VaultError> {
-        let mut statement = self
-            .db
-            .connection()
-            .prepare("SELECT item_id FROM items WHERE deleted = 1")?;
-        Ok(statement
+    /// List tombstoned items with the payload they held before deletion,
+    /// newest deletion first. Items whose journal holds no prior upsert are
+    /// skipped — there is nothing to preview or restore.
+    ///
+    /// ponytail: one `last_known_payload` query per deleted item. Fine while
+    /// the trash is small; fold the payload into `DELETED_ITEMS_QUERY` as a
+    /// correlated subquery if a large trash ever shows up in a profile.
+    pub fn list_deleted_items(&self) -> Result<Vec<DeletedItem>, VaultError> {
+        let mut statement = self.db.connection().prepare(DELETED_ITEMS_QUERY)?;
+        let rows = statement
             .query_map([], |row| {
                 let bytes: [u8; 16] = row.get::<_, Vec<u8>>(0)?.try_into().map_err(|_| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -955,9 +974,22 @@ impl Vault {
                         "invalid item id".into(),
                     )
                 })?;
-                Ok(ItemId::from_bytes(bytes))
+                let deleted_at_ms: i64 = row.get(1)?;
+                Ok((ItemId::from_bytes(bytes), deleted_at_ms))
             })?
-            .collect::<Result<Vec<_>, _>>()?)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut deleted = Vec::with_capacity(rows.len());
+        for (item_id, deleted_at_ms) in rows {
+            if let Some(payload) = self.last_known_payload(item_id)? {
+                deleted.push(DeletedItem {
+                    item_id,
+                    payload,
+                    deleted_at_ms: deleted_at_ms.max(0).unsigned_abs(),
+                });
+            }
+        }
+        Ok(deleted)
     }
 
     /// Return the latest upsert payload for an item, including deleted items.
@@ -1275,12 +1307,24 @@ mod tests {
         match selected.operation {
             Operation::Tombstone => {
                 assert_eq!(vault.get_item(item_id).unwrap(), None);
-                assert!(vault.list_deleted_items().unwrap().contains(&item_id));
+                assert!(
+                    vault
+                        .list_deleted_items()
+                        .unwrap()
+                        .iter()
+                        .any(|deleted| deleted.item_id == item_id)
+                );
             }
             Operation::Upsert => {
                 let expected_payload = vault.decode_payload(selected).unwrap();
                 assert_eq!(vault.get_item(item_id).unwrap(), Some(expected_payload));
-                assert!(!vault.list_deleted_items().unwrap().contains(&item_id));
+                assert!(
+                    !vault
+                        .list_deleted_items()
+                        .unwrap()
+                        .iter()
+                        .any(|deleted| deleted.item_id == item_id)
+                );
             }
         }
     }

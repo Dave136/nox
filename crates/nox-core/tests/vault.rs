@@ -125,6 +125,15 @@ fn create_twice_reports_already_exists_without_replacing_vault() {
     remove(&path);
 }
 
+fn deleted_ids(vault: &Vault) -> Vec<ItemId> {
+    vault
+        .list_deleted_items()
+        .unwrap()
+        .into_iter()
+        .map(|deleted| deleted.item_id)
+        .collect()
+}
+
 #[test]
 fn item_crud_and_durable_restore_use_only_the_vault_facade() {
     let path = temp_path("crud");
@@ -139,7 +148,7 @@ fn item_crud_and_durable_restore_use_only_the_vault_facade() {
     assert_eq!(vault.get_item(item_id).unwrap(), Some(updated.clone()));
     vault.delete_item(item_id).unwrap();
     assert_eq!(vault.get_item(item_id).unwrap(), None);
-    assert_eq!(vault.list_deleted_items().unwrap(), vec![item_id]);
+    assert_eq!(deleted_ids(&vault), vec![item_id]);
     assert_eq!(
         vault.last_known_payload(item_id).unwrap(),
         Some(updated.clone())
@@ -147,7 +156,7 @@ fn item_crud_and_durable_restore_use_only_the_vault_facade() {
 
     vault.lock();
     let mut reopened = Vault::unlock(b"password", &path).unwrap();
-    assert_eq!(reopened.list_deleted_items().unwrap(), vec![item_id]);
+    assert_eq!(deleted_ids(&reopened), vec![item_id]);
     assert_eq!(
         reopened.last_known_payload(item_id).unwrap(),
         Some(updated.clone())
@@ -155,6 +164,40 @@ fn item_crud_and_durable_restore_use_only_the_vault_facade() {
     reopened.update_item(item_id, &first).unwrap();
     assert_eq!(reopened.list_items().unwrap(), vec![(item_id, first)]);
     reopened.lock();
+    remove(&path);
+}
+
+#[test]
+fn list_deleted_items_returns_last_known_payloads_newest_first() {
+    let path = temp_path("deleted-detail");
+    let mut vault = Vault::create(b"password", &path).unwrap();
+    let older = vault.create_item(&payload("older", "a")).unwrap();
+    let newer = vault.create_item(&payload("newer", "b")).unwrap();
+    vault
+        .update_item(older, &payload("older-edited", "a2"))
+        .unwrap();
+
+    vault.delete_item(older).unwrap();
+    vault.delete_item(newer).unwrap();
+
+    let deleted = vault.list_deleted_items().unwrap();
+    assert_eq!(deleted.len(), 2);
+    // Newest deletion first.
+    assert_eq!(deleted[0].item_id, newer);
+    assert_eq!(deleted[1].item_id, older);
+    // The retained payload is the last upsert, not the tombstone's empty body.
+    assert_eq!(deleted[0].payload.title, "newer");
+    assert_eq!(deleted[1].payload.title, "older-edited");
+    assert!(deleted[0].deleted_at_ms >= deleted[1].deleted_at_ms);
+    assert!(deleted[0].deleted_at_ms > 0);
+
+    // Restoring removes it from the deleted list.
+    vault.update_item(newer, &payload("newer", "b")).unwrap();
+    let after = vault.list_deleted_items().unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].item_id, older);
+
+    vault.lock();
     remove(&path);
 }
 

@@ -55,7 +55,9 @@ pub use crypto::keys::{
 pub use crypto::secret::{
     DecryptedPayload, Dek, Kek, Password, Secret, SecretBytes, SecretKey, SessionKey,
 };
-pub use vault::{UnlockedSyncAccess, Vault, VaultError, default_data_dir, default_vault_path};
+pub use vault::{
+    DeletedItem, UnlockedSyncAccess, Vault, VaultError, default_data_dir, default_vault_path,
+};
 
 #[cfg(test)]
 mod test {
