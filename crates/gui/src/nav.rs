@@ -339,8 +339,10 @@ mod tests {
                 "secure-note workspace should use {icon}"
             );
         }
+        // The footer is pinned by letting the CONTENT field grow, not by a
+        // spacer div — keep this in step with the layout it guards.
         assert!(source.contains(
-            "{field(\"CONTENT\", true, None, note_editor)}\n                            {error}\n                            <div flex_1 />\n                            <div flex items_center h={px(42.)}",
+            "{field(\"CONTENT\", true, None, note_editor).flex_1().min_h(px(0.))}\n                            {error}\n                            <div flex items_center h={px(42.)}",
         ));
     }
 
