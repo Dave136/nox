@@ -2071,6 +2071,23 @@ impl Nox {
                     theme.field_border
                 })
                 .child(trigger_child)
+        } else if item_type == ItemType::SecureNote {
+            Button::new("item-icon-picker-trigger")
+                .h(px(28.))
+                .px(px(9.))
+                .gap(px(6.))
+                .rounded(px(8.))
+                .bg(chip_bg)
+                .border_1()
+                .border_color(chip_border)
+                .child(trigger_child)
+                .child(
+                    div()
+                        .text_size(px(9.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text_secondary)
+                        .child("NOTE"),
+                )
         } else {
             Button::new("item-icon-picker-trigger")
                 .size(px(28.))
@@ -4006,11 +4023,9 @@ impl Nox {
                                     <div text_size={px(10.)} textColor={theme.text_subtle}>{"Store sensitive text securely, end-to-end encrypted."}</div>
                                 </div>
                                 <div flex items_center gap={px(8.)}>
+                                <div flex items_center gap={px(8.)}>
                                     {icon_picker}
-                                    <div flex items_center h={px(26.)} px={px(8.)} gap={px(6.)} rounded={px(6.)} bg={theme.raised} border_1 borderColor={theme.field_border}>
-                                        {Icon::empty().path("icons/file-lock.svg").size(px(12.)).text_color(theme.text_secondary)}
-                                        <div text_size={px(9.)} fontWeight={FontWeight::SEMIBOLD} textColor={theme.text_secondary}>{"NOTE"}</div>
-                                    </div>
+                                </div>
                                 </div>
                             </div>
                             {field("TITLE", true, None, Input::new(&title).min_h(px(42.)).px(px(11.)).bg(theme.field).border_color(theme.field_border).rounded(px(7.)).prefix(Icon::empty().path("icons/notebook-pen.svg").size(px(14.)).text_color(theme.icon_muted)).into_any_element())}
@@ -5261,6 +5276,14 @@ mod tests {
         assert!(secure_note_has_markdown("Store **important** value"));
         assert!(secure_note_has_markdown("Use `ssh-keygen`"));
         assert!(secure_note_has_markdown("Read [docs](https://example.com)"));
+    }
+
+    #[test]
+    fn secure_note_icon_picker_is_single_combined_note_chip() {
+        let source = include_str!("item_editor.rs");
+        assert!(source.contains("else if item_type == ItemType::SecureNote"));
+        assert!(source.contains(".child(\"NOTE\")"));
+        assert!(!source.contains("icons/file-lock.svg\").size(px(12.))"));
     }
 
     #[test]
