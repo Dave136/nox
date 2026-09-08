@@ -28,3 +28,7 @@ packaging/arch/*.pkg.tar.zst
 # developer-machine settings with absolute paths in them; a shared checkout must
 # not inherit one.
 .cargo/config.toml
+# Local Pi runtime state
+.atl/
+
+repomix-output.xml
