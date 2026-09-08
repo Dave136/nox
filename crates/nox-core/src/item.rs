@@ -113,6 +113,9 @@ pub struct ItemPayload {
     /// Free-form tags for secure notes. Additive; Logins ignore this field.
     #[serde(default)]
     pub note_tags: Vec<String>,
+    /// Whether the item is marked as a favorite. Additive — see [`IconChoice`].
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// Errors returned while encoding or decoding an item payload.
@@ -214,6 +217,7 @@ mod tests {
             icon: IconChoice::Default,
             note_color: NoteColor::Blue,
             note_tags: vec![],
+            favorite: false,
         }
     }
 
@@ -312,6 +316,31 @@ mod tests {
 
         let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
         assert!(decoded.note_tags.is_empty());
+        assert_eq!(decoded.schema_version, ITEM_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn favorite_round_trips_through_json() {
+        for favorite in [true, false] {
+            let mut original = payload(ItemType::Login);
+            original.favorite = favorite;
+            let encoded = original.to_json_bytes().unwrap();
+            let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
+            assert_eq!(decoded, original);
+        }
+    }
+
+    #[test]
+    fn item_json_without_a_favorite_key_defaults_to_false() {
+        // Stands in for an item encrypted before this field existed: its
+        // stored JSON has no `favorite` key at all, and `schema_version` is
+        // unchanged — ITEM_SCHEMA_VERSION must not bump for this field.
+        let mut value = serde_json::to_value(payload(ItemType::Login)).unwrap();
+        value.as_object_mut().unwrap().remove("favorite");
+        let encoded = serde_json::to_vec(&value).unwrap();
+
+        let decoded = ItemPayload::from_json_bytes(&encoded).unwrap();
+        assert!(!decoded.favorite);
         assert_eq!(decoded.schema_version, ITEM_SCHEMA_VERSION);
     }
 

@@ -457,6 +457,10 @@ pub(crate) struct ItemEditorState {
     pub(crate) icon: IconChoice,
     /// The secure note's accent color (`locker.pen` "Note Color Field").
     pub(crate) note_color: NoteColor,
+    /// Whether the loaded item is favorited. No editor UI toggles this — it
+    /// is only ever set/cleared from a list row — but it is mirrored here so
+    /// editing/saving an item never silently un-favorites it.
+    pub(crate) favorite: bool,
     /// Free-form secure-note tags shown as chips in the Note settings combobox.
     pub(crate) note_tags: Vec<String>,
     pub(crate) note_tag_input: Entity<InputState>,
@@ -1092,6 +1096,7 @@ impl ItemEditorState {
             item_type: ItemType::Login,
             icon: IconChoice::Default,
             note_color: NoteColor::default(),
+            favorite: false,
             note_tags: Vec::new(),
             note_tag_input,
             markdown_preview_open: false,
@@ -1172,6 +1177,7 @@ impl ItemEditorState {
             icon: self.icon,
             note_color: self.note_color,
             note_tags: normalize_note_tags(&self.note_tags),
+            favorite: self.favorite,
         }
     }
 
@@ -1218,6 +1224,7 @@ impl ItemEditorState {
         editor.item_type = payload.item_type;
         editor.icon = payload.icon;
         editor.note_color = payload.note_color;
+        editor.favorite = payload.favorite;
         editor.note_tags = payload.note_tags;
         editor.markdown_preview_open = false;
         editor.revealed_copy_blocks.clear();
@@ -1280,6 +1287,7 @@ impl ItemEditorState {
             icon: self.icon,
             note_color: self.note_color,
             note_tags: normalize_note_tags(&self.note_tags),
+            favorite: self.favorite,
         }
     }
 }
@@ -5124,6 +5132,7 @@ mod tests {
             icon: IconChoice::Default,
             note_color: NoteColor::Blue,
             note_tags: vec![],
+            favorite: false,
         }
     }
 

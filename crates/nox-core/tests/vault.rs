@@ -38,6 +38,7 @@ fn payload(title: &str, password: &str) -> ItemPayload {
         icon: IconChoice::Default,
         note_color: NoteColor::Blue,
         note_tags: vec![],
+        favorite: false,
     }
 }
 

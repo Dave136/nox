@@ -120,6 +120,8 @@ pub(crate) struct VaultListState {
     pub(crate) scroll_handle: UniformListScrollHandle,
     /// Optional item type shown by the active sidebar view; `None` means all items.
     pub(crate) type_filter: Option<ItemType>,
+    /// When true, only favorited items pass the filter — the Favorites view.
+    pub(crate) favorites_only: bool,
     pub(crate) sort_mode: SortMode,
     /// Only meaningful alongside `type_filter == Some(ItemType::Login)` — the
     /// Logins view's "Weak"/"Reused" smart filters.
@@ -160,6 +162,7 @@ impl VaultListState {
             deleted_expanded: false,
             scroll_handle: UniformListScrollHandle::new(),
             type_filter: None,
+            favorites_only: false,
             sort_mode: SortMode::Updated,
             login_health_filter: None,
             _search_subscription,
@@ -176,6 +179,17 @@ impl VaultListState {
         }
         self.type_filter = item_type;
         self.login_health_filter = None;
+        self.selected = None;
+        self.rebuild_filter();
+    }
+
+    /// Show only favorited items (or all items), clearing the current
+    /// selection since it may not be favorited anymore.
+    pub(crate) fn set_favorites_only(&mut self, favorites_only: bool) {
+        if self.favorites_only == favorites_only {
+            return;
+        }
+        self.favorites_only = favorites_only;
         self.selected = None;
         self.rebuild_filter();
     }
@@ -230,6 +244,7 @@ impl VaultListState {
             .filter(|(_, (_, payload))| {
                 self.type_filter
                     .is_none_or(|item_type| payload.item_type == item_type)
+                    && (!self.favorites_only || payload.favorite)
                     && self.login_health_filter.is_none_or(|health| {
                         payload.item_type == ItemType::Login
                             && match health {
@@ -311,6 +326,16 @@ impl VaultListState {
         self.items
             .iter()
             .filter(|(_, payload)| payload.item_type == item_type)
+            .count()
+    }
+
+    /// Count favorited items, optionally narrowed to one item type.
+    pub(crate) fn favorite_count(&self, item_type: Option<ItemType>) -> usize {
+        self.items
+            .iter()
+            .filter(|(_, payload)| {
+                payload.favorite && item_type.is_none_or(|item_type| payload.item_type == item_type)
+            })
             .count()
     }
 }
@@ -484,6 +509,9 @@ fn item_row_content(
     updated: String,
     selected: bool,
     icon_bg_override: Option<Hsla>,
+    favorite_id: ElementId,
+    favorite: bool,
+    on_toggle_favorite: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
     let (third_label, third_color) = third_column;
     // Matches the Pencil frame's selected-row treatment: the icon box
@@ -554,7 +582,24 @@ fn item_row_content(
                 .w(px(COL_ACTIONS_W))
                 .flex_shrink_0()
                 .flex()
+                .items_center()
                 .justify_end()
+                .gap(px(6.))
+                .child(
+                    Button::new(favorite_id)
+                        .ghost()
+                        .small()
+                        .icon(
+                            gpui_component::Icon::empty()
+                                .path("icons/star.svg")
+                                .text_color(if favorite {
+                                    gpui::rgb(0xFFD700).into()
+                                } else {
+                                    theme.text_count
+                                }),
+                        )
+                        .on_click(on_toggle_favorite),
+                )
                 .child(
                     gpui_component::Icon::empty()
                         .path("icons/ellipsis.svg")
@@ -773,6 +818,23 @@ impl Nox {
         cx.notify();
     }
 
+    /// Flip an item's favorite bit, persisting it to the vault and updating
+    /// the in-memory list cache so the row/star reflect it immediately.
+    pub(crate) fn toggle_item_favorite(&mut self, item_id: ItemId, cx: &mut Context<Self>) {
+        let AppState::Unlocked(session) = &mut self.state else {
+            return;
+        };
+        let Some((_, payload)) = session.list.items.iter().find(|(id, _)| *id == item_id) else {
+            return;
+        };
+        let mut payload = payload.clone();
+        payload.favorite = !payload.favorite;
+        if session.vault.update_item(item_id, &payload).is_ok() {
+            session.list.upsert(item_id, payload);
+        }
+        cx.notify();
+    }
+
     /// The search/filter/sort bar above the split view — full width, sitting
     /// above both the list and detail panes (Pencil "All Items Split Toolbar").
     pub(crate) fn render_vault_list_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -921,6 +983,7 @@ impl Nox {
         let dupes_for_rows = duplicate_passwords(&list.items);
         let is_logins_view = session.active_view == ActiveView::Logins;
         let is_secure_notes_view = session.active_view == ActiveView::SecureNotes;
+        let is_favorites_view = session.active_view == ActiveView::Favorites;
         let (scope_total, scope_noun) = match active_type {
             None => (all_count, "items"),
             Some(ItemType::Login) => (logins_count, "logins"),
@@ -1011,6 +1074,80 @@ impl Nox {
                         .on_click(|_, _, _| {})
                         .render(cx),
                 )
+                .into_any_element()
+        } else if is_favorites_view {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .w_full()
+                .h(px(44.))
+                .px(px(12.))
+                .flex_shrink_0()
+                .child(
+                    TypeFilterPill::new(
+                        "favorites-filter-all",
+                        "All favorites",
+                        list.favorite_count(None),
+                    )
+                    .active(active_type.is_none())
+                    .on_click({
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(session) = locker.session_mut() {
+                                    session.list.set_type_filter(None);
+                                }
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .render(cx),
+                )
+                .child(
+                    TypeFilterPill::new(
+                        "favorites-filter-logins",
+                        "Logins",
+                        list.favorite_count(Some(ItemType::Login)),
+                    )
+                    .active(active_type == Some(ItemType::Login))
+                    .on_click({
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(session) = locker.session_mut() {
+                                    session.list.set_type_filter(Some(ItemType::Login));
+                                }
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .render(cx),
+                )
+                // ponytail: Cards/IDs have no backing item type yet — shown at
+                // a real 0 rather than hidden, same convention as the sidebar.
+                .child(TypeFilterPill::unavailable("favorites-filter-cards", "Cards").render(cx))
+                .child(
+                    TypeFilterPill::new(
+                        "favorites-filter-notes",
+                        "Notes",
+                        list.favorite_count(Some(ItemType::SecureNote)),
+                    )
+                    .active(active_type == Some(ItemType::SecureNote))
+                    .on_click({
+                        let locker = locker.clone();
+                        move |_, _window, app| {
+                            locker.update(app, |locker, cx| {
+                                if let Some(session) = locker.session_mut() {
+                                    session.list.set_type_filter(Some(ItemType::SecureNote));
+                                }
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .render(cx),
+                )
+                .child(TypeFilterPill::unavailable("favorites-filter-ids", "IDs").render(cx))
                 .into_any_element()
         } else {
             div()
@@ -1130,6 +1267,8 @@ impl Nox {
                             (label.to_owned(), theme.text_secondary),
                         )
                     };
+                    let favorite_id: ElementId =
+                        SharedString::from(format!("vault-list-row-{item_id}-favorite")).into();
                     let content = item_row_content(
                         theme,
                         icon,
@@ -1141,6 +1280,16 @@ impl Nox {
                         (payload.item_type == ItemType::SecureNote
                             && payload.note_color != NoteColor::Neutral)
                             .then(|| crate::icons::note_color_wash_hsla(payload.note_color)),
+                        favorite_id,
+                        payload.favorite,
+                        {
+                            let locker = row_locker.clone();
+                            move |_, _window, app| {
+                                locker.update(app, |locker, cx| {
+                                    locker.toggle_item_favorite(item_id, cx);
+                                });
+                            }
+                        },
                     );
                     let (bg, hover_bg) = if selected {
                         (theme.raised, theme.raised)
@@ -1196,6 +1345,8 @@ impl Nox {
             ("ACCOUNT", "HEALTH")
         } else if is_secure_notes_view {
             ("NOTE", "CATEGORY")
+        } else if is_favorites_view {
+            ("FAVORITE ITEM", "TYPE")
         } else {
             ("ITEM", "TYPE")
         };
@@ -1231,6 +1382,8 @@ impl Nox {
                     .text_color(theme.text_secondary)
                     .child(if is_secure_notes_view {
                         "All notes encrypted"
+                    } else if is_favorites_view {
+                        "Click ★ to remove from favorites"
                     } else {
                         ""
                     })
@@ -1320,6 +1473,7 @@ mod tests {
             icon: nox_core::IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
             note_tags: vec![],
+            favorite: false,
         }
     }
 

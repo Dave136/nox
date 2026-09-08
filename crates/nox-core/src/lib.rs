@@ -299,6 +299,7 @@ mod task7_tests {
                 icon: IconChoice::Default,
                 note_color: NoteColor::Blue,
                 note_tags: vec![],
+                favorite: false,
             })
             .unwrap();
         let request = vault
@@ -381,6 +382,7 @@ mod task7_tests {
                 icon: IconChoice::Default,
                 note_color: NoteColor::Blue,
                 note_tags: vec![],
+                favorite: false,
             })
             .unwrap();
         source_vault
@@ -405,6 +407,7 @@ mod task7_tests {
                 icon: IconChoice::Default,
                 note_color: NoteColor::Blue,
                 note_tags: vec![],
+                favorite: false,
             })
             .unwrap();
         destination_vault.lock();

@@ -247,27 +247,29 @@ impl Nox {
         } else {
             div().into_any_element()
         };
-        let (total, logins, notes) =
-            self.session()
-                .map(|session| &session.list)
-                .map_or((0, 0, 0), |list| {
-                    let logins = list
-                        .items
-                        .iter()
-                        .filter(|(_, item)| item.item_type == nox_core::ItemType::Login)
-                        .count();
-                    let notes = list
-                        .items
-                        .iter()
-                        .filter(|(_, item)| item.item_type == nox_core::ItemType::SecureNote)
-                        .count();
-                    (list.items.len(), logins, notes)
-                });
+        let (total, logins, notes, favorites_count) = self
+            .session()
+            .map(|session| &session.list)
+            .map_or((0, 0, 0, 0), |list| {
+                let logins = list
+                    .items
+                    .iter()
+                    .filter(|(_, item)| item.item_type == nox_core::ItemType::Login)
+                    .count();
+                let notes = list
+                    .items
+                    .iter()
+                    .filter(|(_, item)| item.item_type == nox_core::ItemType::SecureNote)
+                    .count();
+                let favorites_count = list.items.iter().filter(|(_, item)| item.favorite).count();
+                (list.items.len(), logins, notes, favorites_count)
+            });
         let (page_title, item_count, item_noun) = match active_view {
             ActiveView::Home => ("Home", total, "items"),
             ActiveView::AllItems => ("All items", total, "items"),
             ActiveView::Logins => ("Logins", logins, "logins"),
             ActiveView::SecureNotes => ("Secure Notes", notes, "encrypted notes"),
+            ActiveView::Favorites => ("Favorites", favorites_count, "items saved for quick access"),
         };
         rsx! {
             <div
@@ -302,7 +304,7 @@ impl Nox {
                         <div flex flex_col gap={px(3.)}>
                             <div text_xl fontWeight={FontWeight::SEMIBOLD} textColor={theme.text}>{page_title}</div>
                             <div text_xs textColor={theme.text_muted}>
-                                {if active_view == ActiveView::SecureNotes {
+                                {if matches!(active_view, ActiveView::SecureNotes | ActiveView::Favorites) {
                                     format!("{item_count} {item_noun}")
                                 } else {
                                     format!("{item_count} {item_noun} in your vault")

@@ -19,6 +19,7 @@ pub(crate) enum ActiveView {
     AllItems,
     Logins,
     SecureNotes,
+    Favorites,
 }
 
 impl ActiveView {
@@ -28,6 +29,7 @@ impl ActiveView {
             ActiveView::AllItems => None,
             ActiveView::Logins => Some(ItemType::Login),
             ActiveView::SecureNotes => Some(ItemType::SecureNote),
+            ActiveView::Favorites => None,
         }
     }
 }
@@ -45,6 +47,9 @@ impl Nox {
         session.active_view = view;
         session.reveal_password = false;
         session.list.set_type_filter(view.item_type());
+        session
+            .list
+            .set_favorites_only(view == ActiveView::Favorites);
         cx.notify();
     }
 
@@ -69,6 +74,7 @@ impl Nox {
         let locker_all_items = locker.clone();
         let locker_logins = locker.clone();
         let locker_notes = locker.clone();
+        let locker_favorites = locker.clone();
         let locker_settings = locker.clone();
 
         rsx! {
@@ -88,8 +94,9 @@ impl Nox {
                     {sidebar_link("sidebar-all-items", "icons/layout-grid.svg", "All items", active == ActiveView::AllItems, move |_, _window, app| {
                         locker_all_items.update(app, |locker, cx| locker.set_active_view(ActiveView::AllItems, cx));
                     }, cx)}
-                    // ponytail: visual-only until the vault model owns favorite state; add filtering when that state exists.
-                    {sidebar_static_item(theme, "icons/star.svg", "Favorites")}
+                    {sidebar_link("sidebar-favorites", "icons/star.svg", "Favorites", active == ActiveView::Favorites, move |_, _window, app| {
+                        locker_favorites.update(app, |locker, cx| locker.set_active_view(ActiveView::Favorites, cx));
+                    }, cx)}
                     {sidebar_link("sidebar-logins", "icons/key-round.svg", "Logins", active == ActiveView::Logins, move |_, _window, app| {
                         locker_logins.update(app, |locker, cx| locker.set_active_view(ActiveView::Logins, cx));
                     }, cx)}

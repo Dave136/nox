@@ -2355,6 +2355,7 @@ mod tests {
             icon: IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
             note_tags: vec![],
+            favorite: false,
         };
         view.update_in(cx, |locker, window, locker_cx| {
             locker.state = unlocked_state(vault, window, locker_cx);
@@ -2400,6 +2401,7 @@ mod tests {
             icon: IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
             note_tags: vec![],
+            favorite: false,
         }
     }
 
@@ -2530,6 +2532,86 @@ mod tests {
     }
 
     #[gpui::test]
+    fn favorites_only_filter_shows_only_favorited_items(cx: &mut TestAppContext) {
+        init(cx);
+        let mut favorite = login_payload("Favorite Login", "alice");
+        favorite.favorite = true;
+        let payloads = [favorite, login_payload("Plain Login", "bob")];
+        let (view, cx, path, ids) = unlocked_view(cx, "favorites-filter", &payloads);
+        view.update_in(cx, |locker, _window, locker_cx| {
+            if let Some(session) = locker.session_mut() {
+                session.list.set_favorites_only(true);
+            }
+            let _ = locker_cx;
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .list
+                .filtered
+                .clone()),
+            vec![0]
+        );
+        view.update_in(cx, |locker, _window, locker_cx| {
+            if let Some(session) = locker.session_mut() {
+                session.list.set_favorites_only(false);
+            }
+            let _ = locker_cx;
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker
+                .session()
+                .unwrap()
+                .list
+                .filtered
+                .len()),
+            2
+        );
+        let _ = ids;
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn toggle_item_favorite_flips_vault_and_list_cache(cx: &mut TestAppContext) {
+        init(cx);
+        let payloads = [login_payload("GitHub", "alice")];
+        let (view, cx, path, ids) = unlocked_view(cx, "toggle-favorite", &payloads);
+        let item_id = ids[0];
+
+        view.update_in(cx, |locker, _window, locker_cx| {
+            locker.toggle_item_favorite(item_id, locker_cx);
+        });
+        view.read_with(cx, |locker, _| {
+            let session = locker.session().unwrap();
+            assert!(session.vault.get_item(item_id).unwrap().unwrap().favorite);
+            let (_, cached) = session
+                .list
+                .items
+                .iter()
+                .find(|(id, _)| *id == item_id)
+                .unwrap();
+            assert!(cached.favorite);
+        });
+
+        view.update_in(cx, |locker, _window, locker_cx| {
+            locker.toggle_item_favorite(item_id, locker_cx);
+        });
+        view.read_with(cx, |locker, _| {
+            let session = locker.session().unwrap();
+            assert!(!session.vault.get_item(item_id).unwrap().unwrap().favorite);
+            let (_, cached) = session
+                .list
+                .items
+                .iter()
+                .find(|(id, _)| *id == item_id)
+                .unwrap();
+            assert!(!cached.favorite);
+        });
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn secure_note_search_matches_note_contents(cx: &mut TestAppContext) {
         init(cx);
         let payloads = [ItemPayload {
@@ -2545,6 +2627,7 @@ mod tests {
             icon: IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
             note_tags: vec![],
+            favorite: false,
         }];
         let (view, cx, path, _) = unlocked_view(cx, "secure-note-content-search", &payloads);
         view.update_in(cx, |locker, _window, locker_cx| {
@@ -2767,6 +2850,35 @@ mod tests {
         cleanup(&path);
     }
 
+    /// The editor sheet has no favorite control, but it still mirrors the
+    /// loaded item's favorite bit into editor-local state so a save never
+    /// silently un-favorites it.
+    #[gpui::test]
+    fn editing_preserves_favorite_without_a_favorite_control(cx: &mut TestAppContext) {
+        init(cx);
+        let mut favorite = login_payload("GitHub", "alice");
+        favorite.favorite = true;
+        let (view, cx, path, ids) = unlocked_view(cx, "favorite-edit-preserve", &[favorite]);
+        let item_id = ids[0];
+
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.save_item(window, locker_cx);
+        });
+
+        let persisted = view.read_with(cx, |locker, _| {
+            locker
+                .session()
+                .unwrap()
+                .vault
+                .get_item(item_id)
+                .unwrap()
+                .unwrap()
+        });
+        assert!(persisted.favorite);
+        cleanup(&path);
+    }
+
     /// Tags are removable chips and saved secure-note tags are offered as
     /// selectable suggestions: adding two tags and removing one leaves only
     /// the other, and selecting a suggestion from another secure note adds
@@ -2789,6 +2901,7 @@ mod tests {
                 icon: IconChoice::Default,
                 note_color: nox_core::NoteColor::Blue,
                 note_tags: vec!["wifi".into(), " shared ".into()],
+                favorite: false,
             },
             ItemPayload {
                 schema_version: ITEM_SCHEMA_VERSION,
@@ -2803,6 +2916,7 @@ mod tests {
                 icon: IconChoice::Default,
                 note_color: nox_core::NoteColor::Blue,
                 note_tags: vec!["wifi".into()],
+                favorite: false,
             },
             {
                 // A login whose payload happens to carry a tag-shaped string
@@ -2860,6 +2974,7 @@ mod tests {
                 icon: IconChoice::Default,
                 note_color: nox_core::NoteColor::Blue,
                 note_tags: vec!["bank".into()],
+                favorite: false,
             },
             ItemPayload {
                 schema_version: ITEM_SCHEMA_VERSION,
@@ -2874,6 +2989,7 @@ mod tests {
                 icon: IconChoice::Default,
                 note_color: nox_core::NoteColor::Blue,
                 note_tags: vec![" work wifi ".into()],
+                favorite: false,
             },
         ];
         let (view, cx, path, ids) = unlocked_view(cx, "note-tags-clicks", &payloads);
@@ -4321,6 +4437,7 @@ mod tests {
             icon: IconChoice::Default,
             note_color: nox_core::NoteColor::Blue,
             note_tags: vec![],
+            favorite: false,
         };
         let (view, cx, path, ids) = unlocked_view(cx, "note-edit-workspace", &[payload]);
         let item_id = ids[0];
@@ -4692,7 +4809,7 @@ mod tests {
             locker.arm_inactivity_timer(window, locker_cx);
         });
         cx.update(|window, _| window.blur());
-        for _ in 0..6 {
+        for _ in 0..7 {
             cx.update(|window, app| window.focus_next(app));
         }
         cx.simulate_keystrokes("enter");
@@ -4715,7 +4832,7 @@ mod tests {
             locker.arm_inactivity_timer(window, locker_cx);
         });
         cx.update(|window, _| window.blur());
-        for _ in 0..6 {
+        for _ in 0..7 {
             cx.update(|window, app| window.focus_next(app));
         }
         cx.simulate_keystrokes("a");
