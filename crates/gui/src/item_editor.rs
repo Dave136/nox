@@ -2346,10 +2346,10 @@ impl Nox {
                 if let Some(session) = self.session_mut() {
                     session.list.upsert(item_id, payload);
                     session.list.selected = Some(item_id);
-                    if was_restore {
-                        session.list.remove_deleted(item_id);
-                    }
                     session.item_editor = None;
+                }
+                if was_restore {
+                    self.refresh_deleted();
                 }
                 self.editor_blur_subscriptions.clear();
                 window.close_sheet(cx);
@@ -2388,6 +2388,18 @@ impl Nox {
         }
     }
 
+    /// Re-read the vault's tombstoned items into list state. Called after any
+    /// delete or restore — cheaper to reason about than incremental
+    /// bookkeeping, and it can never drift from the projection.
+    pub(crate) fn refresh_deleted(&mut self) {
+        let AppState::Unlocked(session) = &mut self.state else {
+            return;
+        };
+        if let Ok(deleted) = session.vault.list_deleted_items() {
+            session.list.deleted = deleted;
+        }
+    }
+
     pub(crate) fn delete_item(
         &mut self,
         item_id: ItemId,
@@ -2402,10 +2414,10 @@ impl Nox {
             Ok(()) => {
                 if let Some(session) = self.session_mut() {
                     session.list.remove(item_id);
-                    session.list.add_deleted(item_id);
                     session.list.selected = None;
                     session.item_editor = None;
                 }
+                self.refresh_deleted();
                 window.close_sheet(cx);
             }
             Err(_) => {

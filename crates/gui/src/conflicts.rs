@@ -201,11 +201,9 @@ impl Nox {
         if let Some(session) = self.session_mut() {
             if let Some(payload) = selected_payload {
                 session.list.upsert(item_id, payload);
-                session.list.remove_deleted(item_id);
                 session.list.selected = Some(item_id);
             } else {
                 session.list.remove(item_id);
-                session.list.add_deleted(item_id);
                 session.list.selected = None;
                 if let Some(editor) = session.item_editor.as_ref()
                     && matches!(editor.mode, crate::item_editor::EditorMode::Edit(id) | crate::item_editor::EditorMode::Restore(id) if id == item_id)
@@ -214,6 +212,9 @@ impl Nox {
                 }
             }
         }
+        // Resolving a conflict can flip an item into or out of the tombstoned
+        // projection, so the Trash list has to be re-read either way.
+        self.refresh_deleted();
         self.note_activity(cx);
         cx.notify();
     }

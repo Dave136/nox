@@ -2361,8 +2361,12 @@ mod tests {
             locker.state = unlocked_state(vault, window, locker_cx);
             if let Some(session) = locker.session_mut() {
                 session.list = VaultListState::from_initial_load(
-                    Ok(vec![(item_id, payload)]),
-                    Ok(vec![ItemId::new()]),
+                    Ok(vec![(item_id, payload.clone())]),
+                    Ok(vec![nox_core::DeletedItem {
+                        item_id: ItemId::new(),
+                        payload,
+                        deleted_at_ms: 0,
+                    }]),
                     window,
                     locker_cx,
                 );
@@ -2370,11 +2374,7 @@ mod tests {
         });
         let (items, filtered, deleted) = view.read_with(cx, |locker, _| {
             let list = &locker.session().unwrap().list;
-            (
-                list.items.len(),
-                list.filtered.len(),
-                list.deleted_ids.len(),
-            )
+            (list.items.len(), list.filtered.len(), list.deleted.len())
         });
         assert_eq!((items, filtered, deleted), (1, 1, 1));
         cleanup(&path);
@@ -4553,7 +4553,7 @@ mod tests {
             locker.save_item(window, locker_cx)
         });
         assert!(view.read_with(cx, |locker, _| {
-            locker.session().unwrap().list.deleted_ids.is_empty()
+            locker.session().unwrap().list.deleted.is_empty()
         }));
         assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Unlocked(session) if session.vault.get_item(item_id).unwrap().is_some())));
         cleanup(&path);
@@ -4576,7 +4576,8 @@ mod tests {
             let list = &session.list;
             list.items.is_empty()
                 && list.filtered.is_empty()
-                && list.deleted_ids == [item_id]
+                && list.deleted.len() == 1
+                && list.deleted[0].item_id == item_id
                 && session.item_editor.is_none()
         }));
         cleanup(&path);
@@ -4618,6 +4619,32 @@ mod tests {
     }
 
     #[gpui::test]
+    fn deleting_items_refreshes_the_deleted_list_with_titles(cx: &mut TestAppContext) {
+        init(cx);
+        let payloads = [login_payload("One", "one"), login_payload("Two", "two")];
+        let (view, cx, path, ids) = unlocked_view(cx, "deleted-titles", &payloads);
+        for item_id in ids.iter().copied() {
+            view.update_in(cx, |locker, window, locker_cx| {
+                locker.delete_item(item_id, window, locker_cx)
+            });
+        }
+        let titles = view.read_with(cx, |locker, _| {
+            locker
+                .session()
+                .unwrap()
+                .list
+                .deleted
+                .iter()
+                .map(|deleted| deleted.payload.title.clone())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(titles.len(), 2);
+        assert!(titles.contains(&"One".to_string()));
+        assert!(titles.contains(&"Two".to_string()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn deleted_id_bookkeeping_supports_multiple_delete_and_restore(cx: &mut TestAppContext) {
         init(cx);
         let payloads = [login_payload("One", "one"), login_payload("Two", "two")];
@@ -4629,7 +4656,7 @@ mod tests {
         }
         assert!(view.read_with(
             cx,
-            |locker, _| locker.session().unwrap().list.deleted_ids.len() == 2
+            |locker, _| locker.session().unwrap().list.deleted.len() == 2
         ));
         let restore_id = ids[0];
         view.update_in(cx, |locker, window, locker_cx| {
@@ -4640,7 +4667,9 @@ mod tests {
         });
         assert!(view.read_with(cx, |locker, _| {
             let list = &locker.session().unwrap().list;
-            list.deleted_ids == [ids[1]] && list.items.iter().any(|(id, _)| *id == restore_id)
+            list.deleted.len() == 1
+                && list.deleted[0].item_id == ids[1]
+                && list.items.iter().any(|(id, _)| *id == restore_id)
         }));
         cleanup(&path);
     }
@@ -4675,8 +4704,9 @@ mod tests {
                 .session()
                 .unwrap()
                 .list
-                .deleted_ids
-                .contains(&item_id)
+                .deleted
+                .iter()
+                .any(|deleted| deleted.item_id == item_id)
         }));
         cleanup(&path);
     }

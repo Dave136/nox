@@ -15,7 +15,7 @@ use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
 };
-use nox_core::{ItemId, ItemPayload, ItemType, NoteColor, VaultError};
+use nox_core::{DeletedItem, ItemId, ItemPayload, ItemType, NoteColor, VaultError};
 use std::collections::HashSet;
 
 use crate::assets::{IconName, icon};
@@ -112,11 +112,12 @@ pub(crate) struct VaultListState {
     pub(crate) load: ListLoadState,
     pub(crate) items: Vec<(ItemId, ItemPayload)>,
     pub(crate) filtered: Vec<usize>,
-    pub(crate) deleted_ids: Vec<ItemId>,
+    /// Tombstoned items with their pre-deletion payloads, newest first — the
+    /// Trash view's data source.
+    pub(crate) deleted: Vec<DeletedItem>,
     pub(crate) search_input: Entity<InputState>,
     pub(crate) search_query_lower: String,
     pub(crate) selected: Option<ItemId>,
-    pub(crate) deleted_expanded: bool,
     pub(crate) scroll_handle: UniformListScrollHandle,
     /// Optional item type shown by the active sidebar view; `None` means all items.
     pub(crate) type_filter: Option<ItemType>,
@@ -132,13 +133,13 @@ pub(crate) struct VaultListState {
 impl VaultListState {
     pub(crate) fn from_initial_load(
         items: Result<Vec<(ItemId, ItemPayload)>, VaultError>,
-        deleted_ids: Result<Vec<ItemId>, VaultError>,
+        deleted: Result<Vec<DeletedItem>, VaultError>,
         window: &mut Window,
         cx: &mut Context<Nox>,
     ) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
-        let (load, items, deleted_ids) = match (items, deleted_ids) {
-            (Ok(items), Ok(deleted_ids)) => (ListLoadState::Ready, items, deleted_ids),
+        let (load, items, deleted) = match (items, deleted) {
+            (Ok(items), Ok(deleted)) => (ListLoadState::Ready, items, deleted),
             (Err(error), _) | (_, Err(error)) => (
                 ListLoadState::Failed(format!("Could not load vault items: {error}").into()),
                 Vec::new(),
@@ -155,11 +156,10 @@ impl VaultListState {
             load,
             items,
             filtered: Vec::new(),
-            deleted_ids,
+            deleted,
             search_input,
             search_query_lower: String::new(),
             selected: None,
-            deleted_expanded: false,
             scroll_handle: UniformListScrollHandle::new(),
             type_filter: None,
             favorites_only: false,
@@ -298,20 +298,6 @@ impl VaultListState {
     pub(crate) fn remove(&mut self, item_id: ItemId) {
         self.items.retain(|(id, _)| *id != item_id);
         self.rebuild_filter();
-    }
-
-    pub(crate) fn add_deleted(&mut self, item_id: ItemId) {
-        if !self.deleted_ids.contains(&item_id) {
-            self.deleted_ids.push(item_id);
-        }
-    }
-
-    pub(crate) fn remove_deleted(&mut self, item_id: ItemId) {
-        self.deleted_ids.retain(|id| *id != item_id);
-    }
-
-    pub(crate) fn toggle_deleted(&mut self) {
-        self.deleted_expanded = !self.deleted_expanded;
     }
 
     fn selected_index(&self) -> Option<usize> {
@@ -969,10 +955,6 @@ impl Nox {
 
         let load = list.load.clone();
         let item_count = list.filtered.len();
-        let deleted_ids = list.deleted_ids.clone();
-        let has_deleted = !deleted_ids.is_empty();
-        let deleted_count = deleted_ids.len();
-        let deleted_expanded = list.deleted_expanded;
         let active_type = list.type_filter;
         let health_filter = list.login_health_filter;
         let all_count = list.items.len();
@@ -1314,24 +1296,6 @@ impl Nox {
         })
         .size_full();
 
-        let deleted = deleted_ids.into_iter().enumerate().map(|(index, item_id)| {
-            let row_id: ElementId = SharedString::from(format!("deleted-item-{item_id}")).into();
-            Button::new(row_id)
-                .ghost()
-                .small()
-                .w_full()
-                .justify_start()
-                .text_color(theme.text_muted)
-                .label(format!("Preview & Restore — Deleted item {}", index + 1))
-                .on_click({
-                    let locker = locker.clone();
-                    move |_, window, app| {
-                        locker.update(app, |locker, cx| {
-                            locker.open_editor_for_item(item_id, true, window, cx)
-                        });
-                    }
-                })
-        });
         let error = match load {
             ListLoadState::Ready => div(),
             ListLoadState::Failed(message) => div()
@@ -1418,35 +1382,6 @@ impl Nox {
                     .into_any_element()
             } else {
                 div().flex_1().min_h(px(0.)).child(rows).into_any_element()
-            })
-            .child(if !has_deleted {
-                div().into_any_element()
-            } else {
-                div()
-                    .id("deleted-items")
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .p(px(8.))
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(
-                        Button::new("deleted-section-toggle")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .justify_start()
-                            .text_color(theme.text_muted)
-                            .label(format!("Deleted ({deleted_count})"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(session) = this.session_mut() {
-                                    session.list.toggle_deleted();
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .when(deleted_expanded, |section| section.children(deleted))
-                    .into_any_element()
             })
             .child(footer)
             .into_any_element();
