@@ -168,6 +168,14 @@ struct ActiveNoxTheme(Theme);
 
 impl Global for ActiveNoxTheme {}
 
+/// The one family name the whole UI renders in. It resolves only because
+/// [`crate::assets::fonts`] registers the faces at startup — GPUI matches a
+/// family by exact name and drops the requested weight and style when it finds
+/// nothing, so a name nobody registered costs the app every bold and italic it
+/// asks for. Anything that sets a family explicitly must use this, not a
+/// literal.
+pub(crate) const APP_FONT_FAMILY: &str = "Geist";
+
 /// Publish the startup palette, before any window exists.
 pub(crate) fn init(cx: &mut App) {
     cx.set_global(ActiveNoxTheme(Theme::cipher_midnight()));
@@ -192,6 +200,12 @@ pub(crate) fn apply(mode: ThemeMode, window: Option<&mut Window>, cx: &mut App) 
 }
 
 fn apply_to_components(theme: Theme, cx: &mut App) {
+    // gpui-component ships `.SystemUIFont` here, which resolves to nothing on a
+    // machine without IBM Plex Sans and takes every widget's weight and style
+    // down with it. Re-projected on every mode switch for the same reason the
+    // colors are: `ComponentTheme::change` reloads this from the registry.
+    ComponentTheme::global_mut(cx).font_family = APP_FONT_FAMILY.into();
+
     let colors = &mut ComponentTheme::global_mut(cx).colors;
 
     colors.background = theme.canvas;

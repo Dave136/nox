@@ -51,6 +51,14 @@ fn main() {
         .with_http_client(std::sync::Arc::new(reqwest_client::ReqwestClient::new()));
 
     app.run(|cx| {
+        // Must come before anything renders. GPUI matches a font family by
+        // exact name and silently discards the requested weight and style when
+        // no face carries that name, so until these are registered every
+        // `font_weight(..)` and `italic()` in the app is a no-op.
+        cx.text_system()
+            .add_fonts(assets::fonts())
+            .expect("register the embedded Geist faces");
+
         init(cx);
         theme::init(cx);
         match nox_core::default_data_dir() {

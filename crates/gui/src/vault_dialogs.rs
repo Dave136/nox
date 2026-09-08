@@ -1,4 +1,5 @@
 use crate::app::{Nox, RemoveVaultDialogState, RenameVaultDialogState};
+use crate::theme::APP_FONT_FAMILY;
 use gpui::{
     AnyElement, Context, FontWeight, KeyDownEvent, MouseButton, SharedString, Window, div,
     prelude::*, px, relative, rgb, rgba,
@@ -130,7 +131,7 @@ impl Nox {
             .border_1()
             .border_color(rgb(0x3A4450))
             .bg(rgb(0x222731))
-            .font_family("Inter")
+            .font_family(APP_FONT_FAMILY)
             .text_size(px(11.))
             .font_weight(FontWeight(550.))
             .text_color(rgb(0xDDE3E8))
@@ -164,7 +165,7 @@ impl Nox {
             .border_1()
             .border_color(rgb(0xE3E6ED))
             .bg(rgb(0xE3E6ED))
-            .font_family("Inter")
+            .font_family(APP_FONT_FAMILY)
             .text_size(px(11.))
             .font_weight(FontWeight(650.))
             .text_color(rgb(0x1A1D22))
@@ -188,7 +189,7 @@ impl Nox {
         let error = dialog.error.then(|| {
             div()
                 .debug_selector(|| "rename-vault-error".to_owned())
-                .font_family("Inter")
+                .font_family(APP_FONT_FAMILY)
                 .text_size(px(10.))
                 .line_height(relative(1.45))
                 .text_color(rgb(0xC9959A))
@@ -245,7 +246,7 @@ impl Nox {
                         .child(
                             div()
                                 .debug_selector(|| "rename-vault-title".to_owned())
-                                .font_family("Inter")
+                                .font_family(APP_FONT_FAMILY)
                                 .text_size(px(15.))
                                 .line_height(relative(1.2))
                                 .font_weight(FontWeight(650.))
@@ -256,7 +257,7 @@ impl Nox {
                             div()
                                 .debug_selector(|| "rename-vault-body".to_owned())
                                 .w_full()
-                                .font_family("Inter")
+                                .font_family(APP_FONT_FAMILY)
                                 .text_size(px(11.))
                                 .line_height(relative(1.45))
                                 .text_color(rgb(0xB9C0C8))
@@ -273,7 +274,7 @@ impl Nox {
                                 .gap(px(7.))
                                 .child(
                                     div()
-                                        .font_family("Inter")
+                                        .font_family(APP_FONT_FAMILY)
                                         .text_size(px(9.))
                                         .font_weight(FontWeight(700.))
                                         .text_color(rgb(0x7F8996))
@@ -400,7 +401,7 @@ impl Nox {
                         .child(
                             div()
                                 .debug_selector(|| "remove-vault-option-label".to_owned())
-                                .font_family("Inter")
+                                .font_family(APP_FONT_FAMILY)
                                 .text_size(px(11.))
                                 .line_height(relative(1.18))
                                 .font_weight(FontWeight(550.))
@@ -410,7 +411,7 @@ impl Nox {
                         .child(
                             div()
                                 .debug_selector(|| "remove-vault-option-warning".to_owned())
-                                .font_family("Inter")
+                                .font_family(APP_FONT_FAMILY)
                                 .text_size(px(10.))
                                 .line_height(px(15.))
                                 .when(!checked, |text| text.whitespace_nowrap())
@@ -433,7 +434,7 @@ impl Nox {
             .border_1()
             .border_color(rgb(0x3A4450))
             .bg(rgb(0x222731))
-            .font_family("Inter")
+            .font_family(APP_FONT_FAMILY)
             .text_size(px(11.))
             .font_weight(FontWeight(550.))
             .text_color(rgb(0xDDE3E8))
@@ -471,7 +472,7 @@ impl Nox {
             .border_1()
             .border_color(rgb(confirm_fill))
             .bg(rgb(confirm_fill))
-            .font_family("Inter")
+            .font_family(APP_FONT_FAMILY)
             .text_size(px(11.))
             .font_weight(FontWeight(650.))
             .text_color(rgb(0x1A1D22))
@@ -539,7 +540,7 @@ impl Nox {
                         .child(
                             div()
                                 .debug_selector(|| "remove-vault-title".to_owned())
-                                .font_family("Inter")
+                                .font_family(APP_FONT_FAMILY)
                                 .text_size(px(15.))
                                 .line_height(relative(1.2))
                                 .font_weight(FontWeight(650.))
@@ -550,7 +551,7 @@ impl Nox {
                             div()
                                 .debug_selector(|| "remove-vault-body".to_owned())
                                 .w_full()
-                                .font_family("Inter")
+                                .font_family(APP_FONT_FAMILY)
                                 .text_size(px(11.))
                                 .line_height(relative(1.45))
                                 .text_color(rgb(0xB9C0C8))

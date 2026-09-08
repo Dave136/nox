@@ -1,6 +1,6 @@
 use crate::app::{AppState, Nox};
 use crate::nav::ActiveView;
-use crate::theme::Theme;
+use crate::theme::{APP_FONT_FAMILY, Theme};
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Context, Entity, Focusable, FontWeight,
     PathPromptOptions, SharedString, Window, div, ease_out_quint, prelude::*, px, rgb,
@@ -3438,7 +3438,7 @@ impl Nox {
                     div()
                         .text_size(text_size)
                         .text_color(text_color)
-                        .font_family("Inter")
+                        .font_family(APP_FONT_FAMILY)
                         .when(span.style == NotePreviewSpanStyle::Bold, |span| {
                             span.font_weight(FontWeight::BOLD)
                         })

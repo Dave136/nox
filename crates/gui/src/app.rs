@@ -5,7 +5,7 @@ use crate::conflicts::ConflictState;
 use crate::item_editor::{self, ItemEditorState};
 use crate::nav::ActiveView;
 use crate::settings::{self, Settings, SettingsSection, load_settings, save_settings};
-use crate::theme::Theme;
+use crate::theme::{APP_FONT_FAMILY, Theme};
 use crate::ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use crate::vault_list::VaultListState;
 use crate::vaults::{
@@ -1287,6 +1287,7 @@ impl Render for Nox {
                 flex
                 flex_col
                 bg={theme.canvas}
+                fontFamily={APP_FONT_FAMILY}
                 onAction={cx.listener(|this, _: &OpenCommandPalette, window, cx| {
                     // open_palette itself no-ops while unauthenticated.
                     this.window_controls
