@@ -2434,7 +2434,7 @@ mod tests {
                 ),
                 item_editor: None,
                 active_view: ActiveView::AllItems,
-            trash_selected: None,
+                trash_selected: None,
                 reveal_password: false,
             });
         });
@@ -2840,7 +2840,7 @@ mod tests {
         assert_eq!(persisted.note_tags, ["recovery", "wifi"]);
 
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
         });
         assert_eq!(
             view.read_with(cx, |locker, _| locker
@@ -2868,7 +2868,7 @@ mod tests {
         let item_id = ids[0];
 
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
             locker.save_item(window, locker_cx);
         });
 
@@ -3002,7 +3002,7 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
         view.update_in(cx, |locker, window, locker_cx| {
             locker.set_active_view(ActiveView::SecureNotes, locker_cx);
-            locker.open_editor_for_item(ids[0], false, window, locker_cx);
+            locker.open_editor_for_item(ids[0], window, locker_cx);
         });
         cx.run_until_parked();
 
@@ -3493,7 +3493,7 @@ mod tests {
             .unwrap();
 
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
         });
         let selection = view
             .read_with(cx, |locker, _| {
@@ -3571,7 +3571,7 @@ mod tests {
             .read_with(cx, |locker, _| locker.session().unwrap().list.selected)
             .unwrap();
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
         });
         assert!(view.read_with(cx, |locker, _| {
             locker.item_editor().unwrap().local_icon.is_none()
@@ -4378,7 +4378,7 @@ mod tests {
         let item_id = ids[0];
         view.update_in(cx, |locker, window, locker_cx| {
             locker.set_active_view(ActiveView::Logins, locker_cx);
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
         });
 
         assert!(view.read_with(cx, |locker, _| {
@@ -4407,7 +4407,7 @@ mod tests {
         );
         let item_id = ids[0];
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
         });
         assert!(view.read_with(cx, |locker, _| {
             locker.session().unwrap().active_view == ActiveView::AllItems
@@ -4449,7 +4449,7 @@ mod tests {
         let item_id = ids[0];
         view.update_in(cx, |locker, window, locker_cx| {
             locker.set_active_view(ActiveView::SecureNotes, locker_cx);
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
         });
         assert!(view.read_with(cx, |locker, _| {
             locker.uses_secure_note_workspace()
@@ -4465,7 +4465,7 @@ mod tests {
         view.update_in(cx, |locker, window, locker_cx| {
             locker.cancel_item_editor(window, locker_cx);
             locker.set_active_view(ActiveView::AllItems, locker_cx);
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
         });
         assert!(view.read_with(cx, |locker, _| locker.uses_secure_note_workspace()));
         assert!(!cx.update(|window, app| window.has_active_sheet(app)));
@@ -4526,7 +4526,7 @@ mod tests {
         let (view, cx, path, ids) = unlocked_view(cx, "edit-restore", &[payload]);
         let item_id = ids[0];
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, false, window, locker_cx);
+            locker.open_editor_for_item(item_id, window, locker_cx);
         });
         set_editor_values(&view, cx, "Edited", "alice", "changed");
         view.update_in(cx, |locker, window, locker_cx| {
@@ -4542,21 +4542,12 @@ mod tests {
         view.update_in(cx, |locker, window, locker_cx| {
             locker.delete_item(item_id, window, locker_cx)
         });
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, true, window, locker_cx)
-        });
-        assert_eq!(
-            view.read_with(cx, |locker, _| locker
-                .session()
-                .unwrap()
-                .item_editor
-                .as_ref()
-                .unwrap()
-                .mode),
-            EditorMode::Restore(item_id)
-        );
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.save_item(window, locker_cx)
+        assert!(view.read_with(cx, |locker, _| {
+            let deleted = &locker.session().unwrap().list.deleted;
+            deleted.len() == 1 && deleted[0].payload.title == "Edited"
+        }));
+        view.update(cx, |locker, locker_cx| {
+            locker.restore_item(item_id, locker_cx)
         });
         assert!(view.read_with(cx, |locker, _| {
             locker.session().unwrap().list.deleted.is_empty()
@@ -4572,7 +4563,7 @@ mod tests {
             unlocked_view(cx, "delete-item", &[login_payload("Delete", "alice")]);
         let item_id = ids[0];
         view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, false, window, locker_cx)
+            locker.open_editor_for_item(item_id, window, locker_cx)
         });
         view.update_in(cx, |locker, window, locker_cx| {
             locker.delete_item(item_id, window, locker_cx)
@@ -4709,73 +4700,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn deleted_id_bookkeeping_supports_multiple_delete_and_restore(cx: &mut TestAppContext) {
-        init(cx);
-        let payloads = [login_payload("One", "one"), login_payload("Two", "two")];
-        let (view, cx, path, ids) = unlocked_view(cx, "deleted-bookkeeping", &payloads);
-        for item_id in ids.iter().copied() {
-            view.update_in(cx, |locker, window, locker_cx| {
-                locker.delete_item(item_id, window, locker_cx)
-            });
-        }
-        assert!(view.read_with(
-            cx,
-            |locker, _| locker.session().unwrap().list.deleted.len() == 2
-        ));
-        let restore_id = ids[0];
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(restore_id, true, window, locker_cx)
-        });
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.save_item(window, locker_cx)
-        });
-        assert!(view.read_with(cx, |locker, _| {
-            let list = &locker.session().unwrap().list;
-            list.deleted.len() == 1
-                && list.deleted[0].item_id == ids[1]
-                && list.items.iter().any(|(id, _)| *id == restore_id)
-        }));
-        cleanup(&path);
-    }
-
-    #[gpui::test]
-    fn restore_mode_is_preserved_through_save(cx: &mut TestAppContext) {
-        init(cx);
-        let (view, cx, path, ids) =
-            unlocked_view(cx, "restore-mode", &[login_payload("Restore", "alice")]);
-        let item_id = ids[0];
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.delete_item(item_id, window, locker_cx)
-        });
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.open_editor_for_item(item_id, true, window, locker_cx)
-        });
-        assert_eq!(
-            view.read_with(cx, |locker, _| locker
-                .session()
-                .unwrap()
-                .item_editor
-                .as_ref()
-                .unwrap()
-                .mode),
-            EditorMode::Restore(item_id)
-        );
-        view.update_in(cx, |locker, window, locker_cx| {
-            locker.save_item(window, locker_cx)
-        });
-        assert!(!view.read_with(cx, |locker, _| {
-            locker
-                .session()
-                .unwrap()
-                .list
-                .deleted
-                .iter()
-                .any(|deleted| deleted.item_id == item_id)
-        }));
-        cleanup(&path);
-    }
-
-    #[gpui::test]
     fn clipboard_timer_clears_only_unchanged_text(cx: &mut TestAppContext) {
         init(cx);
         let path = test_path("clipboard");
@@ -4849,7 +4773,7 @@ mod tests {
         let before_backup_epoch = view.read_with(cx, |locker, _| locker.backup.epoch);
         view.update_in(cx, |locker, window, locker_cx| {
             locker.arm_inactivity_timer(window, locker_cx);
-            locker.open_editor_for_item(ids[0], false, window, locker_cx);
+            locker.open_editor_for_item(ids[0], window, locker_cx);
             locker.conflicts = conflicts::ConflictState::from_initial_load(Ok(vec![(
                 ids[0],
                 vec![(ChangeId::new(), Some(login_payload("Conflict", "alice")))],

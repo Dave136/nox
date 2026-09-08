@@ -206,7 +206,7 @@ impl Nox {
                 session.list.remove(item_id);
                 session.list.selected = None;
                 if let Some(editor) = session.item_editor.as_ref()
-                    && matches!(editor.mode, crate::item_editor::EditorMode::Edit(id) | crate::item_editor::EditorMode::Restore(id) if id == item_id)
+                    && matches!(editor.mode, crate::item_editor::EditorMode::Edit(id) if id == item_id)
                 {
                     session.item_editor = None;
                 }

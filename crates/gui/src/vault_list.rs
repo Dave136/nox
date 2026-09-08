@@ -722,7 +722,6 @@ impl Nox {
     pub(crate) fn open_editor_for_item(
         &mut self,
         item_id: ItemId,
-        restore: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -731,11 +730,7 @@ impl Nox {
         };
         let vault = &session.vault;
         self.editor_blur_subscriptions.clear();
-        let result = if restore {
-            crate::item_editor::ItemEditorState::for_restore(item_id, vault, window, cx)
-        } else {
-            crate::item_editor::ItemEditorState::for_edit(item_id, vault, window, cx)
-        };
+        let result = crate::item_editor::ItemEditorState::for_edit(item_id, vault, window, cx);
         match result {
             Ok(mut editor) => {
                 // A previously fetched/uploaded image for this item, if any, was

@@ -478,7 +478,7 @@ impl Nox {
                     theme.text_secondary,
                     move |_, window, app| {
                         edit_locker.update(app, |locker, cx| {
-                            locker.open_editor_for_item(item_id, false, window, cx)
+                            locker.open_editor_for_item(item_id, window, cx)
                         });
                     },
                 ))

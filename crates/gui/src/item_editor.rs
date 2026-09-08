@@ -42,7 +42,6 @@ impl EditorId {
 pub(crate) enum EditorMode {
     Create,
     Edit(ItemId),
-    Restore(ItemId),
 }
 
 fn sheet_title(mode: EditorMode, item_type: ItemType) -> &'static str {
@@ -51,7 +50,6 @@ fn sheet_title(mode: EditorMode, item_type: ItemType) -> &'static str {
         (EditorMode::Create, ItemType::SecureNote) => "New secure note",
         (EditorMode::Edit(_), ItemType::Login) => "Edit login",
         (EditorMode::Edit(_), ItemType::SecureNote) => "Edit secure note",
-        (EditorMode::Restore(_), _) => "Restore item",
     }
 }
 
@@ -1140,9 +1138,7 @@ impl ItemEditorState {
     pub(crate) fn local_icon_key(&self) -> String {
         match self.mode {
             EditorMode::Create => crate::icons::editor_key(self.id.0),
-            EditorMode::Edit(item_id) | EditorMode::Restore(item_id) => {
-                crate::icons::item_key(item_id)
-            }
+            EditorMode::Edit(item_id) => crate::icons::item_key(item_id),
         }
     }
 
@@ -1190,23 +1186,6 @@ impl ItemEditorState {
         let payload = vault.get_item(item_id)?.ok_or(VaultError::ItemNotFound)?;
         Ok(Self::from_payload(
             EditorMode::Edit(item_id),
-            payload,
-            window,
-            cx,
-        ))
-    }
-
-    pub(crate) fn for_restore(
-        item_id: ItemId,
-        vault: &Vault,
-        window: &mut Window,
-        cx: &mut Context<Nox>,
-    ) -> Result<Self, VaultError> {
-        let payload = vault
-            .last_known_payload(item_id)?
-            .ok_or(VaultError::ItemNotFound)?;
-        Ok(Self::from_payload(
-            EditorMode::Restore(item_id),
             payload,
             window,
             cx,
@@ -2329,8 +2308,7 @@ impl Nox {
                 .vault
                 .create_item(&payload)
                 .map(|item_id| (item_id, false)),
-            (AppState::Unlocked(session), EditorMode::Edit(item_id))
-            | (AppState::Unlocked(session), EditorMode::Restore(item_id)) => session
+            (AppState::Unlocked(session), EditorMode::Edit(item_id)) => session
                 .vault
                 .update_item(item_id, &payload)
                 .map(|()| (item_id, true)),
@@ -2483,7 +2461,7 @@ impl Nox {
             dialog
                 .title("Delete item?")
                 .child(format!(
-                    "Delete \"{title}\"? This item will be moved to Deleted."
+                    "Delete \"{title}\"? This item will be moved to Trash. You can restore it from there."
                 ))
                 .confirm()
                 .on_ok(move |_, window, app| {
@@ -2546,11 +2524,7 @@ impl Nox {
             Some(1)
         };
         let save_error = editor.save_error.clone();
-        let save_label = if matches!(mode, EditorMode::Restore(_)) {
-            "Restore"
-        } else {
-            "Save"
-        };
+        let save_label = "Save";
         let locker_for_generate = locker.clone();
         let locker_for_use = locker.clone();
         let locker_for_type = locker.clone();
@@ -2706,8 +2680,7 @@ impl Nox {
                     move |_, window, app| {
                         locker.update(app, |locker, cx| {
                             if let Some(editor) = locker.item_editor()
-                                && let EditorMode::Edit(item_id) | EditorMode::Restore(item_id) =
-                                    editor.mode
+                                && let EditorMode::Edit(item_id) = editor.mode
                             {
                                 locker.open_delete_confirmation(item_id, window, cx);
                             }
@@ -2755,7 +2728,7 @@ impl Nox {
             );
         if item_type == ItemType::Login {
             let copy_buttons = match mode {
-                EditorMode::Edit(item_id) | EditorMode::Restore(item_id) => div()
+                EditorMode::Edit(item_id) => div()
                     .flex()
                     .gap(px(8.))
                     .child(
@@ -4103,7 +4076,7 @@ impl Nox {
         let save_error = editor.save_error.clone();
         let edit_item_id = match editor.mode {
             EditorMode::Edit(item_id) => Some(item_id),
-            EditorMode::Create | EditorMode::Restore(_) => None,
+            EditorMode::Create => None,
         };
         let workspace_title = if edit_item_id.is_some() {
             "Edit login"

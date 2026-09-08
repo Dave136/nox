@@ -426,7 +426,7 @@ impl Nox {
                     .border_color(theme.border)
                     .on_click(move |_, window, cx| {
                         row_locker.update(cx, |locker, cx| {
-                            locker.open_editor_for_item(item_id, false, window, cx)
+                            locker.open_editor_for_item(item_id, window, cx)
                         });
                     })
                     .child(
