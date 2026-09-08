@@ -1,0 +1,51 @@
+---
+import { LockKeyhole, RefreshCw } from "@lucide/astro";
+---
+
+<div class="relative h-[360px] w-[660px] overflow-hidden max-[1100px]:hidden" role="img" aria-label="Encrypted device-to-device sync">
+  <div class="pointer-events-none absolute top-5 left-9 h-80 w-[560px] rounded-full border border-[#16191d33]"></div>
+  <div class="pointer-events-none absolute top-[55px] left-[132px] h-[250px] w-[370px] rounded-full border border-[#16191d55]"></div>
+
+  <div class="pointer-events-none absolute top-[185px] left-[365px] h-px w-[90px]" data-sync-signal="line" aria-hidden="true">
+    <span class="absolute inset-x-0 top-0 border-t border-dashed border-black/25"></span>
+    <span class="absolute top-1/2 left-1/2 size-9 -translate-x-1/2 -translate-y-1/2 rounded-full border border-acid/60 shadow-[0_0_16px_#c9ff3540]" data-sync-signal="pulse-ring"></span>
+    <span class="absolute top-1/2 left-0 size-0 -translate-y-1/2" data-sync-signal="pulse">
+      <span class="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/55" data-sync-signal="pulse-shadow"></span>
+      <span class="absolute top-1/2 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-acid shadow-[0_0_10px_#c9ff35]"></span>
+    </span>
+    <span class="absolute top-1/2 left-1/2 flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-ink text-acid shadow-[0_0_10px_#c9ff3555]">
+      <LockKeyhole size={10} />
+    </span>
+  </div>
+
+  <div class="absolute top-[85px] left-[35px] h-[210px] w-[330px] overflow-hidden rounded-xl border border-white/16 bg-ink text-light shadow-[0_14px_28px_#16191d22]" data-signature-device="desktop">
+    <div class="flex h-7 items-center gap-[5px] bg-[#20242a] px-2.5"><i class="size-[5px] rounded-full bg-acid"></i><i class="size-[5px] rounded-full bg-[#555d68]"></i><i class="size-[5px] rounded-full bg-[#555d68]"></i></div>
+    <div class="flex h-[182px] gap-2 p-2.5">
+      <span class="h-full w-16 rounded-[5px] bg-[#252a32]"></span>
+      <div class="grid flex-1 gap-[7px]"><i class="rounded-[5px] bg-[#303742]"></i><i class="rounded-[5px] bg-[#303742]"></i><i class="rounded-[5px] bg-[#303742]"></i><i class="rounded-[5px] bg-[#303742]"></i></div>
+    </div>
+  </div>
+
+  <div class="absolute top-[50px] left-[455px] flex h-[260px] w-[148px] flex-col items-center gap-[10px] rounded-[20px] border border-white/16 bg-ink p-2.5 text-light shadow-[0_14px_28px_#16191d22]" data-signature-device="phone">
+    <span class="h-[3px] w-8 rounded-sm bg-[#646d78]"></span>
+    <LockKeyhole class="text-acid" size={22} />
+    <i class="h-7 w-full rounded-[5px] bg-[#313944]"></i><i class="h-7 w-full rounded-[5px] bg-[#252b33]"></i><i class="h-7 w-full rounded-[5px] bg-[#252b33]"></i><i class="h-7 w-full rounded-[5px] bg-[#252b33]"></i>
+  </div>
+
+  <div class="absolute top-[265px] left-[285px] flex h-11 items-center gap-[7px] whitespace-nowrap rounded-[22px] border border-ink bg-paper px-5 font-mono text-[10px] font-bold tracking-[0.6px]" data-sync-badge>
+    <RefreshCw class="shrink-0" size={13} /> E2E SYNC
+  </div>
+</div>
+
+<script>
+  import { animate } from "motion";
+
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    animate('[data-signature-device="desktop"]', { y: [0, -8, 0] }, { duration: 4.2, repeat: Infinity, easing: "ease-in-out" });
+    animate('[data-signature-device="phone"]', { y: [0, 9, 0] }, { duration: 4.2, repeat: Infinity, easing: "ease-in-out" });
+    animate("[data-sync-badge]", { y: [0, -5, 0] }, { duration: 2.4, repeat: Infinity, easing: "ease-in-out" });
+    animate('[data-sync-signal="pulse"]', { x: [0, 90], opacity: [0, 1, 1, 0] }, { duration: 1.8, repeat: Infinity, easing: "ease-in-out" });
+    animate('[data-sync-signal="pulse-shadow"]', { scale: [0.6, 1.8], opacity: [0.5, 0] }, { duration: 1.8, repeat: Infinity, easing: "ease-out" });
+    animate('[data-sync-signal="pulse-ring"]', { scale: [0.6, 1.3], opacity: [0.6, 0] }, { duration: 1.8, repeat: Infinity, easing: "ease-out" });
+  }
+</script>

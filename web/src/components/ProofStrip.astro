@@ -1,0 +1,23 @@
+---
+import { Laptop, ShieldCheck, Wifi } from "@lucide/astro";
+import GithubMark from "./GithubMark.astro";
+
+const proof = [
+  [Laptop, "LOCAL-FIRST", "Your vault starts and stays on your devices."],
+  [ShieldCheck, "E2E ENCRYPTED", "Protected before a byte reaches storage."],
+  [Wifi, "DIRECT SYNC", "Pair devices. Sync without a middleman."],
+  [GithubMark, "OPEN SOURCE", "Built in the open. Auditable by anyone."],
+];
+---
+
+<section class="grid h-auto grid-cols-2 border-y border-line px-5 py-5 min-[801px]:h-[168px] min-[801px]:grid-cols-4 min-[801px]:px-14 min-[801px]:py-0" aria-label="Nox principles">
+  {proof.map(([Icon, title, copy], index) => (
+    <article class="flex items-center gap-3.5 border-r border-line px-2 py-[18px] min-[801px]:px-[22px] min-[801px]:py-0" data-motion data-motion-delay={index * 0.07}>
+      <span class="grid size-[38px] shrink-0 place-items-center rounded-full bg-panel"><Icon size={18} /></span>
+      <div>
+        <b class="block font-mono text-[10px] font-semibold tracking-[0.7px]">{title}</b>
+        <p class="mt-[5px] mb-0 text-xs text-muted">{copy}</p>
+      </div>
+    </article>
+  ))}
+</section>

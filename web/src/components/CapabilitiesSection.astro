@@ -1,0 +1,30 @@
+---
+import { ChevronRight, FileLock, KeyRound, LockKeyhole, ShieldCheck } from "@lucide/astro";
+
+const capabilities = [
+  ["01", KeyRound, "Logins", "Save credentials, icons, and the details you need to get back in."],
+  ["02", LockKeyhole, "Payment cards", "Keep payment details private, organized, and ready when you are."],
+  ["03", FileLock, "Secure notes", "Recovery codes, private keys, and sensitive text with room to breathe."],
+  ["04", ShieldCheck, "Identities", "Store personal details once, without handing them to another service."],
+];
+---
+
+<section class="px-5 py-[72px] min-[801px]:px-14 min-[801px]:py-28">
+  <div class="flex items-center gap-3 font-mono text-[10px] font-semibold tracking-[0.7px] text-muted" data-motion>
+    <i class="h-px w-[34px] bg-current"></i>THE VAULT, EXPANDED
+  </div>
+  <h2 class="mt-5 mb-[70px] text-[45px] leading-[0.93] font-semibold tracking-[-0.07em] min-[801px]:text-[64px]" data-motion>
+    More than passwords.<br /><em class="not-italic text-[#82878d]">Your whole digital life.</em>
+  </h2>
+  {capabilities.map(([number, Icon, title, copy], index) => (
+    <article class="grid min-h-[174px] grid-cols-[34px_46px_1fr] items-center gap-[18px] border-b border-line px-3 py-6 min-[801px]:grid-cols-[84px_56px_1fr_24px]" data-motion data-motion-delay={index * 0.06}>
+      <b class="font-mono text-[10px] font-semibold tracking-[0.7px] text-[#858a90]">{number}</b>
+      <span class="grid size-14 place-items-center rounded-full bg-panel"><Icon size={25} /></span>
+      <div>
+        <h3 class="mt-0 mb-2 text-[23px]">{title}</h3>
+        <p class="m-0 max-w-[530px] text-[15px] leading-[1.5] text-muted">{copy}</p>
+      </div>
+      {/* <ChevronRight class="hidden min-[801px]:block" size={20} /> */}
+    </article>
+  ))}
+</section>

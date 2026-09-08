@@ -1,27 +1,31 @@
 ---
+import CapabilitiesSection from "../components/CapabilitiesSection.astro";
+import HeroSection from "../components/HeroSection.astro";
+import HowItWorksSection from "../components/HowItWorksSection.astro";
+import LocalFirstSection from "../components/LocalFirstSection.astro";
+import OpenSourceSection from "../components/OpenSourceSection.astro";
+import ProductSection from "../components/ProductSection.astro";
+import ProofStrip from "../components/ProofStrip.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import SiteHeader from "../components/SiteHeader.astro";
+import WaitlistSection from "../components/WaitlistSection.astro";
 import Layout from "../layouts/Layout.astro";
-import Nav from "../components/Nav.astro";
-import Hero from "../components/Hero.astro";
-import StatStrip from "../components/StatStrip.astro";
-import ProductShot from "../components/ProductShot.astro";
-import Features from "../components/Features.astro";
-import Security from "../components/Security.astro";
-import FinalCta from "../components/FinalCta.astro";
-import Footer from "../components/Footer.astro";
 ---
 
 <Layout
-  title="Nox — Your passwords never leave."
-  description="Nox is a local-first password vault. Encrypted on your machine, no cloud account, no telemetry, no sync you didn't ask for."
+  title="Nox — Keep your secrets close."
+  description="Nox is an open-source, local-first vault that syncs directly between devices you trust."
 >
-  <Nav />
-  <main>
-    <Hero />
-    <StatStrip />
-    <ProductShot />
-    <Features />
-    <Security />
-    <FinalCta />
+  <SiteHeader />
+  <main id="top">
+    <HeroSection />
+    <ProofStrip />
+    <ProductSection />
+    <CapabilitiesSection />
+    <HowItWorksSection />
+    <LocalFirstSection />
+    <OpenSourceSection />
+    <WaitlistSection />
   </main>
-  <Footer />
+  <SiteFooter />
 </Layout>

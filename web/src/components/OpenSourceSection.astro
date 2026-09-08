@@ -1,0 +1,25 @@
+---
+import GithubMark from "./GithubMark.astro";
+---
+
+<section id="open" class="bg-paper px-5 py-[72px] min-[801px]:px-14 min-[801px]:py-20">
+  <div class="flex min-h-[600px] flex-col justify-between rounded-[22px] border border-line bg-panel p-16" data-motion>
+    <div>
+      <div class="flex items-center gap-3 font-mono text-[10px] font-semibold tracking-[0.7px] text-muted">
+        <i class="h-px w-[34px] bg-current"></i>BUILT IN THE OPEN
+      </div>
+      <h2 class="mt-5 mb-7 text-[45px] leading-[0.93] font-semibold tracking-[-0.07em] min-[801px]:text-[70px]">
+        Private by architecture.<br /><em class="not-italic text-[#82878d]">Open by principle.</em>
+      </h2>
+    </div>
+    <footer class="flex flex-col items-start justify-between gap-8 min-[801px]:flex-row min-[801px]:items-end">
+      <p class="m-0 max-w-[500px] text-[17px] leading-[1.6] text-muted">
+        Nox is open source because trust is not a claim. Inspect the code,
+        understand the model, and make it yours.
+      </p>
+      <a class="inline-flex h-[42px] items-center gap-2 rounded-[22px] bg-ink px-[18px] text-[13px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href="https://github.com">
+        <GithubMark size={16} /> Explore the repository
+      </a>
+    </footer>
+  </div>
+</section>

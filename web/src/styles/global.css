@@ -2,57 +2,38 @@
 
 @theme {
   --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
-
-  --color-bg: #1a1d22;
-  --color-surface: #1e2126;
-  --color-border: #2b3039;
-  --color-border-subtle: #252a31;
-  --color-border-strong: #353c47;
-  --color-ink: #e5e8f0;
-  --color-ink-soft: #aeb7c5;
-  --color-ink-faint: #7f8998;
-  --color-ink-mute: #626b78;
-  --color-ink-value: #d9dee7;
-  --color-accent: #e3e6ed;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --color-paper: #f5f4ef;
+  --color-ink: #16191d;
+  --color-muted: #6e747c;
+  --color-line: #d8d7d1;
+  --color-panel: #ecebe5;
+  --color-light: #f4f4f1;
+  --color-dark-panel: #22272e;
+  --color-acid: #c9ff35;
 }
 
 @layer base {
+  * {
+    box-sizing: border-box;
+  }
+
   html {
-    background: var(--color-bg);
-    color-scheme: dark;
     scroll-behavior: smooth;
+    background: var(--color-paper);
+    font-family: var(--font-sans);
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   body {
-    font-family: var(--font-sans);
+    margin: 0;
+    color: var(--color-ink);
   }
 
-  ::selection {
-    background: var(--color-accent);
-    color: var(--color-bg);
-  }
-}
-
-@layer utilities {
-  [data-reveal] {
-    opacity: 0;
-    transform: translateY(18px);
-    transition:
-      opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
-      transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  [data-reveal].is-visible {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    [data-reveal] {
-      opacity: 1;
-      transform: none;
-      transition: none;
-    }
+  a {
+    color: inherit;
+    text-decoration: none;
   }
 }
