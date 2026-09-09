@@ -1,8 +1,10 @@
 name: CI
 
 on:
-  push:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -19,8 +21,8 @@ env:
   CARGO_AUDIT_VERSION: "0.22.2"
 
 jobs:
-  release-gate:
-    name: Release gate (${{ matrix.platform }})
+  app-ci:
+    name: App CI (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
@@ -71,11 +73,11 @@ jobs:
         shell: bash
         run: cargo fetch --locked
 
-      - name: Formatting gate
+      - name: Formatting
         shell: bash
         run: cargo fmt --check
 
-      - name: Clippy gate
+      - name: Clippy
         shell: bash
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -90,12 +92,12 @@ jobs:
       # the Linux job already covers. nox-core and sync — including the
       # file-permission tests, which are the platform-sensitive ones — still run
       # here. Drop the exclusion once gpui-component fixes that guard.
-      - name: Test gate
+      - name: Test
         if: runner.os != 'macOS'
         shell: bash
         run: cargo test --workspace --all-features
 
-      - name: Test gate (macOS — gui excluded, see note above)
+      - name: Test (macOS — gui excluded, see note above)
         if: runner.os == 'macOS'
         shell: bash
         run: cargo test --workspace --all-features --exclude gui
