@@ -5,7 +5,11 @@
 
 use crate::app::Nox;
 use crate::clipboard::CopyField;
-use crate::theme::Theme;
+use crate::item_editor::{
+    NotePreviewBlockKind, NotePreviewSpan, NotePreviewSpanStyle,
+    secure_note_markdown_preview_blocks,
+};
+use crate::theme::{APP_FONT_FAMILY, Theme};
 use crate::vault_list;
 use gpui::{
     AnyElement, App, ClickEvent, Context, FontWeight, Hsla, SharedString, Window, div, prelude::*,
@@ -15,7 +19,7 @@ use gpui_component::{
     Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
 };
-use nox_core::{ItemType, NoteColor};
+use nox_core::{ItemId, ItemType, NoteColor};
 
 impl Nox {
     pub(crate) fn render_item_detail(
@@ -347,58 +351,12 @@ impl Nox {
         }
 
         if payload.item_type == ItemType::SecureNote {
-            body = body.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(field_label(theme, "NOTE CONTENT"))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .h(px(22.))
-                                    .px(px(7.))
-                                    .rounded(px(5.))
-                                    .bg(theme.success_wash)
-                                    .child(
-                                        gpui_component::Icon::empty()
-                                            .path("icons/lock-keyhole.svg")
-                                            .size(px(10.))
-                                            .text_color(theme.success),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(8.))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme.success)
-                                            .child("ENCRYPTED"),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .min_h(px(112.))
-                            .p(px(14.))
-                            .rounded(px(8.))
-                            .bg(theme.field)
-                            .border_1()
-                            .border_color(theme.border)
-                            .text_size(px(12.))
-                            .text_color(theme.text_soft)
-                            .child(if payload.notes.is_empty() {
-                                "No note contents".to_owned()
-                            } else {
-                                payload.notes.clone()
-                            }),
-                    ),
-            );
+            body = body.child(self.render_secure_note_detail_content(
+                item_id,
+                &payload.notes,
+                theme,
+                locker.clone(),
+            ));
         } else if !payload.notes.is_empty() {
             body = body.child(
                 div()
@@ -508,6 +466,268 @@ impl Nox {
         );
 
         card(body.into_any_element()).into_any_element()
+    }
+
+    fn render_secure_note_detail_content(
+        &self,
+        item_id: ItemId,
+        notes: &str,
+        theme: Theme,
+        locker: gpui::Entity<Self>,
+    ) -> AnyElement {
+        let preview_spans = |spans: Vec<NotePreviewSpan>, text_color, text_size| {
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(0.))
+                .children(spans.into_iter().map(move |span| {
+                    div()
+                        .text_size(text_size)
+                        .text_color(text_color)
+                        .font_family(APP_FONT_FAMILY)
+                        .when(span.style == NotePreviewSpanStyle::Bold, |span| {
+                            span.font_weight(FontWeight::BOLD)
+                        })
+                        .when(span.style == NotePreviewSpanStyle::Italic, |span| {
+                            span.italic()
+                        })
+                        .when(span.style == NotePreviewSpanStyle::Code, |span| {
+                            span.px(px(4.))
+                                .rounded(px(4.))
+                                .bg(theme.inset)
+                                .text_color(theme.text_secondary)
+                        })
+                        .child(span.text)
+                }))
+                .into_any_element()
+        };
+
+        let preview_blocks = secure_note_markdown_preview_blocks(notes)
+            .into_iter()
+            .enumerate()
+            .map(|(index, block)| {
+                let block_id = SharedString::from(format!("secure-note-markdown-preview-block-{index}"));
+                match block.kind {
+                    NotePreviewBlockKind::CopyBlock => {
+                        let copy_text = block.copy_text.clone().unwrap_or_default();
+                        let label = block.label.clone();
+                        let locked = block.locked;
+                        let revealed = self.detail_revealed_copy_blocks.contains(&(item_id, index));
+                        let copy_locker = locker.clone();
+                        let reveal_locker = locker.clone();
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .when_some(label.clone(), |container, label| {
+                                container.child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme.text_soft)
+                                        .child(label),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id(block_id)
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(10.))
+                                    .p(px(12.))
+                                    .rounded(px(8.))
+                                    .bg(theme.inset)
+                                    .border_1()
+                                    .border_color(theme.field_border)
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(8.))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w(px(0.))
+                                                    .text_size(px(11.))
+                                                    .text_color(theme.text_subtle)
+                                                    .child(if locked && !revealed {
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .text_color(theme.text_secondary)
+                                                            .child("••••••••••••••••")
+                                                            .into_any_element()
+                                                    } else {
+                                                        preview_spans(block.spans, theme.text_subtle, px(11.))
+                                                    }),
+                                            )
+                                            .when(locked, |row| {
+                                                row.child(
+                                                    Button::new(SharedString::from(format!(
+                                                        "secure-note-copy-block-reveal-{index}"
+                                                    )))
+                                                    .ghost()
+                                                    .size(px(26.))
+                                                    .rounded(px(6.))
+                                                    .tooltip(if revealed { "Hide" } else { "Reveal" })
+                                                    .on_click(move |_, _window, app| {
+                                                        reveal_locker.update(app, |locker, cx| {
+                                                            locker.toggle_detail_secure_note_copy_block_reveal(
+                                                                item_id, index, cx,
+                                                            );
+                                                        });
+                                                    })
+                                                    .child(
+                                                        Icon::empty()
+                                                            .path(if revealed {
+                                                                "icons/scan-eye.svg"
+                                                            } else {
+                                                                "icons/eye-off.svg"
+                                                            })
+                                                            .size(px(14.))
+                                                            .text_color(theme.icon_muted),
+                                                    ),
+                                                )
+                                            })
+                                            .child(
+                                                Button::new(SharedString::from(format!(
+                                                    "secure-note-copy-block-copy-{index}"
+                                                )))
+                                                .ghost()
+                                                .h(px(26.))
+                                                .px(px(8.))
+                                                .rounded(px(6.))
+                                                .tooltip("Copy block")
+                                                .on_click(move |_, window, app| {
+                                                    let copy_text = copy_text.clone();
+                                                    copy_locker.update(app, |locker, cx| {
+                                                        locker.copy_secure_note_block(copy_text, window, cx);
+                                                    });
+                                                })
+                                                .child(
+                                                    Icon::empty()
+                                                        .path("icons/copy.svg")
+                                                        .size(px(12.))
+                                                        .text_color(theme.text_secondary),
+                                                ),
+                                            ),
+                                    ),
+                            )
+                            .into_any_element()
+                    }
+                    NotePreviewBlockKind::Heading => div()
+                        .id(block_id)
+                        .text_size(px(18.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(preview_spans(block.spans, theme.text, px(18.)))
+                        .into_any_element(),
+                    NotePreviewBlockKind::ListItem => div()
+                        .id(block_id)
+                        .flex()
+                        .gap(px(8.))
+                        .text_size(px(11.))
+                        .text_color(theme.text_soft)
+                        .child(
+                            div()
+                                .mt(px(7.))
+                                .size(px(4.))
+                                .rounded_full()
+                                .bg(theme.text_secondary),
+                        )
+                        .child(preview_spans(block.spans, theme.text_soft, px(11.)))
+                        .into_any_element(),
+                    NotePreviewBlockKind::Code => div()
+                        .id(block_id)
+                        .p(px(10.))
+                        .rounded(px(7.))
+                        .bg(theme.inset)
+                        .border_1()
+                        .border_color(theme.field_border)
+                        .text_size(px(10.))
+                        .text_color(theme.text_secondary)
+                        .child(preview_spans(block.spans, theme.text_secondary, px(10.)))
+                        .into_any_element(),
+                    NotePreviewBlockKind::Paragraph => div()
+                        .id(block_id)
+                        .text_size(px(11.))
+                        .line_height(px(18.))
+                        .text_color(theme.text_subtle)
+                        .child(preview_spans(block.spans, theme.text_subtle, px(11.)))
+                        .into_any_element(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(field_label(theme, "NOTE CONTENT"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .h(px(22.))
+                            .px(px(7.))
+                            .rounded(px(5.))
+                            .bg(theme.success_wash)
+                            .child(
+                                Icon::empty()
+                                    .path("icons/lock-keyhole.svg")
+                                    .size(px(10.))
+                                    .text_color(theme.success),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(8.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.success)
+                                    .child("ENCRYPTED"),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .min_h(px(112.))
+                    .p(px(14.))
+                    .rounded(px(8.))
+                    .bg(theme.field)
+                    .border_1()
+                    .border_color(theme.border)
+                    .text_size(px(12.))
+                    .text_color(theme.text_soft)
+                    .when(notes.is_empty(), |content| {
+                        content.child("No note contents")
+                    })
+                    .when(!notes.is_empty(), |content| {
+                        content
+                            .flex()
+                            .flex_col()
+                            .gap(px(12.))
+                            .children(preview_blocks)
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn toggle_detail_secure_note_copy_block_reveal(
+        &mut self,
+        item_id: ItemId,
+        block_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (item_id, block_index);
+        if !self.detail_revealed_copy_blocks.insert(key) {
+            self.detail_revealed_copy_blocks.remove(&key);
+        }
+        cx.notify();
     }
 }
 
@@ -801,5 +1021,24 @@ mod tests {
         let source = include_str!("detail.rs");
         assert!(source.contains("Button::new(\"copy-note-contents\")"));
         assert!(source.contains("locker.copy_note(item_id, window, cx)"));
+    }
+
+    #[test]
+    fn secure_note_detail_renders_markdown_preview_blocks() {
+        let source = include_str!("detail.rs");
+        let secure_note_start = source
+            .find("if payload.item_type == ItemType::SecureNote")
+            .expect("secure note branch");
+        let secure_note_branch = &source[secure_note_start
+            ..source[secure_note_start..]
+                .find("} else if !payload.notes.is_empty()")
+                .expect("secure note branch end")
+                + secure_note_start];
+
+        assert!(secure_note_branch.contains("render_secure_note_detail_content"));
+        assert!(source.contains("secure_note_markdown_preview_blocks(notes)"));
+        assert!(source.contains("NotePreviewBlockKind::CopyBlock"));
+        assert!(source.contains("secure-note-copy-block-copy-{index}"));
+        assert!(!secure_note_branch.contains(".child(payload.notes.clone())"));
     }
 }

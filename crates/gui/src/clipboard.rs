@@ -104,6 +104,7 @@ impl Nox {
         else {
             return;
         };
+        let value = secure_note_clipboard_contents(&value);
         self.copy_secret(SecretBytes::new(value.as_bytes()), window, cx);
         self.show_copy_feedback(item_id, CopyField::Note, window, cx);
     }
@@ -209,5 +210,38 @@ impl Nox {
 
     pub(crate) fn discard_clipboard_state(&mut self, cx: &mut Context<Self>) {
         self.clear_clipboard_if_unchanged(cx);
+    }
+}
+
+fn secure_note_clipboard_contents(value: &str) -> String {
+    let mut output = Vec::new();
+    let mut in_copy_block = false;
+
+    for line in value.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(":::copy") {
+            in_copy_block = true;
+            continue;
+        }
+        if in_copy_block && trimmed == ":::" {
+            in_copy_block = false;
+            continue;
+        }
+        output.push(line);
+    }
+
+    output.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn copied_secure_note_contents_omit_copy_block_fences() {
+        let source = "Here the keys!\n\n:::copy\nKALS-ASCA\n:::\n\n:::copy-locked\nZMCL1-ASMC\n:::";
+
+        assert_eq!(
+            super::secure_note_clipboard_contents(source),
+            "Here the keys!\n\nKALS-ASCA\n\nZMCL1-ASMC"
+        );
     }
 }

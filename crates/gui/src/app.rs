@@ -27,7 +27,7 @@ use gpui_rsx::rsx;
 use nox_core::{SecretBytes, Vault, VaultError};
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -580,6 +580,8 @@ pub struct Nox {
     /// Hover state per animated button id. Keyed by `String` rather than
     /// `&'static str` so per-row buttons (the Trash list) can take part too.
     pub(crate) auth_hovered: HashMap<String, bool>,
+    /// Revealed locked copy blocks in the read-only secure note detail panel.
+    pub(crate) detail_revealed_copy_blocks: BTreeSet<(nox_core::ItemId, usize)>,
     /// Subscriptions for the website-blur listener on the current editor.
     pub(crate) editor_blur_subscriptions: Vec<Subscription>,
     /// Locally cached favicon/upload selections, keyed by item key (or, for
@@ -712,6 +714,7 @@ impl Nox {
             remove_vault_confirm_focus: cx.focus_handle().tab_stop(true),
             remove_vault_prior_focus: None,
             auth_hovered: HashMap::new(),
+            detail_revealed_copy_blocks: BTreeSet::new(),
             editor_blur_subscriptions: Vec::new(),
             local_icon_selections,
         };

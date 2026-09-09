@@ -108,7 +108,7 @@ struct NoteMarkdownEdit {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NotePreviewBlockKind {
+pub(crate) enum NotePreviewBlockKind {
     Heading,
     ListItem,
     Code,
@@ -117,16 +117,16 @@ enum NotePreviewBlockKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct NotePreviewBlock {
-    kind: NotePreviewBlockKind,
-    spans: Vec<NotePreviewSpan>,
-    label: Option<String>,
-    locked: bool,
-    copy_text: Option<String>,
+pub(crate) struct NotePreviewBlock {
+    pub(crate) kind: NotePreviewBlockKind,
+    pub(crate) spans: Vec<NotePreviewSpan>,
+    pub(crate) label: Option<String>,
+    pub(crate) locked: bool,
+    pub(crate) copy_text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NotePreviewSpanStyle {
+pub(crate) enum NotePreviewSpanStyle {
     Plain,
     Bold,
     Italic,
@@ -134,9 +134,9 @@ enum NotePreviewSpanStyle {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct NotePreviewSpan {
-    style: NotePreviewSpanStyle,
-    text: String,
+pub(crate) struct NotePreviewSpan {
+    pub(crate) style: NotePreviewSpanStyle,
+    pub(crate) text: String,
 }
 
 #[cfg(test)]
@@ -161,7 +161,7 @@ fn secure_note_has_markdown(value: &str) -> bool {
         || (value.contains('[') && value.contains("]("))
 }
 
-fn secure_note_markdown_preview_blocks(value: &str) -> Vec<NotePreviewBlock> {
+pub(crate) fn secure_note_markdown_preview_blocks(value: &str) -> Vec<NotePreviewBlock> {
     let mut blocks = Vec::new();
     let mut lines = value.lines().peekable();
     while let Some(line) = lines.next() {
