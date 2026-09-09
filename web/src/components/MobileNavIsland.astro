@@ -92,9 +92,11 @@ const items = [
   const wordmark = document.querySelector<HTMLElement>("[data-island-wordmark]");
   const openIcon = document.querySelector<HTMLElement>('[data-island-icon="open"]');
   const closeIcon = document.querySelector<HTMLElement>('[data-island-icon="close"]');
+  const chip = document.querySelector<HTMLElement>("[data-island-chip]");
+  const chipLabel = document.querySelector<HTMLElement>("[data-island-chip-label]");
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
 
-  if (island && header && shell && toggle && menu && wordmark && openIcon && closeIcon) {
+  if (island && header && shell && toggle && menu && wordmark && openIcon && closeIcon && chip && chipLabel) {
     let stuck = false;
     let open = false;
     let busy = false;
@@ -149,6 +151,37 @@ const items = [
     };
 
     toggle.addEventListener("click", () => void setOpen(!open));
+
+    let chipTimer = 0;
+
+    const showChip = (label: string) => {
+      clearTimeout(chipTimer);
+      chipLabel.textContent = label;
+      chip.classList.remove("hidden");
+      chip.classList.add("flex");
+      chipTimer = window.setTimeout(() => {
+        chip.classList.add("hidden");
+        chip.classList.remove("flex");
+      }, 1800);
+    };
+
+    menu.querySelectorAll<HTMLAnchorElement>("[data-island-link]").forEach((link) => {
+      link.addEventListener("click", () => {
+        showChip(link.textContent?.trim() ?? "");
+        void setOpen(false);
+      });
+    });
+
+    addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && open) {
+        void setOpen(false);
+        toggle.focus();
+      }
+    });
+
+    addEventListener("pointerdown", (event) => {
+      if (open && !island.contains(event.target as Node)) void setOpen(false);
+    });
 
     addEventListener("scroll", () => setStuck(scrollY > ISLAND.scrollThreshold), { passive: true });
   }
