@@ -102,3 +102,19 @@ test("mobile nav island replaces the details dropdown", async () => {
     assert.ok(island.includes(`"${href}"`), `island links to ${href}`);
   }
 });
+
+test("a back-to-top control appears once the page is scrolled", async () => {
+  const [page, backToTop] = await Promise.all([
+    read("src/pages/index.astro"),
+    read("src/components/BackToTop.astro"),
+  ]);
+
+  assert.match(page, /import BackToTop from/);
+  assert.match(page, /<BackToTop \/>/);
+  assert.match(backToTop, /from "motion"/);
+  assert.match(backToTop, /prefers-reduced-motion/);
+  assert.match(backToTop, /data-back-to-top/);
+  assert.match(backToTop, /fixed/);
+  assert.match(backToTop, /scrollTo/);
+  assert.match(backToTop, /aria-label/);
+});

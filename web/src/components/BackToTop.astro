@@ -1,0 +1,42 @@
+---
+import { ArrowUp } from "@lucide/astro";
+---
+
+<button
+  class="pointer-events-none fixed right-5 bottom-5 z-50 grid size-11 place-items-center rounded-full border border-white/15 bg-[#171a1f] text-[#f1f3f6] opacity-0 shadow-[0_12px_28px_#00000038] transition-colors hover:bg-[#262b32]"
+  type="button"
+  aria-label="Back to top"
+  data-back-to-top
+  inert
+>
+  <ArrowUp size={18} aria-hidden="true" />
+</button>
+
+<script>
+  import { animate } from "motion";
+  import { ISLAND } from "../lib/island-motion.ts";
+
+  const button = document.querySelector<HTMLButtonElement>("[data-back-to-top]");
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+
+  if (button) {
+    let shown = false;
+
+    const setShown = (next: boolean) => {
+      if (next === shown) return;
+      shown = next;
+
+      button.classList.toggle("pointer-events-none", !next);
+      button.toggleAttribute("inert", !next);
+
+      const duration = reduced.matches ? 0 : ISLAND.revealDuration;
+      animate(button, { opacity: next ? 1 : 0, y: next ? 0 : 12 }, { duration, ease: "easeOut" });
+    };
+
+    button.addEventListener("click", () => {
+      scrollTo({ top: 0, behavior: reduced.matches ? "auto" : "smooth" });
+    });
+
+    addEventListener("scroll", () => setShown(scrollY > innerHeight), { passive: true });
+  }
+</script>
