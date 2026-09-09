@@ -85,6 +85,10 @@ test("mobile nav island replaces the details dropdown", async () => {
   assert.match(island, /min-\[801px\]:hidden/);
   assert.match(island, /#171a1f/);
   assert.match(island, /aria-expanded/);
+  assert.match(island, /openSequence/);
+  assert.match(island, /closeSequence/);
+  assert.match(island, /data-island-open/);
+  assert.match(island, /scrollHeight/);
 
   for (const href of ["#product", "#security", "#how", "#open", "#waitlist"]) {
     assert.ok(island.includes(`"${href}"`), `island links to ${href}`);

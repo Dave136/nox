@@ -82,25 +82,73 @@ const items = [
 
 <script>
   import { animate } from "motion";
-  import { ISLAND } from "../lib/island-motion.ts";
+  import { ISLAND, closeSequence, expandedWidthFor, openSequence } from "../lib/island-motion.ts";
 
   const island = document.querySelector<HTMLElement>("[data-island]");
   const header = document.querySelector<HTMLElement>("[data-site-header]");
+  const shell = document.querySelector<HTMLElement>("[data-island-shell]");
+  const toggle = document.querySelector<HTMLButtonElement>("[data-island-toggle]");
+  const menu = document.querySelector<HTMLElement>("[data-island-menu]");
+  const wordmark = document.querySelector<HTMLElement>("[data-island-wordmark]");
+  const openIcon = document.querySelector<HTMLElement>('[data-island-icon="open"]');
+  const closeIcon = document.querySelector<HTMLElement>('[data-island-icon="close"]');
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
 
-  if (island && header) {
+  if (island && header && shell && toggle && menu && wordmark && openIcon && closeIcon) {
     let stuck = false;
+    let open = false;
+    let busy = false;
+
+    const run = async (steps: { keyframes: Record<string, string>; duration: number }[]) => {
+      for (const step of steps) {
+        const duration = reduced.matches ? 0 : step.duration;
+        await animate(shell, step.keyframes, { duration, ease: "easeInOut" }).finished;
+      }
+    };
+
+    const setOpen = async (next: boolean) => {
+      if (busy || next === open) return;
+      busy = true;
+      open = next;
+
+      island.toggleAttribute("data-island-open", next);
+      toggle.setAttribute("aria-expanded", String(next));
+      toggle.setAttribute("aria-label", next ? "Close menu" : "Open menu");
+      openIcon.classList.toggle("hidden", next);
+      closeIcon.classList.toggle("hidden", !next);
+      wordmark.classList.toggle("hidden", !next);
+
+      if (next) {
+        menu.removeAttribute("inert");
+        const width = expandedWidthFor(innerWidth);
+        // Measure at the final width: at 128px the labels wrap and overstate the height.
+        shell.style.width = `${width}px`;
+        const height = shell.scrollHeight;
+        shell.style.width = `${ISLAND.compactWidth}px`;
+        await run(openSequence(width, height));
+        await animate(menu, { opacity: 1 }, { duration: reduced.matches ? 0 : 0.15 }).finished;
+      } else {
+        menu.setAttribute("inert", "");
+        await animate(menu, { opacity: 0 }, { duration: reduced.matches ? 0 : 0.12 }).finished;
+        await run(closeSequence());
+      }
+
+      busy = false;
+    };
 
     const setStuck = (next: boolean) => {
       if (next === stuck) return;
       stuck = next;
 
+      if (!next && open) void setOpen(false);
       island.toggleAttribute("inert", !next);
 
       const duration = reduced.matches ? 0 : ISLAND.revealDuration;
       animate(island, { opacity: next ? 1 : 0, y: next ? 0 : -12 }, { duration, ease: "easeOut" });
       animate(header, { opacity: next ? 0 : 1 }, { duration, ease: "easeOut" });
     };
+
+    toggle.addEventListener("click", () => void setOpen(!open));
 
     addEventListener("scroll", () => setStuck(scrollY > ISLAND.scrollThreshold), { passive: true });
   }
