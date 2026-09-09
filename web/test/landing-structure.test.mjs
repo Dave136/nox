@@ -73,6 +73,8 @@ test("mobile nav island replaces the details dropdown", async () => {
   assert.match(header, /import MobileNavIsland from/);
   assert.match(header, /<MobileNavIsland \/>/);
   assert.match(header, /data-site-header/);
+  assert.match(header, /data-header-menu/);
+  assert.match(island, /data-header-menu/);
   assert.doesNotMatch(header, /<details/);
   assert.doesNotMatch(header, /data-mobile-nav/);
 

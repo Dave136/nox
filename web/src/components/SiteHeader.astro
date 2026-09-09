@@ -1,5 +1,5 @@
 ---
-import { ArrowUpRight } from "@lucide/astro";
+import { ArrowUpRight, Menu } from "@lucide/astro";
 import DeviceSyncSignature from "./DeviceSyncSignature.astro";
 import GithubMark from "./GithubMark.astro";
 import MobileNavIsland from "./MobileNavIsland.astro";
@@ -29,6 +29,14 @@ import MobileNavIsland from "./MobileNavIsland.astro";
       Join waitlist <ArrowUpRight size={15} />
     </a>
 
+    <button
+      class="grid size-11 shrink-0 place-items-center rounded-lg text-ink transition-colors hover:bg-panel min-[801px]:hidden"
+      type="button"
+      aria-label="Open menu"
+      data-header-menu
+    >
+      <Menu size={20} aria-hidden="true" />
+    </button>
   </div>
 </header>
 
