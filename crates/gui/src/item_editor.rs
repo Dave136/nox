@@ -139,6 +139,7 @@ struct NotePreviewSpan {
     text: String,
 }
 
+#[cfg(test)]
 impl NotePreviewBlock {
     fn text(&self) -> String {
         self.spans.iter().map(|span| span.text.as_str()).collect()
