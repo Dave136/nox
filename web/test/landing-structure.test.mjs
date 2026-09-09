@@ -63,3 +63,30 @@ test("landing composes Tailwind Astro sections with Motion and global Geist", as
   assert.match(localFirst, /rotate\(360deg\)/);
   assert.match(localFirst, /@keyframes device-orbit/);
 });
+
+test("mobile nav island replaces the details dropdown", async () => {
+  const [header, island] = await Promise.all([
+    read("src/components/SiteHeader.astro"),
+    read("src/components/MobileNavIsland.astro"),
+  ]);
+
+  assert.match(header, /import MobileNavIsland from/);
+  assert.match(header, /<MobileNavIsland \/>/);
+  assert.match(header, /data-site-header/);
+  assert.doesNotMatch(header, /<details/);
+  assert.doesNotMatch(header, /data-mobile-nav/);
+
+  assert.match(island, /from "motion"/);
+  assert.match(island, /island-motion/);
+  assert.match(island, /prefers-reduced-motion/);
+  assert.match(island, /data-island-shell/);
+  assert.match(island, /data-island-toggle/);
+  assert.match(island, /data-island-menu/);
+  assert.match(island, /min-\[801px\]:hidden/);
+  assert.match(island, /#171a1f/);
+  assert.match(island, /aria-expanded/);
+
+  for (const href of ["#product", "#security", "#how", "#open", "#waitlist"]) {
+    assert.ok(island.includes(`"${href}"`), `island links to ${href}`);
+  }
+});

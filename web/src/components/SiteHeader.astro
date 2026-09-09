@@ -2,9 +2,10 @@
 import { ArrowUpRight } from "@lucide/astro";
 import DeviceSyncSignature from "./DeviceSyncSignature.astro";
 import GithubMark from "./GithubMark.astro";
+import MobileNavIsland from "./MobileNavIsland.astro";
 ---
 
-<header class="flex h-20 items-center justify-between border-b border-line px-5 min-[801px]:px-14">
+<header class="sticky top-0 z-50 flex h-20 items-center justify-between border-b border-line bg-paper/75 px-5 backdrop-blur-md min-[801px]:px-14" data-site-header>
   <a class="flex items-center gap-2.5" href="#top" aria-label="Nox home">
     <span class="grid size-[30px] place-items-center rounded-lg bg-ink">
       <img class="w-5 invert" src="/nox-logo.svg" alt="" />
@@ -20,12 +21,15 @@ import GithubMark from "./GithubMark.astro";
     <a class="transition-colors hover:text-ink focus-visible:text-ink" href="#open">Open source</a>
   </nav>
 
-  <div class="flex items-center gap-7">
+  <div class="flex items-center gap-3 min-[801px]:gap-7">
     <a class="hidden items-center gap-[7px] text-[13px] text-muted transition-colors hover:text-ink focus-visible:text-ink min-[801px]:flex" href="https://github.com">
       <GithubMark size={15} /> GitHub
     </a>
-    <a class="inline-flex h-[42px] items-center gap-2 rounded-[22px] bg-ink px-[18px] text-[13px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href="#waitlist">
+    <a class="hidden md:inline-flex h-[42px] items-center gap-2 rounded-[22px] bg-ink px-[18px] text-[13px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href="#waitlist">
       Join waitlist <ArrowUpRight size={15} />
     </a>
+
   </div>
 </header>
+
+<MobileNavIsland />

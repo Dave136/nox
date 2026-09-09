@@ -1,0 +1,107 @@
+---
+import { ArrowUpRight, Check, Grid2x2, Menu, Route, ShieldCheck, X } from "@lucide/astro";
+import GithubMark from "./GithubMark.astro";
+
+const items = [
+  { href: "#product", label: "Product", Icon: Grid2x2 },
+  { href: "#security", label: "Security", Icon: ShieldCheck },
+  { href: "#how", label: "How it works", Icon: Route },
+  { href: "#open", label: "Open source", Icon: GithubMark },
+];
+---
+
+<div
+  class="pointer-events-none fixed inset-x-0 top-[18px] z-[60] flex justify-center px-5 opacity-0 min-[801px]:hidden"
+  data-island
+  inert
+>
+  <div
+    class="pointer-events-auto h-[52px] w-[128px] overflow-hidden rounded-[26px] border border-white/15 bg-[#171a1f] shadow-[0_12px_28px_#00000038]"
+    data-island-shell
+  >
+    <div class="flex h-[52px] shrink-0 items-center justify-between px-[7px]" data-island-bar>
+      <a class="flex items-center gap-[9px] pl-[7px]" href="#top" aria-label="Nox home">
+        <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-white/10">
+          <img class="w-[22px] invert" src="/nox-logo.svg" alt="" />
+        </span>
+        <span
+          class="hidden text-[18px] leading-none font-[650] text-[#f2f3f5]"
+          data-island-wordmark
+        >nox</span>
+      </a>
+
+      <span class="hidden items-center gap-2 rounded-[19px] bg-[#262b32] px-3 py-[7px]" data-island-chip>
+        <span class="grid size-5 shrink-0 place-items-center rounded-full bg-[#c8ff3d]">
+          <Check size={11} strokeWidth={2} class="text-[#171a1f]" aria-hidden="true" />
+        </span>
+        <span class="text-[11px] leading-none font-semibold text-[#e8ebef]" data-island-chip-label></span>
+      </span>
+
+      <button
+        class="grid size-[38px] shrink-0 place-items-center rounded-full bg-[#262b32] text-[#f1f3f6] transition-colors hover:bg-[#292f37]"
+        type="button"
+        aria-expanded="false"
+        aria-controls="island-menu"
+        aria-label="Open menu"
+        data-island-toggle
+      >
+        <Menu size={17} class="block" data-island-icon="open" aria-hidden="true" />
+        <X size={17} class="hidden" data-island-icon="close" aria-hidden="true" />
+      </button>
+    </div>
+
+    <nav
+      class="flex flex-col gap-0.5 px-3 pt-2.5 pb-2.5 opacity-0"
+      id="island-menu"
+      aria-label="Primary navigation"
+      data-island-menu
+      inert
+    >
+      {
+        items.map(({ href, label, Icon }) => (
+          <a
+            class="flex h-[50px] items-center gap-3 rounded-xl px-3 text-[14px] font-[550] text-[#e8ebef] transition-colors hover:bg-white/6"
+            href={href}
+            data-island-link
+          >
+            <Icon size={17} class="shrink-0 text-[#aab2bd]" aria-hidden="true" />
+            {label}
+          </a>
+        ))
+      }
+      <a
+        class="mt-2 flex h-[52px] items-center justify-between rounded-[14px] bg-[#c8ff3d] px-4 text-[13px] font-[650] text-[#171a1f]"
+        href="#waitlist"
+        data-island-link
+      >
+        Join the waitlist <ArrowUpRight size={15} strokeWidth={2} aria-hidden="true" />
+      </a>
+    </nav>
+  </div>
+</div>
+
+<script>
+  import { animate } from "motion";
+  import { ISLAND } from "../lib/island-motion.ts";
+
+  const island = document.querySelector<HTMLElement>("[data-island]");
+  const header = document.querySelector<HTMLElement>("[data-site-header]");
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+
+  if (island && header) {
+    let stuck = false;
+
+    const setStuck = (next: boolean) => {
+      if (next === stuck) return;
+      stuck = next;
+
+      island.toggleAttribute("inert", !next);
+
+      const duration = reduced.matches ? 0 : ISLAND.revealDuration;
+      animate(island, { opacity: next ? 1 : 0, y: next ? 0 : -12 }, { duration, ease: "easeOut" });
+      animate(header, { opacity: next ? 0 : 1 }, { duration, ease: "easeOut" });
+    };
+
+    addEventListener("scroll", () => setStuck(scrollY > ISLAND.scrollThreshold), { passive: true });
+  }
+</script>
