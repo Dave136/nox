@@ -1,5 +1,5 @@
 ---
-import { Mail } from "@lucide/astro";
+import { Download } from "@lucide/astro";
 import GithubMark from "./GithubMark.astro";
 ---
 
@@ -11,22 +11,15 @@ import GithubMark from "./GithubMark.astro";
     Keep your secrets<br /><em class="not-italic text-[#82878d]">close.</em>
   </h2>
   <p class="m-0 max-w-[640px] text-[17px] leading-[1.6] text-[#aeb5bf]" data-motion>
-    Nox is in preview for macOS and Linux. Leave your email to get the download
-    link the day it ships — one email, nothing else.
+    Nox is in preview for macOS and Linux. Open source, local-first, and built
+    for every device you trust.
   </p>
-  <form class="flex w-full max-w-[570px] flex-col items-stretch justify-between gap-3.5 rounded-[18px] border border-white/17 bg-dark-panel p-3.5 text-left min-[801px]:flex-row min-[801px]:items-center min-[801px]:rounded-[31px] min-[801px]:py-[7px] min-[801px]:pr-[7px] min-[801px]:pl-[22px]" data-motion>
-    <label class="flex flex-col text-[10px] text-[#7f8996]">
-      Email address
-      <input class="border-0 bg-transparent text-sm text-light outline-0 placeholder:text-[#7f8996]" type="email" placeholder="you@example.com" aria-label="Email address" />
-    </label>
-    <button class="flex h-12 items-center justify-center gap-2 rounded-3xl border-0 bg-acid px-5 font-semibold text-ink transition-transform hover:scale-[1.02] focus-visible:scale-[1.02]" type="submit">
-      Email me the link <Mail size={16} />
-    </button>
-  </form>
-  <p class="m-0 text-[13px] text-[#7f8996]" data-motion>
-    Rather not wait?
-    <a class="inline-flex items-center gap-1.5 text-light underline underline-offset-4 transition-colors hover:text-acid focus-visible:text-acid" href="https://github.com">
-      <GithubMark size={13} /> Build Nox from source
+  <div class="flex flex-wrap items-center justify-center gap-4" data-motion>
+    <a class="inline-flex h-12 items-center gap-2 rounded-3xl bg-acid px-6 text-[13px] font-semibold text-ink transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href="https://github.com">
+      Download preview <Download size={16} />
     </a>
-  </p>
+    <a class="inline-flex h-12 items-center gap-2 rounded-3xl border border-white/25 px-6 text-[13px] font-semibold text-light transition-colors hover:border-light focus-visible:border-light" href="https://github.com">
+      <GithubMark size={16} /> View source
+    </a>
+  </div>
 </section>
