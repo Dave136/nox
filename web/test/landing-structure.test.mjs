@@ -48,10 +48,10 @@ test("landing composes Tailwind Astro sections with Motion and global Geist", as
   assert.doesNotMatch(signature, /rotate\s*:/);
   assert.match(signature, /data-sync-signal="line"/);
   assert.match(signature, /data-sync-signal="pulse"/);
-  assert.match(signature, /data-sync-signal="encrypted"/);
+  assert.match(signature, /data-sync-signal="pulse-shadow"/);
   assert.match(signature, /data-sync-signal="pulse-ring"/);
-  assert.match(signature, /h-\[150px\] w-px/);
-  assert.match(signature, /ENCRYPTED/);
+  assert.match(signature, /h-px w-\[90px\]/);
+  assert.match(signature, /border-dashed/);
   assert.match(signature, /h-\[210px\] w-\[330px\]/);
   assert.match(signature, /h-\[260px\] w-\[148px\]/);
   assert.doesNotMatch(signature, /animate\('\[data-sync-orbit/);
