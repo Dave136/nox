@@ -183,6 +183,12 @@ const items = [
       if (open && !island.contains(event.target as Node)) void setOpen(false);
     });
 
+    addEventListener("resize", () => {
+      if (!open) return;
+      shell.style.width = `${expandedWidthFor(innerWidth)}px`;
+      shell.style.height = `${shell.scrollHeight}px`;
+    });
+
     addEventListener("scroll", () => setStuck(scrollY > ISLAND.scrollThreshold), { passive: true });
   }
 </script>
