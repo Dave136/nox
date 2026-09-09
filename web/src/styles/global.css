@@ -32,6 +32,11 @@
     color: var(--color-ink);
   }
 
+  /* Clears the sticky header (80px) and the floating mobile island (18px + 52px). */
+  :is(main, section)[id] {
+    scroll-margin-top: 96px;
+  }
+
   a {
     color: inherit;
     text-decoration: none;

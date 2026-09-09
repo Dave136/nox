@@ -36,6 +36,7 @@ test("landing composes Tailwind Astro sections with Motion and global Geist", as
   assert.match(css, /@import "tailwindcss"/);
   assert.match(css, /--font-sans:\s*"Geist"/);
   assert.match(css, /--font-mono:\s*"Geist Mono"/);
+  assert.match(css, /scroll-margin-top/);
   assert.doesNotMatch(css, /\.(site-header|hero|section|network|waitlist|device-sync-signature)\b/);
   assert.match(layout, /from "motion"/);
   assert.match(layout, /prefers-reduced-motion/);
@@ -75,6 +76,8 @@ test("mobile nav island replaces the details dropdown", async () => {
   assert.match(header, /data-site-header/);
   assert.match(header, /data-header-menu/);
   assert.match(island, /data-header-menu/);
+  assert.ok(header.indexOf("#how") < header.indexOf("#security"), "header nav follows page order");
+  assert.ok(island.indexOf("#how") < island.indexOf("#security"), "island nav follows page order");
   assert.doesNotMatch(header, /<details/);
   assert.doesNotMatch(header, /data-mobile-nav/);
 

@@ -4,8 +4,8 @@ import GithubMark from "./GithubMark.astro";
 
 const items = [
   { href: "#product", label: "Product", Icon: Grid2x2 },
-  { href: "#security", label: "Security", Icon: ShieldCheck },
   { href: "#how", label: "How it works", Icon: Route },
+  { href: "#security", label: "Security", Icon: ShieldCheck },
   { href: "#open", label: "Open source", Icon: GithubMark },
 ];
 ---
@@ -21,7 +21,7 @@ const items = [
   >
     <div class="flex h-[52px] shrink-0 items-center justify-between px-[7px]" data-island-bar>
       <a class="flex items-center gap-[9px] pl-[7px]" href="#top" aria-label="Nox home">
-        <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-white/10">
+        <span class="grid size-8 shrink-0 place-items-center rounded-lg">
           <img class="w-[22px] invert" src="/nox-logo.svg" alt="" />
         </span>
         <span
@@ -30,9 +30,9 @@ const items = [
         >nox</span>
       </a>
 
-      <span class="hidden items-center gap-2 rounded-[19px] bg-[#262b32] px-3 py-[7px]" data-island-chip>
+      <span class="hidden items-center gap-2 rounded-[19px] bg-[#262b32] px-3 py-1.75" data-island-chip>
         <span class="grid size-5 shrink-0 place-items-center rounded-full bg-[#c8ff3d]">
-          <Check size={11} strokeWidth={2} class="text-[#171a1f]" aria-hidden="true" />
+          <Check size={11} stroke-width={2} class="text-[#171a1f]" aria-hidden="true" />
         </span>
         <span class="text-[11px] leading-none font-semibold text-[#e8ebef]" data-island-chip-label></span>
       </span>
@@ -74,7 +74,7 @@ const items = [
         href="#waitlist"
         data-island-link
       >
-        Join the waitlist <ArrowUpRight size={15} strokeWidth={2} aria-hidden="true" />
+        Join the waitlist <ArrowUpRight size={15} stroke-width={2} aria-hidden="true" />
       </a>
     </nav>
   </div>

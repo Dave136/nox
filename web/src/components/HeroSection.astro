@@ -1,15 +1,15 @@
 ---
-import { ArrowUpRight } from "@lucide/astro";
+import { Download } from "@lucide/astro";
 import GithubMark from "./GithubMark.astro";
 import DeviceSyncSignature from "./DeviceSyncSignature.astro";
 ---
 
 <section
-  class="h-[720px] bg-[linear-gradient(#d8d7d166_1px,transparent_1px),linear-gradient(90deg,#d8d7d166_1px,transparent_1px)] bg-[size:120px_100px] min-[801px]:h-[930px] min-[801px]:bg-[size:166px_110px]"
+  class="h-180 bg-[linear-gradient(#d8d7d166_1px,transparent_1px),linear-gradient(90deg,#d8d7d166_1px,transparent_1px)] bg-size-[120px_100px] min-[801px]:h-232.5 min-[801px]:bg-size-[166px_110px]"
 >
-  <div class="flex h-full flex-col justify-between px-5 pt-[65px] pb-[50px] min-[801px]:px-14 min-[801px]:pt-[104px] min-[801px]:pb-[86px]">
+  <div class="flex h-full flex-col justify-between px-5 pt-16.25 pb-12.5 min-[801px]:px-14 min-[801px]:pt-26 min-[801px]:pb-21.5">
     <div class="flex items-center gap-3 font-mono text-[10px] font-semibold tracking-[0.7px] text-muted" data-motion>
-      <i class="h-px w-[34px] bg-current"></i>LOCAL-FIRST SECRETS MANAGER
+      <i class="h-px w-8.5 bg-current"></i>LOCAL-FIRST SECRETS MANAGER
     </div>
 
     <h1 class="m-0 text-[17vw] leading-[0.93] font-semibold tracking-[-0.07em] min-[801px]:text-[clamp(56px,8vw,112px)]" data-motion>
@@ -18,15 +18,15 @@ import DeviceSyncSignature from "./DeviceSyncSignature.astro";
 
     <div class="flex flex-col items-start justify-between gap-10 min-[801px]:flex-row min-[801px]:items-end" data-motion>
       <div class="flex flex-col gap-6">
-        <p class="m-0 max-w-[500px] text-[17px] leading-[1.6] text-muted">
+        <p class="m-0 max-w-125 text-[17px] leading-[1.6] text-muted">
         Nox is a private vault for passwords, cards, notes, and identities. Your
         encrypted data stays with you and syncs only between devices you trust.
       </p>
       <div class="flex flex-wrap items-center gap-7">
-        <a class="inline-flex h-[42px] items-center gap-2 rounded-[22px] bg-ink px-[18px] text-[13px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href="#waitlist">
-          Join the waitlist <ArrowUpRight size={16} />
+        <a class="inline-flex h-10.5 items-center gap-2 rounded-[22px] bg-ink px-4.5 text-[13px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href="#waitlist">
+          Download Preview <Download size={16} />
         </a>
-        <a class="inline-flex h-[42px] items-center gap-2 rounded-[22px] border border-[#c4c4be] px-[18px] text-[13px] font-semibold transition-colors hover:border-ink focus-visible:border-ink" href="https://github.com">
+        <a class="inline-flex h-10.5 items-center gap-2 rounded-[22px] border border-[#c4c4be] px-4.5 text-[13px] font-semibold transition-colors hover:border-ink focus-visible:border-ink" href="https://github.com">
           <GithubMark size={16} /> View on GitHub
         </a>
       </div>
