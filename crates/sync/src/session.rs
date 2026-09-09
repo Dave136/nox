@@ -605,37 +605,11 @@ impl ServiceState {
                         let Some(access) = self.access.as_ref() else {
                             return;
                         };
-                        if device_id == access.local_device_id()
-                            || !self.peer_keys.contains_key(&device_id)
-                        {
+                        if device_id == access.local_device_id() {
                             return;
                         }
                         self.member_candidates.insert(device_id, endpoint.addresses);
-                        let direction = preferred_initiator(access.local_device_id(), device_id)
-                            .map(|preferred| {
-                                if preferred == access.local_device_id() {
-                                    SessionDirection::LocallyInitiated
-                                } else {
-                                    SessionDirection::RemotelyInitiated
-                                }
-                            })
-                            .unwrap_or(SessionDirection::RemotelyInitiated);
-                        let (cancel, _receiver) = async_channel::bounded(1);
-                        let previous = self.peers.insert(
-                            device_id,
-                            PeerSession {
-                                direction,
-                                generation: self.epoch,
-                                cancel,
-                            },
-                        );
-                        if let Some(previous) = previous {
-                            let _ = previous.cancel.try_send(true);
-                        }
-                        self.emit(SyncEvent::PeerState {
-                            device_id,
-                            state: PeerState::Discovered,
-                        });
+                        self.register_known_member(device_id);
                     }
                 }
             }
@@ -650,6 +624,40 @@ impl ServiceState {
                     .remove(&crate::pairing::PairingInstanceId::from_bytes(instance));
             }
         }
+    }
+
+    fn register_known_member(&mut self, device_id: DeviceId) {
+        let Some(access) = self.access.as_ref() else {
+            return;
+        };
+        if device_id == access.local_device_id() || !self.peer_keys.contains_key(&device_id) {
+            return;
+        }
+        let direction = preferred_initiator(access.local_device_id(), device_id)
+            .map(|preferred| {
+                if preferred == access.local_device_id() {
+                    SessionDirection::LocallyInitiated
+                } else {
+                    SessionDirection::RemotelyInitiated
+                }
+            })
+            .unwrap_or(SessionDirection::RemotelyInitiated);
+        let (cancel, _receiver) = async_channel::bounded(1);
+        let previous = self.peers.insert(
+            device_id,
+            PeerSession {
+                direction,
+                generation: self.epoch,
+                cancel,
+            },
+        );
+        if let Some(previous) = previous {
+            let _ = previous.cancel.try_send(true);
+        }
+        self.emit(SyncEvent::PeerState {
+            device_id,
+            state: PeerState::Discovered,
+        });
     }
 }
 
@@ -1443,6 +1451,10 @@ async fn refresh_peer_keys(state: &mut ServiceState) {
     let job = access.clone_for_blocking_job();
     if let Ok(Ok(peers)) = crate::spawn_core_blocking(move || job.authorized_peer_keys()).await {
         state.peer_keys = peers;
+        let candidate_ids = state.member_candidates.keys().copied().collect::<Vec<_>>();
+        for device_id in candidate_ids {
+            state.register_known_member(device_id);
+        }
     }
 }
 
@@ -1800,21 +1812,8 @@ mod tests {
         let item_c = profile_c
             .create_item(&payload("from-c", "c-secret"))
             .unwrap();
-        for _ in 0..3 {
-            let _ = sync_round(&service_a).await;
-            let _ = sync_round(&service_b).await;
-            let _ = sync_round(&service_c).await;
-        }
-        let mut all_items_present = false;
-        // 480 x 25ms = 12s, deliberately past `test_config`'s 10s replication
-        // deadline: giving up before the transport itself does turns CPU
-        // contention into a test failure. Three profiles converging here means
-        // Noise handshakes plus Argon2 derivation, so under a saturated
-        // `cargo test --workspace` the old 1s budget expired while the run was
-        // merely slow, not stuck. The loop breaks the moment it converges, so
-        // a larger budget costs nothing when things are healthy.
-        for _ in 0..480 {
-            all_items_present = [&profile_a, &profile_b, &profile_c].iter().all(|profile| {
+        let all_items_present = |profiles: [&Vault; 3]| {
+            profiles.iter().all(|profile| {
                 let ids = profile
                     .list_items()
                     .unwrap()
@@ -1822,13 +1821,25 @@ mod tests {
                     .map(|(id, _)| id)
                     .collect::<std::collections::BTreeSet<_>>();
                 ids.contains(&item_a) && ids.contains(&item_b) && ids.contains(&item_c)
-            });
-            if all_items_present {
+            })
+        };
+        let mut converged = false;
+        // A can teach B about C and C about B only after a replicated membership
+        // batch commits and the running services reload their peer keys. Keep
+        // driving explicit sync rounds until the topology and the three item
+        // payloads have both converged; passive sleeps alone leave CI timing in
+        // charge of whether the next exchange ever happens.
+        for _ in 0..6 {
+            let _ = sync_round(&service_a).await;
+            let _ = sync_round(&service_b).await;
+            let _ = sync_round(&service_c).await;
+            if all_items_present([&profile_a, &profile_b, &profile_c]) {
+                converged = true;
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        assert!(all_items_present);
+        assert!(converged);
 
         profile_b
             .update_item(item_a, &payload("edited-b", "b-edit"))
