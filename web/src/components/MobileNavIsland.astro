@@ -108,6 +108,13 @@ const items = [
       }
     };
 
+    const setChip = (label: string | null) => {
+      chipLabel.textContent = label ?? "";
+      chip.classList.toggle("hidden", label === null);
+      chip.classList.toggle("flex", label !== null);
+      toggle.classList.toggle("hidden", label !== null);
+    };
+
     const setOpen = async (next: boolean) => {
       if (busy || next === open) return;
       busy = true;
@@ -121,6 +128,7 @@ const items = [
       wordmark.classList.toggle("hidden", !next);
 
       if (next) {
+        setChip(null);
         menu.removeAttribute("inert");
         const width = expandedWidthFor(innerWidth);
         // Measure at the final width: at 128px the labels wrap and overstate the height.
@@ -152,24 +160,33 @@ const items = [
 
     toggle.addEventListener("click", () => void setOpen(!open));
 
-    let chipTimer = 0;
+    // Navigating parks the island wide with the section chip, then closes horizontally.
+    const selectAndClose = async (label: string) => {
+      if (busy || !open) return;
+      busy = true;
+      open = false;
 
-    const showChip = (label: string) => {
-      clearTimeout(chipTimer);
-      chipLabel.textContent = label;
-      chip.classList.remove("hidden");
-      chip.classList.add("flex");
-      chipTimer = window.setTimeout(() => {
-        chip.classList.add("hidden");
-        chip.classList.remove("flex");
-      }, 1800);
+      island.removeAttribute("data-island-open");
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-label", "Open menu");
+      openIcon.classList.remove("hidden");
+      closeIcon.classList.add("hidden");
+      menu.setAttribute("inert", "");
+
+      const [collapseHeight, collapseWidth] = closeSequence();
+      await animate(menu, { opacity: 0 }, { duration: reduced.matches ? 0 : 0.12 }).finished;
+      setChip(label);
+      await run([collapseHeight]);
+      await new Promise((resolve) => setTimeout(resolve, ISLAND.chipDwellMs));
+      setChip(null);
+      wordmark.classList.add("hidden");
+      await run([collapseWidth]);
+
+      busy = false;
     };
 
     menu.querySelectorAll<HTMLAnchorElement>("[data-island-link]").forEach((link) => {
-      link.addEventListener("click", () => {
-        showChip(link.textContent?.trim() ?? "");
-        void setOpen(false);
-      });
+      link.addEventListener("click", () => void selectAndClose(link.textContent?.trim() ?? ""));
     });
 
     addEventListener("keydown", (event) => {

@@ -7,6 +7,7 @@ export const ISLAND = {
   top: 18,
   gutter: 20,
   scrollThreshold: 12,
+  chipDwellMs: 1500,
   revealDuration: 0.22,
 } as const;
 

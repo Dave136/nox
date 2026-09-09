@@ -33,3 +33,13 @@ test("closing reverses the order: height first, then width", () => {
   assert.deepEqual(steps[0], { keyframes: { height: "52px" }, duration: 0.22 });
   assert.deepEqual(steps[1], { keyframes: { width: "128px" }, duration: 0.18 });
 });
+
+test("the chip dwell outlasts the vertical collapse it follows", () => {
+  const [collapseHeight] = closeSequence();
+
+  assert.equal(typeof ISLAND.chipDwellMs, "number");
+  assert.ok(
+    ISLAND.chipDwellMs > collapseHeight.duration * 1000,
+    "chip must stay visible after the island finishes collapsing vertically",
+  );
+});
