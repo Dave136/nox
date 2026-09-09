@@ -1,17 +1,18 @@
 ---
-import { ArrowUpRight } from "@lucide/astro";
+import { Mail } from "@lucide/astro";
+import GithubMark from "./GithubMark.astro";
 ---
 
 <section id="waitlist" class="flex min-h-[700px] flex-col items-center gap-[30px] bg-ink px-5 py-20 text-center text-light min-[801px]:px-14 min-[801px]:py-28">
   <div class="flex items-center gap-3 font-mono text-[10px] font-semibold tracking-[0.7px] text-[#aeb5bf]" data-motion>
-    <i class="h-px w-[34px] bg-current"></i>EARLY ACCESS
+    <i class="h-px w-[34px] bg-current"></i>PREVIEW ACCESS
   </div>
   <h2 class="m-0 text-[58px] leading-[0.93] font-semibold tracking-[-0.07em] min-[801px]:text-[82px]" data-motion>
     Keep your secrets<br /><em class="not-italic text-[#82878d]">close.</em>
   </h2>
   <p class="m-0 max-w-[640px] text-[17px] leading-[1.6] text-[#aeb5bf]" data-motion>
-    Join the waitlist for the first public release of Nox. Open source,
-    local-first, and built for every device you trust.
+    Nox is in preview for macOS and Linux. Leave your email to get the download
+    link the day it ships — one email, nothing else.
   </p>
   <form class="flex w-full max-w-[570px] flex-col items-stretch justify-between gap-3.5 rounded-[18px] border border-white/17 bg-dark-panel p-3.5 text-left min-[801px]:flex-row min-[801px]:items-center min-[801px]:rounded-[31px] min-[801px]:py-[7px] min-[801px]:pr-[7px] min-[801px]:pl-[22px]" data-motion>
     <label class="flex flex-col text-[10px] text-[#7f8996]">
@@ -19,8 +20,13 @@ import { ArrowUpRight } from "@lucide/astro";
       <input class="border-0 bg-transparent text-sm text-light outline-0 placeholder:text-[#7f8996]" type="email" placeholder="you@example.com" aria-label="Email address" />
     </label>
     <button class="flex h-12 items-center justify-center gap-2 rounded-3xl border-0 bg-acid px-5 font-semibold text-ink transition-transform hover:scale-[1.02] focus-visible:scale-[1.02]" type="submit">
-      Join waitlist <ArrowUpRight size={16} />
+      Email me the link <Mail size={16} />
     </button>
   </form>
-  <small class="text-[10px] text-[#7f8996]" data-motion>No spam. One email when early access opens.</small>
+  <p class="m-0 text-[13px] text-[#7f8996]" data-motion>
+    Rather not wait?
+    <a class="inline-flex items-center gap-1.5 text-light underline underline-offset-4 transition-colors hover:text-acid focus-visible:text-acid" href="https://github.com">
+      <GithubMark size={13} /> Build Nox from source
+    </a>
+  </p>
 </section>

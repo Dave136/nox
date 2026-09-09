@@ -121,3 +121,23 @@ test("a back-to-top control appears once the page is scrolled", async () => {
   assert.match(backToTop, /scrollTo/);
   assert.match(backToTop, /aria-label/);
 });
+
+test("every preview CTA uses one label and promises only what it does", async () => {
+  const [hero, header, island, preview] = await Promise.all([
+    read("src/components/HeroSection.astro"),
+    read("src/components/SiteHeader.astro"),
+    read("src/components/MobileNavIsland.astro"),
+    read("src/components/WaitlistSection.astro"),
+  ]);
+
+  for (const [name, source] of [["hero", hero], ["header", header], ["island", island]]) {
+    assert.ok(source.includes("Get the preview"), `${name} uses the shared CTA label`);
+    assert.doesNotMatch(source, /waitlist</i, `${name} has no leftover waitlist wording`);
+  }
+
+  // The email form cannot download anything, so its button must not say it does.
+  const submit = preview.match(/<button[\s\S]*?<\/button>/)?.[0] ?? "";
+  assert.doesNotMatch(submit, /download/i);
+  assert.match(submit, /Email me the link/);
+  assert.match(preview, /PREVIEW ACCESS/);
+});
