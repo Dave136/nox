@@ -13,12 +13,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // `FakeHttpClient` ignores the request-builder timeout, so tests exercise the
-// explicit future race below. Keep the test deadline short without changing
-// the production bound.
+// explicit future race below. Keep the test deadline shorter than production,
+// but long enough for GPUI tests to move stale favicon requests between editors
+// before the explicit timeout wakes the test scheduler from another thread.
 #[cfg(not(test))]
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
-const FETCH_TIMEOUT: Duration = Duration::from_millis(50);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_ICON_BYTES: usize = 5 * 1024 * 1024;
 const MAX_HTML_BYTES: usize = 1024 * 1024;
 
@@ -333,15 +334,23 @@ async fn with_timeout<T, E>(
     future: impl std::future::Future<Output = Result<T, E>>,
 ) -> Result<T, FaviconError> {
     let (deadline_tx, deadline_rx) = futures::channel::oneshot::channel::<()>();
+    let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let deadline_completed = completed.clone();
     std::thread::spawn(move || {
         std::thread::sleep(FETCH_TIMEOUT);
-        let _ = deadline_tx.send(());
+        if !deadline_completed.load(std::sync::atomic::Ordering::Acquire) {
+            let _ = deadline_tx.send(());
+        }
     });
     match futures::future::select(Box::pin(future), deadline_rx).await {
         futures::future::Either::Left((result, _)) => {
+            completed.store(true, std::sync::atomic::Ordering::Release);
             result.map_err(|_| FaviconError::AllCandidatesFailed)
         }
-        futures::future::Either::Right(_) => Err(FaviconError::AllCandidatesFailed),
+        futures::future::Either::Right(_) => {
+            completed.store(true, std::sync::atomic::Ordering::Release);
+            Err(FaviconError::AllCandidatesFailed)
+        }
     }
 }
 
