@@ -171,6 +171,14 @@ function renderChangelogRelease(
   return changelog.slice(0, start) + freshUnreleased + releasedSection + changelog.slice(end);
 }
 
+function parseRemoteUrl(url: string): { owner: string; repo: string } {
+  const match = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
+  if (!match) {
+    throw new Error(`could not parse a GitHub owner/repo from remote URL: ${url}`);
+  }
+  return { owner: match[1], repo: match[2] };
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
@@ -289,6 +297,19 @@ function selfCheck(): void {
   assert.ok(released.includes("## Unreleased"));
   assert.ok(released.indexOf("## Unreleased") < released.indexOf("## v1.2.4"));
   assert.ok(released.includes("## v0.1.0 - 2026-01-01"));
+
+  assert.deepStrictEqual(parseRemoteUrl("git@github.com:Dave136/nox.git"), {
+    owner: "Dave136",
+    repo: "nox",
+  });
+  assert.deepStrictEqual(parseRemoteUrl("https://github.com/Dave136/nox.git"), {
+    owner: "Dave136",
+    repo: "nox",
+  });
+  assert.deepStrictEqual(parseRemoteUrl("https://github.com/Dave136/nox"), {
+    owner: "Dave136",
+    repo: "nox",
+  });
 
   console.log("self-check OK");
 }
