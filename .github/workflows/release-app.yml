@@ -75,12 +75,12 @@ jobs:
             artifact_name: nox-macos-aarch64
             binary_name: nox
             package_zip: true
-          - platform: macOS Intel
-            runner: macos-13
-            target: x86_64-apple-darwin
-            artifact_name: nox-macos-x86_64
-            binary_name: nox
-            package_zip: true
+          # - platform: macOS Intel
+          #   runner: macos-13
+          #   target: x86_64-apple-darwin
+          #   artifact_name: nox-macos-x86_64
+          #   binary_name: nox
+          #   package_zip: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
