@@ -185,7 +185,14 @@ class UserAbortedError extends Error {
   }
 }
 
+function requireTTY(): void {
+  if (!process.stdin.isTTY) {
+    throw new Error("This step requires an interactive terminal (no TTY detected).");
+  }
+}
+
 async function select(title: string, options: string[]): Promise<number> {
+  requireTTY();
   const readline = await import("node:readline");
   return new Promise((resolve, reject) => {
     let index = 0;
@@ -215,35 +222,41 @@ async function select(title: string, options: string[]): Promise<number> {
       process.stdin.removeListener("keypress", onKeypress);
     }
 
-    function onKeypress(_str: string, key: { name: string; ctrl: boolean }) {
-      if (key.ctrl && key.name === "c") {
-        clear();
+    function onKeypress(_str: string, key: { name: string; ctrl: boolean } | undefined) {
+      try {
+        if (!key) return;
+        if (key.ctrl && key.name === "c") {
+          clear();
+          cleanup();
+          reject(new UserAbortedError());
+          return;
+        }
+        if (key.name === "escape") {
+          clear();
+          cleanup();
+          reject(new UserAbortedError());
+          return;
+        }
+        if (key.name === "up") {
+          clear();
+          index = (index - 1 + options.length) % options.length;
+          render();
+          return;
+        }
+        if (key.name === "down") {
+          clear();
+          index = (index + 1) % options.length;
+          render();
+          return;
+        }
+        if (key.name === "return") {
+          clear();
+          cleanup();
+          resolve(index);
+        }
+      } catch (err) {
         cleanup();
-        reject(new UserAbortedError());
-        return;
-      }
-      if (key.name === "escape") {
-        clear();
-        cleanup();
-        reject(new UserAbortedError());
-        return;
-      }
-      if (key.name === "up") {
-        clear();
-        index = (index - 1 + options.length) % options.length;
-        render();
-        return;
-      }
-      if (key.name === "down") {
-        clear();
-        index = (index + 1) % options.length;
-        render();
-        return;
-      }
-      if (key.name === "return") {
-        clear();
-        cleanup();
-        resolve(index);
+        reject(err);
       }
     }
 
@@ -253,6 +266,8 @@ async function select(title: string, options: string[]): Promise<number> {
 }
 
 function checkPreconditions(): void {
+  requireTTY();
+
   const branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], { capture: true }).stdout.trim();
   if (branch !== "main") {
     throw new Error(`must be on main to release, currently on ${branch}`);
@@ -342,7 +357,15 @@ async function resolveChangelogBody(changelog: string): Promise<string> {
     const tmpPath = `/tmp/nox-release-changelog-${Date.now()}.md`;
     await Bun.write(tmpPath, body);
     const editor = process.env.EDITOR ?? "vi";
-    run([editor, tmpPath], { allowFailure: true });
+    const [editorProgram, ...editorArgs] = editor.trim().split(/\s+/);
+    try {
+      run([editorProgram, ...editorArgs, tmpPath], { allowFailure: true });
+    } catch (err) {
+      console.error(
+        `Could not open editor '${editor}': ${err instanceof Error ? err.message : String(err)}. Returning to the preview without changes.`,
+      );
+      continue;
+    }
     body = await Bun.file(tmpPath).text();
   }
 }
@@ -551,6 +574,17 @@ function selfCheck(): void {
   console.log("self-check OK");
 }
 
+const VALID_FLAGS = ["--dry-run", "--self-check"];
+
+function validateArgs(argv: string[]): void {
+  const unknown = argv.find((arg) => !VALID_FLAGS.includes(arg));
+  if (unknown) {
+    console.error(`unknown argument: ${unknown}`);
+    console.error(`valid flags: ${VALID_FLAGS.join(", ")}`);
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
   const dryRun = process.argv.includes("--dry-run");
 
@@ -570,9 +604,19 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
+  validateArgs(process.argv.slice(2));
+
   if (process.argv.includes("--self-check")) {
     selfCheck();
   } else {
-    await main();
+    try {
+      await main();
+    } catch (err) {
+      console.error(`release failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        "If Cargo.toml or CHANGELOG.md were modified, check 'git status' — you may need 'git checkout -- Cargo.toml CHANGELOG.md' to discard an incomplete release attempt.",
+      );
+      process.exit(1);
+    }
   }
 }
