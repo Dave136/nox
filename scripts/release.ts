@@ -4,6 +4,8 @@ import assert from "node:assert";
 
 type Version = { major: number; minor: number; patch: number };
 type BumpKind = "major" | "minor" | "patch";
+type ParsedCommit = { type: string; scope: string | null; breaking: boolean; text: string };
+type ChangelogSection = "Added" | "Changed" | "Fixed";
 
 function parseVersion(cargoToml: string): Version {
   const match = cargoToml.match(/^version = "(\d+)\.(\d+)\.(\d+)"/m);
@@ -59,6 +61,32 @@ function run(
   return { code: proc.exitCode, stdout, stderr };
 }
 
+function parseCommitSubject(subject: string): ParsedCommit | null {
+  const match = subject.match(/^(\w+)(\(([^)]+)\))?(!)?: (.+)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    type: match[1],
+    scope: match[3] ?? null,
+    breaking: match[4] === "!",
+    text: match[5],
+  };
+}
+
+function classifyCommit(parsed: ParsedCommit): ChangelogSection | null {
+  switch (parsed.type) {
+    case "feat":
+      return "Added";
+    case "fix":
+      return "Fixed";
+    case "perf":
+      return "Changed";
+    default:
+      return null;
+  }
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
@@ -83,6 +111,32 @@ function selfCheck(): void {
   assert.deepStrictEqual(bumpVersion(parsed, "major"), { major: 2, minor: 0, patch: 0 });
 
   assert.strictEqual(formatVersion(parsed), "1.2.3");
+
+  assert.deepStrictEqual(parseCommitSubject("feat: add change password"), {
+    type: "feat",
+    scope: null,
+    breaking: false,
+    text: "add change password",
+  });
+  assert.deepStrictEqual(parseCommitSubject("fix(secure-notes): render blocks"), {
+    type: "fix",
+    scope: "secure-notes",
+    breaking: false,
+    text: "render blocks",
+  });
+  assert.deepStrictEqual(parseCommitSubject("feat!: drop legacy format"), {
+    type: "feat",
+    scope: null,
+    breaking: true,
+    text: "drop legacy format",
+  });
+  assert.strictEqual(parseCommitSubject("just a plain commit message"), null);
+
+  assert.strictEqual(classifyCommit({ type: "feat", scope: null, breaking: false, text: "x" }), "Added");
+  assert.strictEqual(classifyCommit({ type: "fix", scope: null, breaking: false, text: "x" }), "Fixed");
+  assert.strictEqual(classifyCommit({ type: "perf", scope: null, breaking: false, text: "x" }), "Changed");
+  assert.strictEqual(classifyCommit({ type: "chore", scope: null, breaking: false, text: "x" }), null);
+  assert.strictEqual(classifyCommit({ type: "refactor", scope: null, breaking: false, text: "x" }), null);
 
   console.log("self-check OK");
 }
