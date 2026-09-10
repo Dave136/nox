@@ -347,6 +347,48 @@ async function resolveChangelogBody(changelog: string): Promise<string> {
   }
 }
 
+async function writeCommitAndTag(
+  next: Version,
+  changelogBody: string,
+  dryRun: boolean,
+): Promise<void> {
+  const version = formatVersion(next);
+  const tag = `v${version}`;
+
+  const localTag = run(["git", "tag", "-l", tag], { capture: true }).stdout.trim();
+  const remoteTag = run(["git", "ls-remote", "--tags", "origin", tag], { capture: true }).stdout.trim();
+  if (localTag !== "" || remoteTag !== "") {
+    throw new Error(`tag ${tag} already exists (local: ${localTag !== ""}, remote: ${remoteTag !== ""})`);
+  }
+
+  const cargoToml = await Bun.file("Cargo.toml").text();
+  const changelog = await Bun.file("CHANGELOG.md").text();
+  const date = new Date().toISOString().slice(0, 10);
+
+  const bumpedToml = bumpCargoToml(cargoToml, version);
+  const releasedChangelog = renderChangelogRelease(changelog, version, date, changelogBody);
+
+  if (dryRun) {
+    console.log("=== dry run: Cargo.toml would become ===");
+    console.log(bumpedToml);
+    console.log("=== dry run: CHANGELOG.md's new section ===");
+    console.log(`## v${version} - ${date}\n\n${changelogBody}`);
+    console.log(`=== dry run: would run \`cargo check --workspace --quiet\` to sync Cargo.lock ===`);
+    console.log(`=== dry run: would run \`git add Cargo.toml Cargo.lock CHANGELOG.md\` ===`);
+    console.log(`=== dry run: would run \`git commit -m "chore(release): ${tag}"\` ===`);
+    console.log(`=== dry run: would run \`git tag -a ${tag} -m "${tag}"\` ===`);
+    return;
+  }
+
+  await Bun.write("Cargo.toml", bumpedToml);
+  await Bun.write("CHANGELOG.md", releasedChangelog);
+  run(["cargo", "check", "--workspace", "--quiet"]);
+  run(["git", "add", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"]);
+  run(["git", "commit", "-m", `chore(release): ${tag}`]);
+  run(["git", "tag", "-a", tag, "-m", tag]);
+  console.log(`committed and tagged ${tag}`);
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
