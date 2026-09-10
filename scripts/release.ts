@@ -179,6 +179,79 @@ function parseRemoteUrl(url: string): { owner: string; repo: string } {
   return { owner: match[1], repo: match[2] };
 }
 
+class UserAbortedError extends Error {
+  constructor() {
+    super("aborted by user");
+  }
+}
+
+async function select(title: string, options: string[]): Promise<number> {
+  const readline = await import("node:readline");
+  return new Promise((resolve, reject) => {
+    let index = 0;
+
+    function render() {
+      console.log(title);
+      for (const [i, option] of options.entries()) {
+        console.log(`${i === index ? ">" : " "} ${option}`);
+      }
+    }
+
+    function clear() {
+      // Move cursor up (options.length + 1 lines for the title) and clear each.
+      for (let i = 0; i < options.length + 1; i++) {
+        process.stdout.write("\x1b[1A\x1b[2K");
+      }
+    }
+
+    readline.emitKeypressEvents(process.stdin);
+    const wasRaw = process.stdin.isRaw ?? false;
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+
+    function cleanup() {
+      process.stdin.setRawMode(wasRaw);
+      process.stdin.pause();
+      process.stdin.removeListener("keypress", onKeypress);
+    }
+
+    function onKeypress(_str: string, key: { name: string; ctrl: boolean }) {
+      if (key.ctrl && key.name === "c") {
+        clear();
+        cleanup();
+        reject(new UserAbortedError());
+        return;
+      }
+      if (key.name === "escape") {
+        clear();
+        cleanup();
+        reject(new UserAbortedError());
+        return;
+      }
+      if (key.name === "up") {
+        clear();
+        index = (index - 1 + options.length) % options.length;
+        render();
+        return;
+      }
+      if (key.name === "down") {
+        clear();
+        index = (index + 1) % options.length;
+        render();
+        return;
+      }
+      if (key.name === "return") {
+        clear();
+        cleanup();
+        resolve(index);
+      }
+    }
+
+    process.stdin.on("keypress", onKeypress);
+    render();
+  });
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
