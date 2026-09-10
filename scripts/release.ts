@@ -252,6 +252,26 @@ async function select(title: string, options: string[]): Promise<number> {
   });
 }
 
+function checkPreconditions(): void {
+  const branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
+  if (branch !== "main") {
+    throw new Error(`must be on main to release, currently on ${branch}`);
+  }
+
+  const status = run(["git", "status", "--porcelain"]).stdout;
+  if (status.trim() !== "") {
+    throw new Error("working tree is not clean:\n" + status);
+  }
+
+  run(["git", "fetch", "origin", "main", "--quiet"]);
+  const behind = run(["git", "rev-list", "HEAD..origin/main", "--count"]).stdout.trim();
+  if (behind !== "0") {
+    throw new Error(`local main is ${behind} commit(s) behind origin/main — pull first`);
+  }
+
+  console.log("preconditions OK: on main, clean, up to date with origin/main");
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
@@ -388,6 +408,10 @@ function selfCheck(): void {
 }
 
 if (import.meta.main) {
+  if (process.argv.includes("--check-preconditions")) {
+    checkPreconditions();
+    process.exit(0);
+  }
   if (process.argv.includes("--self-check")) {
     selfCheck();
   } else {
