@@ -295,6 +295,58 @@ async function selectVersion(
   return { kind, current, next: bumpVersion(current, kind) };
 }
 
+function getLastTag(): string | null {
+  const result = run(["git", "describe", "--tags", "--abbrev=0"], {
+    allowFailure: true,
+    capture: true,
+  });
+  return result.code === 0 ? result.stdout.trim() : null;
+}
+
+function getCommitsSince(lastTag: string | null): CommitInfo[] {
+  const range = lastTag ? `${lastTag}..HEAD` : "";
+  const subjects = run(
+    range ? ["git", "log", range, "--pretty=%s"] : ["git", "log", "--pretty=%s"],
+    { capture: true },
+  ).stdout.trim();
+  const bodies = run(
+    range ? ["git", "log", range, "--pretty=%B%x00"] : ["git", "log", "--pretty=%B%x00"],
+    { capture: true },
+  ).stdout;
+
+  const subjectLines = subjects === "" ? [] : subjects.split("\n");
+  const bodyChunks = bodies.split("\x00").map((c) => c.trim()).filter((c) => c !== "");
+
+  return subjectLines.map((subject, i) => ({ subject, body: bodyChunks[i] ?? subject }));
+}
+
+async function resolveChangelogBody(changelog: string): Promise<string> {
+  const existingBody = extractUnreleasedBody(changelog);
+  let body = existingBody;
+
+  if (isUnreleasedEmpty(existingBody)) {
+    const lastTag = getLastTag();
+    const commits = getCommitsSince(lastTag);
+    const draft = buildChangelogDraft(commits);
+    body = draft === "" ? existingBody : draft;
+  }
+
+  while (true) {
+    console.log("──── CHANGELOG draft ────");
+    console.log(body.trim());
+    console.log("─────────────────────────");
+    const choice = await select("", ["Continue", "Open in editor"]);
+    if (choice === 0) {
+      return body;
+    }
+    const tmpPath = `/tmp/nox-release-changelog-${Date.now()}.md`;
+    await Bun.write(tmpPath, body);
+    const editor = process.env.EDITOR ?? "vi";
+    run([editor, tmpPath], { allowFailure: true });
+    body = await Bun.file(tmpPath).text();
+  }
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
