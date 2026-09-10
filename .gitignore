@@ -33,4 +33,5 @@ packaging/arch/*.pkg.tar.zst
 
 repomix-output.xml
 docs/superpowers/
+.superpowers/
 locker.pen
