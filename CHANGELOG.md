@@ -5,13 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.1.1 - 2026-09-10
 
 ### Added
 
+- Change vault password from Settings > Security, re-wrapping the vault's encryption key without touching its contents.
+
 ### Changed
 
+- Settings dialog: removed the Privacy, Notifications, and Account sections, none of which had functional backing.
+- Settings > Security: duration controls now render as visible selects instead of cycling on click, and row descriptions span full width with controls right-aligned.
+- Settings dialog and surrounding app chrome now use shared theme tokens instead of hardcoded colors.
+- Moved the vault lock button from the workspace header to the window title bar.
+- Matched Recent items and Recently deleted row heights and hover color to the Quick actions styling.
+- Removed macOS Intel builds from the release workflow.
+
 ### Fixed
+
+- Secure Notes detail view and full-note copy now render and strip `:::copy` / `:::copy-locked` markdown fences correctly, matching the create/edit preview.
 
 ## v0.1.0 - 2026-09-09
 
