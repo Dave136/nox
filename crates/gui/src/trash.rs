@@ -207,9 +207,9 @@ impl Nox {
                     <div
                         id={SharedString::from(format!("trash-row-{item_id}"))}
                         flex items_center gap={px(12.)}
-                        h={px(76.)} px={px(16.)} w_full
+                        h={px(64.)} px={px(16.)} w_full
                         border_b_1 borderColor={theme.border}
-                        hover={|this| this.bg(theme.row_hover)}
+                        hover={|this| this.bg(theme.raised)}
                         onClick={move |_, _window, app| {
                             select_locker.update(app, |locker, cx| locker.select_trash_item(item_id, cx));
                         }}
@@ -503,5 +503,34 @@ impl Nox {
             </div>
         }
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn trash_row_source() -> &'static str {
+        let source = include_str!("trash.rs");
+        let row_start = source.find("trash-row-{item_id}").expect("trash row");
+        &source[row_start
+            ..source[row_start..]
+                .find("onClick={move")
+                .expect("trash row click")
+                + row_start]
+    }
+
+    #[test]
+    fn deleted_item_rows_use_quick_action_hover_color() {
+        let row = trash_row_source();
+
+        assert!(row.contains("hover={|this| this.bg(theme.raised)}"));
+        assert!(!row.contains("theme.row_hover"));
+    }
+
+    #[test]
+    fn deleted_item_rows_match_vault_item_row_height() {
+        let row = trash_row_source();
+
+        assert!(row.contains("h={px(64.)}"));
+        assert!(!row.contains("h={px(76.)}"));
     }
 }

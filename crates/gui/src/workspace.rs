@@ -319,23 +319,6 @@ impl Nox {
                             </div>
                         </div>
                         <div flex items_center gap={px(10.)}>
-                            <Button
-                                base={Button::new("lock-vault")
-                                    .ghost()
-                                    .icon(gpui_component::Icon::empty().path("icons/lock-keyhole-open.svg").text_color(theme.text_muted))
-                                    .tooltip("Lock vault")
-                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                        if !event.keystroke.modifiers.modified()
-                                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                        {
-                                            window.prevent_default();
-                                            this.lock_vault(window, cx);
-                                        }
-                                    }))
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.lock_vault(window, cx)),
-                                    )}
-                            />
                             {sync_status_pill(theme)}
                             {add}
                         </div>
@@ -417,7 +400,11 @@ impl Nox {
                 let time = relative_time(item.updated_at);
                 let row_locker = locker.clone();
                 Button::new(SharedString::from(format!("home-recent-{item_id}")))
-                    .ghost()
+                    .custom(
+                        ButtonCustomVariant::new(cx)
+                            .color(theme.surface)
+                            .hover(theme.raised),
+                    )
                     .w_full()
                     .h(px(64.))
                     .justify_start()
@@ -631,5 +618,40 @@ impl Nox {
                 </div>
             </div>
         }.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unlocked_workspace_header_does_not_render_lock_button() {
+        let source = include_str!("workspace.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let toolbar_start = production
+            .find("id=\"content-toolbar\"")
+            .expect("content toolbar");
+        let toolbar = &production[toolbar_start
+            ..production[toolbar_start..]
+                .find("{sync_status_pill(theme)}")
+                .expect("toolbar actions")
+                + toolbar_start];
+
+        assert!(!toolbar.contains("lock-vault"));
+        assert!(!toolbar.contains("lock-keyhole-open"));
+    }
+
+    #[test]
+    fn recent_items_rows_use_quick_action_hover_color() {
+        let source = include_str!("workspace.rs");
+        let row_start = source.find("home-recent-{item_id}").expect("recent row");
+        let row = &source[row_start
+            ..source[row_start..]
+                .find(".into_any_element()")
+                .expect("recent row end")
+                + row_start];
+
+        assert!(row.contains("ButtonCustomVariant::new"));
+        assert!(row.contains(".color(theme.surface)"));
+        assert!(row.contains(".hover(theme.raised)"));
     }
 }

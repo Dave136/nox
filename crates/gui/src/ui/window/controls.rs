@@ -1,10 +1,10 @@
 use gpui::{
-    AnyElement, App, Context, CursorStyle, Div, Entity, FocusHandle, Focusable, Keystroke,
-    MouseButton, MouseDownEvent, ResizeEdge, Window, actions, div, prelude::*, px,
+    AnyElement, App, Context, CursorStyle, Div, Entity, FocusHandle, Focusable, KeyDownEvent,
+    Keystroke, MouseButton, MouseDownEvent, ResizeEdge, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, WindowExt,
-    button::Button,
+    ActiveTheme, Icon, Sizable, WindowExt,
+    button::{Button, ButtonVariants as _},
     command::{Command, CommandItem, CommandState},
     kbd::Kbd,
     menu::{DropdownMenu as _, PopupMenuItem},
@@ -215,6 +215,24 @@ impl WindowControls {
         }
     }
 
+    fn command_key_callback(
+        &self,
+        command: WindowCommand,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static {
+        let controls = cx.entity().downgrade();
+        move |event, window, app| {
+            if !event.keystroke.modifiers.modified()
+                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+            {
+                window.prevent_default();
+                let _ = controls.update(app, |controls, cx| {
+                    controls.invoke_command(command, window, cx);
+                });
+            }
+        }
+    }
+
     fn render_file_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
         let controls = cx.entity().downgrade();
@@ -306,6 +324,24 @@ impl WindowControls {
         let drag_right = cx.listener(|_, _: &MouseDownEvent, window, _| {
             window.start_window_move();
         });
+        let lock_button = if self.authenticated {
+            rsx! {
+                <Button
+                    base={Button::new("window-lock-vault")
+                        .ghost()
+                        .icon(Icon::empty().path("icons/lock-keyhole-open.svg").text_color(theme.text_muted))
+                        .tooltip("Lock vault")
+                        .on_key_down(self.command_key_callback(WindowCommand::LockVault, cx))}
+                    bg={cx.theme().transparent}
+                    border_0
+                    onClick={self.command_callback(WindowCommand::LockVault, cx)}
+                />
+            }
+            .into_any_element()
+        } else {
+            div().into_any_element()
+        };
+
         let search_trigger = if self.authenticated {
             rsx! {
                 <div items_center justify_center gap={px(8.)}>
@@ -368,6 +404,7 @@ impl WindowControls {
                     onMouseDown={(MouseButton::Left, drag_right)}
                 />
                 <div flex items_center gap={px(4.)}>
+                    {lock_button}
                     <Button
                         base={Button::new("window-minimize")}
                         // class="bg-transparent border-none"
@@ -530,6 +567,17 @@ mod tests {
             2
         );
         assert_eq!(production.matches("window.start_window_move()").count(), 2);
+    }
+
+    #[test]
+    fn authenticated_lock_button_lives_in_title_bar_controls() {
+        let source = include_str!("controls.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        assert!(production.contains("let lock_button = if self.authenticated"));
+        assert!(production.contains("Button::new(\"window-lock-vault\")"));
+        assert!(production.contains("WindowCommand::LockVault"));
+        assert!(production.contains("lock-keyhole-open"));
+        assert!(production.contains("{lock_button}"));
     }
 
     #[test]

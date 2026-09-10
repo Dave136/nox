@@ -21,7 +21,6 @@ pub(crate) struct VaultListModel {
     pub(crate) active_id: Option<String>,
 }
 
-const BACKGROUND: u32 = 0x1B2029;
 const SURFACE: u32 = 0x202630;
 const INPUT: u32 = 0x222731;
 const BORDER: u32 = 0x343B47;
@@ -72,7 +71,7 @@ pub(crate) fn render_settings_modal(
                 .h(px(800.))
                 .rounded(px(12.))
                 .overflow_hidden()
-                .bg(rgb(BACKGROUND))
+                .bg(theme.canvas)
                 .border_1()
                 .border_color(rgb(BORDER))
                 .shadow(vec![BoxShadow {
@@ -157,8 +156,8 @@ pub(crate) fn render_settings_dialog(
         .flex()
         .size_full()
         .overflow_hidden()
-        .bg(rgb(BACKGROUND))
-        .child(render_navigation(locker.clone(), section))
+        .bg(theme.canvas)
+        .child(render_navigation(theme, locker.clone(), section))
         .child(
             div()
                 .id("settings-content")
@@ -171,7 +170,7 @@ pub(crate) fn render_settings_dialog(
                 .p(px(34.))
                 .pt(px(26.))
                 .gap(px(22.))
-                .bg(rgb(BACKGROUND))
+                .bg(theme.canvas)
                 .overflow_y_scroll()
                 .child(render_section(
                     theme,
@@ -216,10 +215,11 @@ pub(crate) fn render_settings_dialog(
         .into_any_element()
 }
 
-fn render_navigation(locker: Entity<Nox>, selected: SettingsSection) -> AnyElement {
+fn render_navigation(theme: Theme, locker: Entity<Nox>, selected: SettingsSection) -> AnyElement {
     let mut list = div().flex().flex_col().gap(px(5.));
     for (section, label, icon) in SettingsSection::ALL {
         list = list.child(navigation_item(
+            theme,
             locker.clone(),
             section,
             label,
@@ -238,7 +238,7 @@ fn render_navigation(locker: Entity<Nox>, selected: SettingsSection) -> AnyEleme
         .p(px(16.))
         .pt(px(24.))
         .flex_shrink_0()
-        .bg(rgb(BACKGROUND))
+        .bg(theme.canvas)
         .border_r_1()
         .border_color(rgb(BORDER))
         .child(
@@ -277,6 +277,7 @@ fn render_navigation(locker: Entity<Nox>, selected: SettingsSection) -> AnyEleme
 }
 
 fn navigation_item(
+    theme: Theme,
     locker: Entity<Nox>,
     section: SettingsSection,
     label: &'static str,
@@ -294,7 +295,11 @@ fn navigation_item(
         .gap(px(10.))
         .rounded(px(7.))
         .cursor_pointer()
-        .bg(rgb(if active { ACTIVE } else { BACKGROUND }))
+        .bg(if active {
+            rgb(ACTIVE).into()
+        } else {
+            theme.canvas
+        })
         .when(active, |this| {
             this.border_1().border_color(rgb(ACTIVE_BORDER))
         })
@@ -1257,4 +1262,20 @@ fn account_section() -> AnyElement {
                 .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child("Your vault remains encrypted on this device. Account sync is not part of this build.")),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn settings_dialog_background_matches_app_canvas_token() {
+        let source = include_str!("dialog.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+
+        assert!(!production_source.contains("const BACKGROUND"));
+        assert!(production_source.contains(".bg(theme.canvas)"));
+        assert!(production_source.contains("render_navigation(theme, locker.clone(), section)"));
+    }
 }
