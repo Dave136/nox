@@ -125,6 +125,52 @@ function buildChangelogDraft(commits: CommitInfo[]): string {
   return blocks.join("\n");
 }
 
+function bumpCargoToml(cargoToml: string, newVersion: string): string {
+  return cargoToml.replace(/^version = "\d+\.\d+\.\d+"/m, `version = "${newVersion}"`);
+}
+
+function extractUnreleasedBody(changelog: string): string {
+  const start = changelog.indexOf("## Unreleased");
+  if (start === -1) {
+    throw new Error("CHANGELOG.md has no `## Unreleased` section");
+  }
+  const afterHeading = changelog.indexOf("\n", start) + 1;
+  const nextHeading = changelog.indexOf("\n## ", afterHeading);
+  const end = nextHeading === -1 ? changelog.length : nextHeading + 1;
+  return changelog.slice(afterHeading, end);
+}
+
+function isUnreleasedEmpty(body: string): boolean {
+  return !/^- /m.test(body);
+}
+
+function renderChangelogRelease(
+  changelog: string,
+  newVersion: string,
+  date: string,
+  body: string,
+): string {
+  const start = changelog.indexOf("## Unreleased");
+  const afterHeading = changelog.indexOf("\n", start) + 1;
+  const nextHeading = changelog.indexOf("\n## ", afterHeading);
+  const end = nextHeading === -1 ? changelog.length : nextHeading + 1;
+
+  const freshUnreleased = [
+    "## Unreleased",
+    "",
+    "### Added",
+    "",
+    "### Changed",
+    "",
+    "### Fixed",
+    "",
+    "",
+  ].join("\n");
+  const releasedSection = `## v${newVersion} - ${date}\n\n${body}`;
+
+  return changelog.slice(0, start) + freshUnreleased + releasedSection + changelog.slice(end);
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
@@ -205,6 +251,44 @@ function selfCheck(): void {
   );
 
   assert.strictEqual(buildChangelogDraft([{ subject: "chore: x", body: "chore: x" }]), "");
+
+  const bumpedToml = bumpCargoToml(sampleToml, "1.2.4");
+  assert.ok(bumpedToml.includes('version = "1.2.4"'));
+  assert.ok(!bumpedToml.includes('version = "1.2.3"'));
+
+  const sampleChangelog = [
+    "# Changelog",
+    "",
+    "## Unreleased",
+    "",
+    "### Added",
+    "",
+    "### Changed",
+    "",
+    "### Fixed",
+    "",
+    "## v0.1.0 - 2026-01-01",
+    "",
+    "### Added",
+    "",
+    "- first release",
+    "",
+  ].join("\n");
+
+  const emptyBody = extractUnreleasedBody(sampleChangelog);
+  assert.ok(emptyBody.includes("### Added"));
+  assert.ok(!emptyBody.includes("v0.1.0"));
+  assert.strictEqual(isUnreleasedEmpty(emptyBody), true);
+
+  const filledBody = "### Added\n\n- new thing\n\n### Changed\n\n### Fixed\n\n";
+  assert.strictEqual(isUnreleasedEmpty(filledBody), false);
+
+  const released = renderChangelogRelease(sampleChangelog, "1.2.4", "2026-09-10", filledBody);
+  assert.ok(released.includes("## v1.2.4 - 2026-09-10"));
+  assert.ok(released.includes("- new thing"));
+  assert.ok(released.includes("## Unreleased"));
+  assert.ok(released.indexOf("## Unreleased") < released.indexOf("## v1.2.4"));
+  assert.ok(released.includes("## v0.1.0 - 2026-01-01"));
 
   console.log("self-check OK");
 }
