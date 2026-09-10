@@ -356,7 +356,7 @@ async function resolveChangelogBody(changelog: string): Promise<string> {
     }
     const tmpPath = `/tmp/nox-release-changelog-${Date.now()}.md`;
     await Bun.write(tmpPath, body);
-    const editor = process.env.EDITOR ?? "vi";
+    const editor = process.env.EDITOR ?? "nvim";
     const [editorProgram, ...editorArgs] = editor.trim().split(/\s+/);
     try {
       run([editorProgram, ...editorArgs, tmpPath], { allowFailure: true });
