@@ -87,6 +87,44 @@ function classifyCommit(parsed: ParsedCommit): ChangelogSection | null {
   }
 }
 
+type CommitInfo = { subject: string; body: string };
+
+function buildChangelogDraft(commits: CommitInfo[]): string {
+  const breaking: string[] = [];
+  const bySection: Record<ChangelogSection, string[]> = {
+    Added: [],
+    Changed: [],
+    Fixed: [],
+  };
+
+  for (const commit of commits) {
+    const parsed = parseCommitSubject(commit.subject);
+    if (!parsed) {
+      continue;
+    }
+    const isBreaking = parsed.breaking || /^BREAKING CHANGE:/m.test(commit.body);
+    if (isBreaking) {
+      breaking.push(parsed.text);
+      continue;
+    }
+    const section = classifyCommit(parsed);
+    if (section) {
+      bySection[section].push(parsed.text);
+    }
+  }
+
+  const blocks: string[] = [];
+  if (breaking.length > 0) {
+    blocks.push(["### Breaking", "", ...breaking.map((t) => `- ${t}`), ""].join("\n"));
+  }
+  for (const section of ["Added", "Changed", "Fixed"] as const) {
+    if (bySection[section].length > 0) {
+      blocks.push(["", `### ${section}`, "", ...bySection[section].map((t) => `- ${t}`), ""].join("\n").replace(/^\n/, ""));
+    }
+  }
+  return blocks.join("\n");
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
@@ -137,6 +175,36 @@ function selfCheck(): void {
   assert.strictEqual(classifyCommit({ type: "perf", scope: null, breaking: false, text: "x" }), "Changed");
   assert.strictEqual(classifyCommit({ type: "chore", scope: null, breaking: false, text: "x" }), null);
   assert.strictEqual(classifyCommit({ type: "refactor", scope: null, breaking: false, text: "x" }), null);
+
+  const draft = buildChangelogDraft([
+    { subject: "feat: add change password", body: "feat: add change password" },
+    { subject: "fix: render blocks", body: "fix: render blocks" },
+    { subject: "chore: bump ci", body: "chore: bump ci" },
+    {
+      subject: "feat!: drop legacy vault format",
+      body: "feat!: drop legacy vault format\n\nBREAKING CHANGE: old vaults must be re-created",
+    },
+    { subject: "not a conventional commit", body: "not a conventional commit" },
+  ]);
+  assert.strictEqual(
+    draft,
+    [
+      "### Breaking",
+      "",
+      "- drop legacy vault format",
+      "",
+      "### Added",
+      "",
+      "- add change password",
+      "",
+      "### Fixed",
+      "",
+      "- render blocks",
+      "",
+    ].join("\n"),
+  );
+
+  assert.strictEqual(buildChangelogDraft([{ subject: "chore: x", body: "chore: x" }]), "");
 
   console.log("self-check OK");
 }
