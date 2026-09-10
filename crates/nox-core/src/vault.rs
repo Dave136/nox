@@ -867,6 +867,64 @@ impl Vault {
         drop(self);
     }
 
+    /// Re-wrap the vault's DEK under a new password, without touching vault contents.
+    ///
+    /// `self` is already proof the current password was correct — only a
+    /// successful `create`/`unlock` produces a `Vault`, and `self.dek` was
+    /// unwrapped using it. Re-deriving and re-verifying the current password
+    /// here would repeat the exact Argon2id work the caller's `unlock` just
+    /// paid for, doubling latency for no extra security: callers that need to
+    /// force the user to re-enter the current password (e.g. an unattended
+    /// unlocked session) get that guarantee for free by constructing this
+    /// `Vault` via a fresh `unlock(current, path)` right before calling this.
+    pub fn change_password(&self, new: &[u8]) -> Result<(), VaultError> {
+        let meta = self
+            .db
+            .connection()
+            .query_row(
+                "SELECT argon2_memory_kib, argon2_iterations, argon2_parallelism
+                 FROM vault_meta LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let corrupt = || VaultError::IncorrectPasswordOrCorruptVault;
+        let Some((memory_kib, iterations, parallelism)) = meta else {
+            return Err(corrupt());
+        };
+
+        let params = match (
+            u32::try_from(memory_kib),
+            u32::try_from(iterations),
+            u32::try_from(parallelism),
+        ) {
+            (Ok(memory_kib), Ok(iterations), Ok(parallelism)) => {
+                Argon2Params::new(memory_kib, iterations, parallelism)
+            }
+            _ => return Err(corrupt()),
+        };
+
+        let new_salt = kdf::random_salt()?;
+        let new_kek = kdf::derive_kek(new, new_salt, params)?;
+        let new_wrapped = keys::wrap_dek(&new_kek, &self.dek)?;
+
+        self.db.connection().execute(
+            "UPDATE vault_meta SET kdf_salt = ?1, wrapped_dek_nonce = ?2, wrapped_dek = ?3",
+            params![
+                new_salt.as_slice(),
+                new_wrapped.nonce.as_bytes(),
+                new_wrapped.ciphertext,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Create a new encrypted item revision and return its generated id.
     pub fn create_item(&mut self, payload: &ItemPayload) -> Result<ItemId, VaultError> {
         let encoded = payload.to_json_bytes()?;
@@ -1577,6 +1635,44 @@ mod tests {
             })
         ));
         vault.lock();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn change_password_rewraps_dek_and_rejects_old_password() {
+        let directory = f5_directory("change-password");
+        let path = directory.join("vault.db");
+        let vault = Vault::create(b"old-password", &path).unwrap();
+        vault.change_password(b"new-password").unwrap();
+        vault.lock();
+
+        let unlocked = Vault::unlock(b"new-password", &path).unwrap();
+        unlocked.lock();
+        assert!(matches!(
+            Vault::unlock(b"old-password", &path),
+            Err(VaultError::IncorrectPasswordOrCorruptVault)
+        ));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The gate against changing a password without knowing the current one
+    /// is `unlock` itself, not `change_password` (which trusts an already
+    /// -unlocked `self`). A caller must construct a fresh `Vault` via
+    /// `unlock(current, path)` before it can call `change_password` at all.
+    #[test]
+    fn wrong_current_password_cannot_unlock_to_reach_change_password() {
+        let directory = f5_directory("change-password-wrong-current");
+        let path = directory.join("vault.db");
+        let vault = Vault::create(b"old-password", &path).unwrap();
+        vault.lock();
+
+        assert!(matches!(
+            Vault::unlock(b"wrong-current", &path),
+            Err(VaultError::IncorrectPasswordOrCorruptVault)
+        ));
+
+        let unlocked = Vault::unlock(b"old-password", &path).unwrap();
+        unlocked.lock();
         fs::remove_dir_all(directory).unwrap();
     }
 

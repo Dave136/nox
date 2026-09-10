@@ -6,7 +6,12 @@ use gpui::{
     Animation, AnimationExt, AnyElement, App, BoxShadow, Entity, FontWeight, MouseButton,
     SharedString, Window, div, ease_out_quint, point, prelude::*, px, rgb, rgba,
 };
-use gpui_component::{Icon, IconName, Sizable, button::Button};
+use gpui_component::{
+    Icon, IndexPath, Sizable,
+    button::Button,
+    input::{Input, InputState},
+    select::{Select, SelectDelegate, SelectItem, SelectState},
+};
 use std::time::Duration;
 
 /// The registered-vault list, snapshotted in `Nox::render`.
@@ -21,21 +26,77 @@ pub(crate) struct VaultListModel {
     pub(crate) active_id: Option<String>,
 }
 
-const SURFACE: u32 = 0x202630;
-const INPUT: u32 = 0x222731;
-const BORDER: u32 = 0x343B47;
-const INPUT_BORDER: u32 = 0x3A4450;
-const PRIMARY: u32 = 0xF3F5F7;
-const SECONDARY: u32 = 0xB9C0C8;
-const MUTED: u32 = 0x8E98A5;
-const ACTIVE: u32 = 0x252A33;
-const ACTIVE_BORDER: u32 = 0x3A414D;
-const ACTIVE_TEXT: u32 = 0xD9ECF8;
-const ACTIVE_ICON: u32 = 0xD9ECF8;
-const ACCENT: u32 = 0x77B8DF;
-const NAV_LABEL: u32 = 0x7F8996;
-const SEARCH_BORDER: u32 = 0x363D4A;
-const SEARCH_ICON: u32 = 0x788390;
+#[derive(Clone)]
+pub(crate) struct SettingsDurationItem {
+    seconds: u64,
+}
+
+impl SettingsDurationItem {
+    pub(crate) fn new(seconds: u64) -> Self {
+        Self { seconds }
+    }
+}
+
+impl SelectItem for SettingsDurationItem {
+    type Value = u64;
+
+    fn title(&self) -> SharedString {
+        format_duration(self.seconds).into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.seconds
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SettingsDurationDelegate(pub(crate) Vec<SettingsDurationItem>);
+
+impl SettingsDurationDelegate {
+    pub(crate) fn new(seconds: &'static [u64]) -> Self {
+        Self(
+            seconds
+                .iter()
+                .copied()
+                .map(SettingsDurationItem::new)
+                .collect(),
+        )
+    }
+}
+
+impl SelectDelegate for SettingsDurationDelegate {
+    type Item = SettingsDurationItem;
+
+    fn items_count(&self, _section: usize) -> usize {
+        self.0.len()
+    }
+
+    fn item(&self, ix: IndexPath) -> Option<&Self::Item> {
+        self.0.as_slice().get(ix.row)
+    }
+
+    fn position<V>(&self, value: &V) -> Option<IndexPath>
+    where
+        Self::Item: SelectItem<Value = V>,
+        V: PartialEq,
+    {
+        self.0
+            .iter()
+            .position(|item| item.value() == value)
+            .map(IndexPath::new)
+    }
+}
+
+pub(crate) fn settings_duration_index(options: &'static [u64], selected: u64) -> Option<IndexPath> {
+    options
+        .iter()
+        .position(|seconds| *seconds == selected)
+        .map(IndexPath::new)
+}
+
+pub(crate) const AUTO_LOCK_DURATIONS: &[u64] = &[30, 60, 300, 900, 1800];
+pub(crate) const CLIPBOARD_DURATIONS: &[u64] = &[5, 15, 30, 60, 300];
+
 const MODAL_BACKDROP: u32 = 0x0A0C0F99;
 
 pub(crate) fn render_settings_modal(
@@ -43,6 +104,10 @@ pub(crate) fn render_settings_modal(
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
+    settings_search: Entity<InputState>,
+    settings_query: String,
+    settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
+    settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
     vault_list: &VaultListModel,
     conflict_count: usize,
 ) -> AnyElement {
@@ -73,7 +138,7 @@ pub(crate) fn render_settings_modal(
                 .overflow_hidden()
                 .bg(theme.canvas)
                 .border_1()
-                .border_color(rgb(BORDER))
+                .border_color(theme.border)
                 .shadow(vec![BoxShadow {
                     color: rgba(0x00000066).into(),
                     offset: point(px(0.), px(24.)),
@@ -87,6 +152,10 @@ pub(crate) fn render_settings_modal(
                     locker,
                     settings,
                     section,
+                    settings_search,
+                    settings_query,
+                    settings_auto_lock_select,
+                    settings_clipboard_select,
                     vault_list,
                     conflict_count,
                 )),
@@ -98,7 +167,6 @@ pub(crate) fn render_settings_modal(
         )
         .into_any_element()
 }
-const SEARCH_PLACEHOLDER: u32 = 0x727C89;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SettingsSection {
@@ -106,26 +174,20 @@ pub(crate) enum SettingsSection {
     Security,
     Vault,
     Autofill,
-    Privacy,
-    Notifications,
     ImportExport,
-    Account,
 }
 
 impl SettingsSection {
-    const ALL: [(Self, &'static str, &'static str); 8] = [
+    const ALL: [(Self, &'static str, &'static str); 5] = [
         (Self::Appearance, "Appearance", "icons/oalette.svg"),
         (Self::Security, "Security", "icons/shield-check.svg"),
         (Self::Vault, "Vault", "icons/database.svg"),
         (Self::Autofill, "Autofill", "icons/key-square.svg"),
-        (Self::Privacy, "Privacy", "icons/eye-off.svg"),
-        (Self::Notifications, "Notifications", "icons/bell.svg"),
         (
             Self::ImportExport,
             "Import & export",
             "icons/arrow-left-right.svg",
         ),
-        (Self::Account, "Account", "icons/circle-user-around.svg"),
     ];
 
     fn index(self) -> usize {
@@ -134,10 +196,7 @@ impl SettingsSection {
             Self::Security => 1,
             Self::Vault => 2,
             Self::Autofill => 3,
-            Self::Privacy => 4,
-            Self::Notifications => 5,
-            Self::ImportExport => 6,
-            Self::Account => 7,
+            Self::ImportExport => 4,
         }
     }
 }
@@ -147,6 +206,10 @@ pub(crate) fn render_settings_dialog(
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
+    settings_search: Entity<InputState>,
+    settings_query: String,
+    settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
+    settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
     vault_list: &VaultListModel,
     conflict_count: usize,
 ) -> AnyElement {
@@ -157,7 +220,13 @@ pub(crate) fn render_settings_dialog(
         .size_full()
         .overflow_hidden()
         .bg(theme.canvas)
-        .child(render_navigation(theme, locker.clone(), section))
+        .child(render_navigation(
+            theme,
+            locker.clone(),
+            section,
+            settings_search,
+            settings_query,
+        ))
         .child(
             div()
                 .id("settings-content")
@@ -177,6 +246,8 @@ pub(crate) fn render_settings_dialog(
                     locker.clone(),
                     settings,
                     section,
+                    settings_auto_lock_select,
+                    settings_clipboard_select,
                     vault_list,
                     conflict_count,
                 ))
@@ -199,12 +270,12 @@ pub(crate) fn render_settings_dialog(
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .hover(|this| this.bg(rgb(ACTIVE)))
+                .hover(|this| this.bg(theme.raised))
                 .child(
                     Icon::empty()
                         .path("icons/x.svg")
                         .size(px(15.))
-                        .text_color(rgb(MUTED)),
+                        .text_color(theme.text_muted),
                 )
                 .on_click(move |_, window, cx| {
                     close_locker.update(cx, |locker, cx| {
@@ -215,9 +286,19 @@ pub(crate) fn render_settings_dialog(
         .into_any_element()
 }
 
-fn render_navigation(theme: Theme, locker: Entity<Nox>, selected: SettingsSection) -> AnyElement {
+fn render_navigation(
+    theme: Theme,
+    locker: Entity<Nox>,
+    selected: SettingsSection,
+    settings_search: Entity<InputState>,
+    settings_query: String,
+) -> AnyElement {
+    let settings_query = settings_query.to_lowercase();
     let mut list = div().flex().flex_col().gap(px(5.));
     for (section, label, icon) in SettingsSection::ALL {
+        if !settings_query.is_empty() && !label.to_lowercase().contains(&settings_query) {
+            continue;
+        }
         list = list.child(navigation_item(
             theme,
             locker.clone(),
@@ -240,37 +321,28 @@ fn render_navigation(theme: Theme, locker: Entity<Nox>, selected: SettingsSectio
         .flex_shrink_0()
         .bg(theme.canvas)
         .border_r_1()
-        .border_color(rgb(BORDER))
+        .border_color(theme.border)
         .child(
             div()
                 .text_size(px(9.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(NAV_LABEL))
+                .text_color(theme.text_subtle)
                 .child("SETTINGS"),
         )
         .child(
-            div()
-                .h(px(38.))
-                .px(px(11.))
-                .flex()
-                .items_center()
-                .gap(px(9.))
-                .rounded(px(7.))
-                .bg(rgb(INPUT))
-                .border_1()
-                .border_color(rgb(SEARCH_BORDER))
-                .child(
+            Input::new(&settings_search)
+                .prefix(
                     Icon::empty()
                         .path("icons/search.svg")
                         .size(px(15.))
-                        .text_color(rgb(SEARCH_ICON)),
+                        .text_color(theme.icon_muted),
                 )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(SEARCH_PLACEHOLDER))
-                        .child("Search settings…"),
-                ),
+                .h(px(38.))
+                .w_full()
+                .px(px(11.))
+                .bg(theme.field)
+                .border_color(theme.field_border)
+                .rounded(px(7.)),
         )
         .child(list)
         .into_any_element()
@@ -295,31 +367,35 @@ fn navigation_item(
         .gap(px(10.))
         .rounded(px(7.))
         .cursor_pointer()
-        .bg(if active {
-            rgb(ACTIVE).into()
-        } else {
-            theme.canvas
-        })
+        .bg(if active { theme.raised } else { theme.canvas })
         .when(active, |this| {
-            this.border_1().border_color(rgb(ACTIVE_BORDER))
+            this.border_1().border_color(theme.smart_field_border)
         })
         .hover(|this| {
-            this.bg(rgb(ACTIVE))
+            this.bg(theme.raised)
                 .border_1()
-                .border_color(rgb(ACTIVE_BORDER))
+                .border_color(theme.smart_field_border)
         })
         .child(
             div()
-                .text_color(rgb(if active { ACTIVE_ICON } else { MUTED }))
-                .group_hover(label, |this| this.text_color(rgb(ACTIVE_ICON)))
+                .text_color(if active {
+                    theme.text_secondary
+                } else {
+                    theme.text_muted
+                })
+                .group_hover(label, |this| this.text_color(theme.text_secondary))
                 .child(Icon::empty().path(icon).size(px(16.))),
         )
         .child(
             div()
                 .text_size(px(12.))
                 .font_weight(FontWeight(if active { 650. } else { 500. }))
-                .text_color(rgb(if active { ACTIVE_TEXT } else { SECONDARY }))
-                .group_hover(label, |this| this.text_color(rgb(ACTIVE_TEXT)))
+                .text_color(if active {
+                    theme.text_secondary
+                } else {
+                    theme.text_soft
+                })
+                .group_hover(label, |this| this.text_color(theme.text_secondary))
                 .child(label),
         )
         .on_click(move |_, _, app| {
@@ -336,22 +412,26 @@ fn render_section(
     locker: Entity<Nox>,
     settings: Settings,
     section: SettingsSection,
+    settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
+    settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
     vault_list: &VaultListModel,
     conflict_count: usize,
 ) -> AnyElement {
     match section {
         SettingsSection::Appearance => appearance_section(theme, locker, settings),
-        SettingsSection::Security => security_section(theme, locker, settings),
-        SettingsSection::Vault => vault_section(locker, vault_list, conflict_count),
-        SettingsSection::Autofill => availability_section(locker, settings, &AUTOFILL),
-        SettingsSection::Privacy => privacy_section(theme, locker, settings),
-        SettingsSection::Notifications => availability_section(locker, settings, &NOTIFICATIONS),
-        SettingsSection::ImportExport => import_export_section(locker),
-        SettingsSection::Account => account_section(),
+        SettingsSection::Security => security_section(
+            theme,
+            locker,
+            settings_auto_lock_select,
+            settings_clipboard_select,
+        ),
+        SettingsSection::Vault => vault_section(theme, locker, vault_list, conflict_count),
+        SettingsSection::Autofill => availability_section(theme, locker, settings, &AUTOFILL),
+        SettingsSection::ImportExport => import_export_section(theme, locker),
     }
 }
 
-fn section_intro(title: &'static str, description: &'static str) -> AnyElement {
+fn section_intro(theme: Theme, title: &'static str, description: &'static str) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -360,31 +440,33 @@ fn section_intro(title: &'static str, description: &'static str) -> AnyElement {
             div()
                 .text_size(px(18.))
                 .font_weight(FontWeight(600.))
-                .text_color(rgb(PRIMARY))
+                .text_color(theme.text)
                 .child(title),
         )
         .child(
             div()
                 .text_size(px(11.))
-                .text_color(rgb(MUTED))
+                .text_color(theme.text_muted)
                 .child(description),
         )
         .into_any_element()
 }
 
-fn divider() -> AnyElement {
-    div()
-        .h(px(1.))
-        .w_full()
-        .bg(rgb(0x343D48))
-        .into_any_element()
+fn divider(theme: Theme) -> AnyElement {
+    div().h(px(1.)).w_full().bg(theme.border).into_any_element()
 }
 
-fn settings_row(label: &'static str, description: &'static str, control: AnyElement) -> AnyElement {
-    settings_row_with_height(42., label, description, control)
+fn settings_row(
+    theme: Theme,
+    label: &'static str,
+    description: &'static str,
+    control: AnyElement,
+) -> AnyElement {
+    settings_row_with_height(theme, 42., label, description, control)
 }
 
 fn settings_row_with_height(
+    theme: Theme,
     height: f32,
     label: &'static str,
     description: &'static str,
@@ -400,27 +482,29 @@ fn settings_row_with_height(
             div()
                 .flex()
                 .flex_col()
+                .flex_1()
                 .gap(px(4.))
                 .min_w(px(0.))
                 .child(
                     div()
                         .text_size(px(12.))
                         .font_weight(FontWeight(550.))
-                        .text_color(rgb(0xE1E5E9))
+                        .text_color(theme.text)
                         .child(label),
                 )
                 .child(
                     div()
                         .text_size(px(10.))
-                        .text_color(rgb(NAV_LABEL))
+                        .text_color(theme.text_subtle)
                         .child(description),
                 ),
         )
-        .child(control)
+        .child(div().flex_shrink_0().child(control))
         .into_any_element()
 }
 
 fn toggle(
+    theme: Theme,
     id: &'static str,
     enabled: bool,
     locker: Entity<Nox>,
@@ -436,8 +520,8 @@ fn toggle(
         .rounded_full()
         .cursor_pointer()
         .hover(|this| this.opacity(0.82))
-        .when(enabled, |this| this.justify_end().bg(rgb(ACCENT)))
-        .when(!enabled, |this| this.justify_start().bg(rgb(0x353D48)))
+        .when(enabled, |this| this.justify_end().bg(theme.accent))
+        .when(!enabled, |this| this.justify_start().bg(theme.field_border))
         .child(div().size(px(14.)).rounded_full().bg(rgb(if enabled {
             0xFFFFFF
         } else {
@@ -460,31 +544,12 @@ where
 
 fn appearance_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> AnyElement {
     let theme_sync = toggle(
+        theme,
         "settings-sync-system",
         settings.sync_system_theme,
         locker.clone(),
         |settings| settings.sync_system_theme = !settings.sync_system_theme,
     );
-    let bright = toggle(
-        "settings-bright-colors",
-        settings.bright_colors,
-        locker.clone(),
-        |settings| settings.bright_colors = !settings.bright_colors,
-    );
-    let blur = toggle(
-        "settings-background-blur",
-        settings.background_blur,
-        locker.clone(),
-        |settings| settings.background_blur = !settings.background_blur,
-    );
-    let dim = toggle(
-        "settings-dim-inactive",
-        settings.dim_inactive_panes,
-        locker.clone(),
-        |settings| settings.dim_inactive_panes = !settings.dim_inactive_panes,
-    );
-    let opacity = opacity_control(locker.clone(), settings.transparency_percent);
-    let language = language_control(theme, locker, &settings.language);
 
     div()
         .flex()
@@ -496,323 +561,80 @@ fn appearance_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> 
                 .flex_col()
                 .gap(px(14.))
                 .child(section_intro(
+                    theme,
                     "Theme",
                     "Choose how Cipher Vault looks across your devices.",
                 ))
                 .child(settings_row(
+                    theme,
                     "Sync with system",
                     "Follow your operating system appearance automatically.",
                     theme_sync,
-                ))
-                .child(settings_row(
-                    "Legible bright colors",
-                    "Improve contrast for bright accent colors.",
-                    bright,
-                ))
-                .child(theme_card()),
-        )
-        .child(divider())
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(13.))
-                .child(
-                    div()
-                        .text_size(px(16.))
-                        .font_weight(FontWeight(650.))
-                        .text_color(rgb(PRIMARY))
-                        .child("Transparency"),
-                )
-                .child(settings_row_with_height(
-                    44.,
-                    "Opacity",
-                    "Adjust the background transparency of the vault.",
-                    opacity,
-                ))
-                .child(settings_row(
-                    "Background blur",
-                    "Blur content behind the vault window.",
-                    blur,
-                ))
-                .child(settings_row(
-                    "Dim inactive panes",
-                    "Reduce contrast in unfocused panels.",
-                    dim,
-                )),
-        )
-        .child(divider())
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .child(
-                    div()
-                        .text_size(px(16.))
-                        .font_weight(FontWeight(650.))
-                        .text_color(rgb(PRIMARY))
-                        .child("Language"),
-                )
-                .child(settings_row_with_height(
-                    44.,
-                    "Interface language",
-                    "Choose the language used throughout Cipher Vault.",
-                    language,
                 )),
         )
         .into_any_element()
 }
 
-fn theme_card() -> AnyElement {
-    div()
-        .h(px(94.))
-        .p(px(12.))
-        .flex()
-        .items_center()
-        .gap(px(16.))
-        .rounded(px(8.))
-        .bg(rgb(SURFACE))
-        .border_1()
-        .border_color(rgb(INPUT_BORDER))
-        .child(
-            div()
-                .w(px(150.))
-                .h(px(68.))
-                .p(px(11.))
-                .flex()
-                .flex_col()
-                .gap(px(7.))
-                .rounded(px(6.))
-                .bg(rgb(0x181D25))
-                .child(div().w(px(66.)).h(px(4.)).rounded(px(2.)).bg(rgb(0xDDE8EE)))
-                .child(div().w(px(48.)).h(px(4.)).rounded(px(2.)).bg(rgb(0x66B5E5)))
-                .child(div().w(px(78.)).h(px(4.)).rounded(px(2.)).bg(rgb(0xA8C2D1)))
-                .child(div().w(px(30.)).h(px(4.)).rounded(px(2.)).bg(rgb(0x58C99A))),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .gap(px(6.))
-                .child(
-                    div()
-                        .text_size(px(9.))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(0x77818E))
-                        .child("BUILT-IN · DARK"),
-                )
-                .child(
-                    div()
-                        .text_size(px(14.))
-                        .font_weight(FontWeight(650.))
-                        .text_color(rgb(0xF0F3F5))
-                        .child("Cipher Midnight"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(5.))
-                        .child(div().size(px(9.)).rounded(px(3.)).bg(rgb(ACCENT)))
-                        .child(div().size(px(9.)).rounded(px(3.)).bg(rgb(0x65B58D)))
-                        .child(div().size(px(9.)).rounded(px(3.)).bg(rgb(0xD2B45B)))
-                        .child(div().size(px(9.)).rounded(px(3.)).bg(rgb(0x9B7BD7)))
-                        .child(div().size(px(9.)).rounded(px(3.)).bg(rgb(0xD96B76))),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(7.))
-                .text_size(px(11.))
-                .font_weight(FontWeight(550.))
-                .text_color(rgb(0x9ECBE7))
-                .child("Change theme")
-                .child(
-                    Icon::new(IconName::ChevronRight)
-                        .size(px(14.))
-                        .text_color(rgb(0x78B8DE)),
-                ),
-        )
-        .into_any_element()
-}
-
-fn opacity_control(locker: Entity<Nox>, value: u8) -> AnyElement {
-    let rail_width = 196.;
-    let knob = ((value.saturating_sub(60) as f32 / 40.) * rail_width).round();
-    div()
-        .id("settings-opacity")
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .cursor_pointer()
-        .hover(|this| this.opacity(0.82))
-        .child(
-            div()
-                .w(px(210.))
-                .h(px(16.))
-                .relative()
-                .flex()
-                .items_center()
-                .child(
-                    div()
-                        .absolute()
-                        .w_full()
-                        .h(px(4.))
-                        .rounded(px(2.))
-                        .bg(rgb(0x3A434E)),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(knob))
-                        .top(px(1.))
-                        .w(px(14.))
-                        .h(px(14.))
-                        .rounded_full()
-                        .bg(rgb(0xDDECF5))
-                        .border_1()
-                        .border_color(rgb(0x6FAED4)),
-                ),
-        )
-        .child(
-            div()
-                .text_size(px(10.))
-                .font_weight(FontWeight(650.))
-                .text_color(rgb(0xDDE5EB))
-                .child(format!("{value}%")),
-        )
-        .on_click(move |_, window, app| {
-            update_settings(locker.clone(), window, app, |settings| {
-                settings.transparency_percent = if settings.transparency_percent >= 100 {
-                    60
-                } else {
-                    settings.transparency_percent + 4
-                };
-            });
-        })
-        .into_any_element()
-}
-
-fn language_control(theme: Theme, locker: Entity<Nox>, language: &str) -> AnyElement {
-    let label = language.to_owned();
-    div()
-        .id("settings-language")
-        .w(px(190.))
-        .h(px(36.))
-        .px(px(11.))
-        .flex()
-        .items_center()
-        .justify_between()
-        .rounded(px(7.))
-        .cursor_pointer()
-        .hover(|this| this.bg(theme.row_hover))
-        .bg(rgb(INPUT))
-        .border_1()
-        .border_color(rgb(INPUT_BORDER))
-        .child(
-            div()
-                .text_size(px(11.))
-                .font_weight(FontWeight(550.))
-                .text_color(rgb(0xDDE3E8))
-                .child(label),
-        )
-        .child(
-            Icon::new(IconName::ChevronDown)
-                .size(px(14.))
-                .text_color(rgb(0x7E8995)),
-        )
-        .on_click(move |_, window, app| {
-            update_settings(locker.clone(), window, app, |settings| {
-                settings.language = if settings.language == "English" {
-                    "Español".into()
-                } else {
-                    "English".into()
-                };
-            });
-        })
-        .into_any_element()
-}
-
-fn security_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> AnyElement {
-    let auto_lock = duration_control(
-        theme,
-        "settings-auto-lock",
-        locker.clone(),
-        settings.auto_lock_seconds,
-        |settings| &mut settings.auto_lock_seconds,
-    );
-    let clipboard = duration_control(
-        theme,
-        "settings-clipboard-clear",
-        locker,
-        settings.clipboard_seconds,
-        |settings| &mut settings.clipboard_seconds,
-    );
+fn security_section(
+    theme: Theme,
+    locker: Entity<Nox>,
+    settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
+    settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
+) -> AnyElement {
+    let auto_lock = duration_control(theme, settings_auto_lock_select);
+    let clipboard = duration_control(theme, settings_clipboard_select);
     div()
         .flex()
         .flex_col()
         .gap(px(22.))
         .child(section_intro(
+            theme,
             "Security",
             "Keep the vault protected when you step away.",
         ))
         .child(settings_row(
+            theme,
             "Lock after inactivity",
             "Nox locks automatically after this period without activity.",
             auto_lock,
         ))
-        .child(divider())
+        .child(divider(theme))
         .child(settings_row(
+            theme,
             "Clear copied secrets",
             "Secrets copied from Nox are removed from the clipboard automatically.",
             clipboard,
+        ))
+        .child(divider(theme))
+        .child(settings_row(
+            theme,
+            "Change vault password",
+            "Update the password used to unlock this vault.",
+            action_button(
+                "settings-change-password",
+                "Change password",
+                move |window, app| {
+                    locker.update(app, |locker, cx| locker.begin_change_password(window, cx));
+                },
+            ),
         ))
         .into_any_element()
 }
 
 fn duration_control(
     theme: Theme,
-    id: &'static str,
-    locker: Entity<Nox>,
-    seconds: u64,
-    field: fn(&mut Settings) -> &mut u64,
+    select: Entity<SelectState<SettingsDurationDelegate>>,
 ) -> AnyElement {
-    div()
-        .id(id)
+    Select::new(&select)
+        .appearance(false)
+        .menu_width(px(150.))
         .w(px(120.))
         .h(px(36.))
         .px(px(11.))
-        .flex()
-        .items_center()
-        .justify_between()
-        .rounded(px(7.))
-        .cursor_pointer()
-        .hover(|this| this.bg(theme.row_hover))
-        .bg(rgb(INPUT))
+        .bg(theme.field)
         .border_1()
-        .border_color(rgb(INPUT_BORDER))
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(rgb(PRIMARY))
-                .child(format_duration(seconds)),
-        )
-        .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child("⌄"))
-        .on_click(move |_, window, app| {
-            update_settings(locker.clone(), window, app, move |settings| {
-                let value = field(settings);
-                *value = match *value {
-                    30 => 60,
-                    60 => 300,
-                    300 => 900,
-                    900 => 1800,
-                    _ => 30,
-                };
-            });
-        })
+        .border_color(theme.field_border)
+        .rounded(px(7.))
         .into_any_element()
 }
 
@@ -835,6 +657,7 @@ fn format_duration(seconds: u64) -> String {
 /// rest made every row read as already hovered, and would now be
 /// indistinguishable from a row under the cursor.
 fn vault_row(
+    theme: Theme,
     locker: Entity<Nox>,
     index: usize,
     vault: &VaultEntry,
@@ -846,14 +669,14 @@ fn vault_row(
     let missing = !vault.path.is_file();
     let group = SharedString::from(format!("settings-vault-row-{index}"));
     let name_color = if missing {
-        SEARCH_PLACEHOLDER
+        theme.text_ghost
     } else {
-        0xE1E5E9
+        theme.text
     };
     let meta_color = if missing {
-        SEARCH_PLACEHOLDER
+        theme.text_ghost
     } else {
-        NAV_LABEL
+        theme.text_subtle
     };
     let initials: String = vault
         .name
@@ -888,12 +711,12 @@ fn vault_row(
         .p(px(12.))
         .rounded(px(8.))
         .group(group.clone())
-        .bg(rgb(INPUT))
+        .bg(theme.field)
         // The 1px box is always there, transparent at rest: revealing a border
         // on hover would otherwise shift every row by a pixel.
         .border_1()
         .border_color(rgba(0x00000000))
-        .hover(|row| row.bg(rgb(ACTIVE)).border_color(rgb(ACTIVE_BORDER)))
+        .hover(|row| row.bg(theme.raised).border_color(theme.smart_field_border))
         .child(
             div()
                 .size(px(32.))
@@ -901,19 +724,19 @@ fn vault_row(
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .bg(rgb(ACTIVE))
+                .bg(theme.raised)
                 // Without this the avatar dissolves into the hovered row,
                 // which lifts to the same colour.
-                .group_hover(group.clone(), |avatar| avatar.bg(rgb(ACTIVE_BORDER)))
+                .group_hover(group.clone(), |avatar| avatar.bg(theme.smart_field_border))
                 .child(
                     div()
                         .text_size(px(10.))
                         .font_weight(FontWeight(700.))
-                        .text_color(rgb(if missing {
-                            SEARCH_PLACEHOLDER
+                        .text_color(if missing {
+                            theme.text_ghost
                         } else {
-                            0xDDE3E8
-                        }))
+                            theme.text_soft
+                        })
                         .child(initials),
                 ),
         )
@@ -932,7 +755,7 @@ fn vault_row(
                             div()
                                 .text_size(px(12.))
                                 .font_weight(FontWeight(550.))
-                                .text_color(rgb(name_color))
+                                .text_color(name_color)
                                 .child(name.clone()),
                         )
                         .when(active, |row| {
@@ -943,25 +766,20 @@ fn vault_row(
                                     .flex()
                                     .items_center()
                                     .rounded(px(4.))
-                                    .bg(rgb(ACTIVE))
+                                    .bg(theme.raised)
                                     .border_1()
-                                    .border_color(rgb(ACTIVE_BORDER))
+                                    .border_color(theme.smart_field_border)
                                     .child(
                                         div()
                                             .text_size(px(8.))
                                             .font_weight(FontWeight(700.))
-                                            .text_color(rgb(ACTIVE_TEXT))
+                                            .text_color(theme.text_secondary)
                                             .child("ACTIVE"),
                                     ),
                             )
                         }),
                 )
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(rgb(meta_color))
-                        .child(meta),
-                ),
+                .child(div().text_size(px(10.)).text_color(meta_color).child(meta)),
         )
         // A vault whose file is gone cannot be meaningfully renamed, so the
         // action is not offered for it — removing it is the only thing left
@@ -979,13 +797,13 @@ fn vault_row(
                         Icon::empty()
                             .path("icons/pencil.svg")
                             .size(px(13.))
-                            .text_color(rgb(MUTED)),
+                            .text_color(theme.text_muted),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
                             .font_weight(FontWeight(550.))
-                            .text_color(rgb(SECONDARY))
+                            .text_color(theme.text_soft)
                             .child("Rename"),
                     )
                     .on_click(move |_, window, app| {
@@ -1009,13 +827,13 @@ fn vault_row(
                     Icon::empty()
                         .path("icons/circle-x.svg")
                         .size(px(13.))
-                        .text_color(rgb(MUTED)),
+                        .text_color(theme.text_muted),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
                         .font_weight(FontWeight(550.))
-                        .text_color(rgb(SECONDARY))
+                        .text_color(theme.text_soft)
                         .child("Remove"),
                 )
                 .on_click(move |_, window, app| {
@@ -1028,6 +846,7 @@ fn vault_row(
 }
 
 fn vault_section(
+    theme: Theme,
     locker: Entity<Nox>,
     vault_list: &VaultListModel,
     conflict_count: usize,
@@ -1041,12 +860,14 @@ fn vault_section(
         .flex_col()
         .gap(px(22.))
         .child(section_intro(
+            theme,
             "Vault",
             "Manage the encrypted vaults stored on this device.",
         ))
         .child(div().flex().flex_col().gap(px(8.)).w_full().children(
             vault_list.entries.iter().enumerate().map(|(index, vault)| {
                 vault_row(
+                    theme,
                     rows_locker.clone(),
                     index,
                     vault,
@@ -1055,8 +876,9 @@ fn vault_section(
                 )
             }),
         ))
-        .child(divider())
+        .child(divider(theme))
         .child(settings_row(
+            theme,
             "Backups",
             "Export a recovery copy or restore one safely.",
             div()
@@ -1078,8 +900,9 @@ fn vault_section(
                 ))
                 .into_any_element(),
         ))
-        .child(divider())
+        .child(divider(theme))
         .child(settings_row(
+            theme,
             "Conflicts",
             "Review changes that need your decision.",
             action_button(
@@ -1096,7 +919,7 @@ fn vault_section(
         .into_any_element()
 }
 
-fn import_export_section(locker: Entity<Nox>) -> AnyElement {
+fn import_export_section(theme: Theme, locker: Entity<Nox>) -> AnyElement {
     let export = locker.clone();
     let restore = locker;
     div()
@@ -1104,10 +927,12 @@ fn import_export_section(locker: Entity<Nox>) -> AnyElement {
         .flex_col()
         .gap(px(22.))
         .child(section_intro(
+            theme,
             "Import & export",
             "Move encrypted backups without exposing your vault.",
         ))
         .child(settings_row(
+            theme,
             "Export encrypted backup",
             "Create a portable, password-protected recovery copy.",
             action_button(
@@ -1118,8 +943,9 @@ fn import_export_section(locker: Entity<Nox>) -> AnyElement {
                 },
             ),
         ))
-        .child(divider())
+        .child(divider(theme))
         .child(settings_row(
+            theme,
             "Restore encrypted backup",
             "Replace this vault after confirming the backup password.",
             action_button(
@@ -1146,32 +972,6 @@ fn action_button(
         .into_any_element()
 }
 
-fn privacy_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> AnyElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(22.))
-        .child(section_intro("Privacy", "Reduce the amount of secret data left visible on screen."))
-        .child(settings_row(
-            "Clear copied secrets",
-            "Remove copied credentials from the clipboard after the selected delay.",
-            duration_control(theme, "settings-privacy-clipboard", locker, settings.clipboard_seconds, |settings| &mut settings.clipboard_seconds),
-        ))
-        .child(divider())
-        .child(
-            div()
-                .rounded(px(8.))
-                .p(px(14.))
-                .bg(rgb(SURFACE))
-                .border_1()
-                .border_color(rgb(INPUT_BORDER))
-                .text_size(px(11.))
-                .text_color(rgb(MUTED))
-                .child("Nox does not send vault contents, search terms, or copied secrets to any account service."),
-        )
-        .into_any_element()
-}
-
 /// A capability this build does not have, described in one place.
 ///
 /// The four strings and the two `fn` pointers all describe the same
@@ -1179,7 +979,7 @@ fn privacy_section(theme: Theme, locker: Entity<Nox>, settings: Settings) -> Any
 /// one is a `const` rather than six positional arguments. It also makes a bug
 /// class unrepresentable: `read` and `toggle` used to be loose pointers passed
 /// four arguments away from the copy they belong to, so nothing stopped a
-/// caller pairing Autofill's strings with Notifications' toggle.
+/// caller from pairing the wrong strings with the wrong toggle.
 struct UnavailableCapability {
     title: &'static str,
     subtitle: &'static str,
@@ -1198,17 +998,8 @@ const AUTOFILL: UnavailableCapability = UnavailableCapability {
     toggle: |settings| settings.autofill_enabled = !settings.autofill_enabled,
 };
 
-const NOTIFICATIONS: UnavailableCapability = UnavailableCapability {
-    title: "Notifications",
-    subtitle: "Stay informed without exposing vault data",
-    unavailable: "System notifications are unavailable until Nox has an operating-system \
-                  notification service.",
-    label: "Enable desktop notifications when available",
-    read: |settings| settings.notifications_enabled,
-    toggle: |settings| settings.notifications_enabled = !settings.notifications_enabled,
-};
-
 fn availability_section(
+    theme: Theme,
     locker: Entity<Nox>,
     settings: Settings,
     capability: &UnavailableCapability,
@@ -1226,40 +1017,18 @@ fn availability_section(
         .flex()
         .flex_col()
         .gap(px(22.))
-        .child(section_intro(title, subtitle))
-        .child(settings_row(label, unavailable, toggle("settings-availability", enabled, locker, change)))
+        .child(section_intro(theme, title, subtitle))
+        .child(settings_row(theme, label, unavailable, toggle(theme, "settings-availability", enabled, locker, change)))
         .child(
             div()
                 .rounded(px(8.))
                 .p(px(14.))
-                .bg(rgb(SURFACE))
+                .bg(theme.surface)
                 .border_1()
-                .border_color(rgb(INPUT_BORDER))
+                .border_color(theme.field_border)
                 .text_size(px(11.))
-                .text_color(rgb(MUTED))
+                .text_color(theme.text_muted)
                 .child("Your preference is saved locally and will be used when this capability is available."),
-        )
-        .into_any_element()
-}
-
-fn account_section() -> AnyElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(22.))
-        .child(section_intro("Account", "Nox is local-first and this vault is not connected to an account."))
-        .child(
-            div()
-                .rounded(px(8.))
-                .p(px(16.))
-                .flex()
-                .flex_col()
-                .gap(px(6.))
-                .bg(rgb(SURFACE))
-                .border_1()
-                .border_color(rgb(INPUT_BORDER))
-                .child(div().text_size(px(12.)).text_color(rgb(PRIMARY)).child("No account connected"))
-                .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child("Your vault remains encrypted on this device. Account sync is not part of this build.")),
         )
         .into_any_element()
 }
@@ -1276,6 +1045,123 @@ mod tests {
 
         assert!(!production_source.contains("const BACKGROUND"));
         assert!(production_source.contains(".bg(theme.canvas)"));
-        assert!(production_source.contains("render_navigation(theme, locker.clone(), section)"));
+        assert!(production_source.contains("render_navigation("));
+        assert!(production_source.contains("settings_query"));
+    }
+
+    #[test]
+    fn appearance_section_only_exposes_system_theme_sync() {
+        let source = include_str!("dialog.rs");
+        let appearance = source
+            .split("fn appearance_section")
+            .nth(1)
+            .expect("appearance section")
+            .split("fn theme_card")
+            .next()
+            .expect("appearance section body");
+
+        assert!(appearance.contains("Sync with system"));
+        for removed_setting in [
+            "Legible bright colors",
+            "Transparency",
+            "Opacity",
+            "Background blur",
+            "Dim inactive panes",
+            "Language",
+            "Interface language",
+        ] {
+            assert!(
+                !appearance.contains(removed_setting),
+                "Appearance should not expose {removed_setting}"
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_section_is_removed_and_rows_keep_controls_right_aligned() {
+        let source = include_str!("dialog.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+        let settings_row = production_source
+            .split("fn settings_row_with_height")
+            .nth(1)
+            .expect("settings row")
+            .split("fn toggle")
+            .next()
+            .expect("settings row body");
+
+        assert!(!production_source.contains("SettingsSection::Privacy"));
+        assert!(!production_source.contains("fn privacy_section"));
+        assert!(!production_source.contains("Privacy",));
+        assert!(settings_row.contains(".flex_1()"));
+        assert!(settings_row.contains(".flex_shrink_0()"));
+    }
+
+    #[test]
+    fn security_duration_controls_render_selects_instead_of_cycling_on_click() {
+        let source = include_str!("dialog.rs");
+        let duration_control = source
+            .split("fn duration_control")
+            .nth(1)
+            .expect("duration control")
+            .split("fn format_duration")
+            .next()
+            .expect("duration control body");
+
+        assert!(duration_control.contains("Select::new(&select)"));
+        assert!(duration_control.contains("menu_width"));
+        assert!(duration_control.contains("appearance(false)"));
+        assert!(!duration_control.contains("on_click"));
+        assert!(!duration_control.contains("30 => 60"));
+        assert!(!duration_control.contains("60 => 300"));
+    }
+
+    #[test]
+    fn settings_search_is_a_real_input_and_filters_navigation() {
+        let source = include_str!("dialog.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+
+        assert!(production_source.contains("settings_search"));
+        assert!(production_source.contains("Input::new(&settings_search)"));
+        assert!(production_source.contains("settings_query"));
+        assert!(production_source.contains("label.to_lowercase().contains(&settings_query)"));
+    }
+
+    #[test]
+    fn settings_dialog_uses_theme_tokens_for_app_chrome() {
+        let source = include_str!("dialog.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+
+        for raw_role in [
+            "const SURFACE",
+            "const INPUT",
+            "const BORDER",
+            "const INPUT_BORDER",
+            "const PRIMARY",
+            "const SECONDARY",
+            "const MUTED",
+            "const ACTIVE",
+            "const ACTIVE_BORDER",
+            "const ACTIVE_TEXT",
+            "const ACTIVE_ICON",
+            "const ACCENT",
+            "const NAV_LABEL",
+            "const SEARCH_BORDER",
+            "const SEARCH_ICON",
+            "const SEARCH_PLACEHOLDER",
+        ] {
+            assert!(
+                !production_source.contains(raw_role),
+                "{raw_role} should use Theme"
+            );
+        }
     }
 }

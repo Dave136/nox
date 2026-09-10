@@ -4,7 +4,9 @@ pub use crate::clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
 use crate::conflicts::ConflictState;
 use crate::item_editor::{self, ItemEditorState};
 use crate::nav::ActiveView;
-use crate::settings::{self, Settings, SettingsSection, load_settings, save_settings};
+use crate::settings::{
+    self, Settings, SettingsDurationDelegate, SettingsSection, load_settings, save_settings,
+};
 use crate::theme::{APP_FONT_FAMILY, Theme};
 use crate::ui::window::controls::{OpenCommandPalette, WindowCommand, WindowControls};
 use crate::vault_list::VaultListState;
@@ -529,6 +531,13 @@ pub(crate) struct RenameVaultDialogState {
     pub(crate) error: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct ChangePasswordDialogState {
+    pub(crate) current: Entity<InputState>,
+    pub(crate) new_password: Entity<InputState>,
+    pub(crate) confirm: Entity<InputState>,
+}
+
 /// Root Nox view for vault creation, unlock, and lock lifecycle actions.
 pub struct Nox {
     pub(crate) state: AppState,
@@ -565,6 +574,11 @@ pub struct Nox {
     pub(crate) window_controls: Entity<WindowControls>,
     pub(crate) settings: Settings,
     pub(crate) settings_section: SettingsSection,
+    pub(crate) settings_search: Entity<InputState>,
+    pub(crate) settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
+    pub(crate) _settings_auto_lock_subscription: Subscription,
+    pub(crate) settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
+    pub(crate) _settings_clipboard_subscription: Subscription,
     pub(crate) settings_open: bool,
     pub(crate) remove_vault_dialog: Option<RemoveVaultDialogState>,
     pub(crate) rename_vault_dialog: Option<RenameVaultDialogState>,
@@ -577,6 +591,13 @@ pub struct Nox {
     pub(crate) remove_vault_cancel_focus: FocusHandle,
     pub(crate) remove_vault_confirm_focus: FocusHandle,
     pub(crate) remove_vault_prior_focus: Option<FocusHandle>,
+    pub(crate) change_password_dialog: Option<ChangePasswordDialogState>,
+    pub(crate) change_password_state: FormState,
+    pub(crate) _change_password_task: Task<()>,
+    pub(crate) change_password_dialog_focus: FocusHandle,
+    pub(crate) change_password_cancel_focus: FocusHandle,
+    pub(crate) change_password_confirm_focus: FocusHandle,
+    pub(crate) change_password_prior_focus: Option<FocusHandle>,
     /// Hover state per animated button id. Keyed by `String` rather than
     /// `&'static str` so per-row buttons (the Trash list) can take part too.
     pub(crate) auth_hovered: HashMap<String, bool>,
@@ -663,8 +684,63 @@ impl Nox {
         let create_password = Self::new_input(window, cx, "Create a strong password", true);
         let create_confirm = Self::new_input(window, cx, "Re-enter your master password", true);
         let unlock_password = Self::new_input(window, cx, "Password", true);
+        let settings_search = Self::new_input(window, cx, "Search settings…", false);
         let locker = cx.weak_entity();
         let settings = load_settings(&data_dir);
+        let settings_auto_lock_select = cx.new(|cx| {
+            SelectState::new(
+                SettingsDurationDelegate::new(settings::AUTO_LOCK_DURATIONS),
+                settings::settings_duration_index(
+                    settings::AUTO_LOCK_DURATIONS,
+                    settings.auto_lock_seconds,
+                ),
+                window,
+                cx,
+            )
+        });
+        let _settings_auto_lock_subscription = cx.subscribe_in(
+            &settings_auto_lock_select,
+            window,
+            |this: &mut Self,
+             _select,
+             event: &SelectEvent<SettingsDurationDelegate>,
+             window,
+             cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(seconds) = value {
+                    let mut settings = this.settings.clone();
+                    settings.auto_lock_seconds = *seconds;
+                    this.update_settings(settings, window, cx);
+                }
+            },
+        );
+        let settings_clipboard_select = cx.new(|cx| {
+            SelectState::new(
+                SettingsDurationDelegate::new(settings::CLIPBOARD_DURATIONS),
+                settings::settings_duration_index(
+                    settings::CLIPBOARD_DURATIONS,
+                    settings.clipboard_seconds,
+                ),
+                window,
+                cx,
+            )
+        });
+        let _settings_clipboard_subscription = cx.subscribe_in(
+            &settings_clipboard_select,
+            window,
+            |this: &mut Self,
+             _select,
+             event: &SelectEvent<SettingsDurationDelegate>,
+             window,
+             cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(seconds) = value {
+                    let mut settings = this.settings.clone();
+                    settings.clipboard_seconds = *seconds;
+                    this.update_settings(settings, window, cx);
+                }
+            },
+        );
         let local_icon_selections = crate::icons::load_local_selections(&data_dir);
         let window_controls = cx.new(|cx| {
             WindowControls::new(window, cx).with_command_handler(move |command, window, app| {
@@ -701,6 +777,11 @@ impl Nox {
             window_controls,
             settings,
             settings_section: SettingsSection::Appearance,
+            settings_search,
+            settings_auto_lock_select,
+            _settings_auto_lock_subscription,
+            settings_clipboard_select,
+            _settings_clipboard_subscription,
             settings_open: false,
             remove_vault_dialog: None,
             rename_vault_dialog: None,
@@ -713,6 +794,13 @@ impl Nox {
             remove_vault_cancel_focus: cx.focus_handle().tab_stop(true),
             remove_vault_confirm_focus: cx.focus_handle().tab_stop(true),
             remove_vault_prior_focus: None,
+            change_password_dialog: None,
+            change_password_state: FormState::Idle,
+            _change_password_task: Task::ready(()),
+            change_password_dialog_focus: cx.focus_handle(),
+            change_password_cancel_focus: cx.focus_handle().tab_stop(true),
+            change_password_confirm_focus: cx.focus_handle().tab_stop(true),
+            change_password_prior_focus: None,
             auth_hovered: HashMap::new(),
             detail_revealed_copy_blocks: BTreeSet::new(),
             editor_blur_subscriptions: Vec::new(),
@@ -1284,6 +1372,10 @@ impl Render for Nox {
                 cx.entity(),
                 self.settings.clone(),
                 self.settings_section,
+                self.settings_search.clone(),
+                self.settings_search.read(cx).value().to_string(),
+                self.settings_auto_lock_select.clone(),
+                self.settings_clipboard_select.clone(),
                 &settings::VaultListModel {
                     entries: self.vaults.vaults.clone(),
                     active_id: self.active_vault.as_ref().map(|vault| vault.id.clone()),
@@ -1293,6 +1385,7 @@ impl Render for Nox {
         });
         let remove_vault_modal = self.render_remove_vault_dialog(cx);
         let rename_vault_modal = self.render_rename_vault_dialog(cx);
+        let change_password_modal = self.render_change_password_dialog(cx);
         rsx! {
             <div
                 size_full
@@ -1316,6 +1409,9 @@ impl Render for Nox {
                     {modal}
                 }}
                 {for modal in rename_vault_modal {
+                    {modal}
+                }}
+                {for modal in change_password_modal {
                     {modal}
                 }}
                 {for dialog in dialog_layer {
@@ -1906,6 +2002,149 @@ mod tests {
         let input = view.read_with(cx, |locker, _| locker.create_password.clone());
         assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
         assert!(!path.exists());
+        cleanup(&path);
+    }
+
+    fn set_change_password_inputs(
+        view: &Entity<Nox>,
+        cx: &mut VisualTestContext,
+        current: &str,
+        new_password: &str,
+        confirm: &str,
+    ) {
+        view.update_in(cx, |locker, window, locker_cx| {
+            let dialog = locker
+                .change_password_dialog
+                .clone()
+                .expect("change password dialog is open");
+            dialog.current.update(locker_cx, |input, input_cx| {
+                input.set_value(current.to_owned(), window, input_cx);
+            });
+            dialog.new_password.update(locker_cx, |input, input_cx| {
+                input.set_value(new_password.to_owned(), window, input_cx);
+            });
+            dialog.confirm.update(locker_cx, |input, input_cx| {
+                input.set_value(confirm.to_owned(), window, input_cx);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn change_password_rejects_empty_current_password(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("change-password-empty-current");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |nox, window, cx| {
+            nox.state = unlocked_state(vault, window, cx);
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.begin_change_password(window, locker_cx);
+        });
+        set_change_password_inputs(&view, cx, "", "new-password", "new-password");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.submit_change_password(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.change_password_state.clone()),
+            FormState::Error("Enter your current password.".into())
+        );
+        assert!(view.read_with(cx, |locker, _| locker.change_password_dialog.is_some()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn change_password_rejects_empty_new_password(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("change-password-empty-new");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |nox, window, cx| {
+            nox.state = unlocked_state(vault, window, cx);
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.begin_change_password(window, locker_cx);
+        });
+        set_change_password_inputs(&view, cx, "correct", "", "");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.submit_change_password(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.change_password_state.clone()),
+            FormState::Error("Enter a new password.".into())
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn change_password_rejects_mismatched_confirmation(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("change-password-mismatch");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |nox, window, cx| {
+            nox.state = unlocked_state(vault, window, cx);
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.begin_change_password(window, locker_cx);
+        });
+        set_change_password_inputs(&view, cx, "correct", "new-password", "different");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.submit_change_password(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.change_password_state.clone()),
+            FormState::Error("Passwords do not match.".into())
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn change_password_rejects_short_new_password(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("change-password-short");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |nox, window, cx| {
+            nox.state = unlocked_state(vault, window, cx);
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.begin_change_password(window, locker_cx);
+        });
+        set_change_password_inputs(&view, cx, "correct", "short", "short");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.submit_change_password(window, locker_cx);
+        });
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.change_password_state.clone()),
+            FormState::Error("Password must be at least 8 characters.".into())
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn change_password_succeeds_and_closes_the_dialog(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("change-password-success");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |nox, window, cx| {
+            nox.state = unlocked_state(vault, window, cx);
+        });
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.begin_change_password(window, locker_cx);
+        });
+        set_change_password_inputs(&view, cx, "correct", "new-password", "new-password");
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.submit_change_password(window, locker_cx);
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |locker, _| locker.change_password_dialog.is_none()));
+        assert_eq!(
+            view.read_with(cx, |locker, _| locker.change_password_state.clone()),
+            FormState::Idle
+        );
+        assert!(Vault::unlock(b"new-password", &path).is_ok());
         cleanup(&path);
     }
 

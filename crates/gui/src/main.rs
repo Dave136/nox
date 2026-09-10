@@ -1,6 +1,7 @@
 mod app;
 mod assets;
 mod backup;
+mod change_password;
 mod clipboard;
 mod conflicts;
 mod detail;
