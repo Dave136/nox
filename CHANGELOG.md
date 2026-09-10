@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## v0.1.2 - 2026-09-10
+
+### Added
+- Interactive CLI menu for release selection and navigation via arrow keys.
+- Automatic versioning and changelog generation based on Conventional Commits.
+- Support for `Cargo.toml` version updates and release rendering.
+- Git remote URL parsing and environment precondition checks.
+
+### Fixed
+- Improved CLI stability, arguments validation, TTY handling, and error reporting.
 ## v0.1.1 - 2026-09-10
 
 ### Added
