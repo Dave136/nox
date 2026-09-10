@@ -282,6 +282,19 @@ function runAudit(): void {
   console.log("audit OK");
 }
 
+async function selectVersion(
+  cargoToml: string,
+): Promise<{ kind: BumpKind; current: Version; next: Version }> {
+  const current = parseVersion(cargoToml);
+  const kinds: BumpKind[] = ["patch", "minor", "major"];
+  const labels = kinds.map(
+    (kind) => `${kind.padEnd(5)} (${formatVersion(current)} → ${formatVersion(bumpVersion(current, kind))})`,
+  );
+  const index = await select("Select release type:", labels);
+  const kind = kinds[index];
+  return { kind, current, next: bumpVersion(current, kind) };
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
