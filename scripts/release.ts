@@ -2,6 +2,26 @@
 
 import assert from "node:assert";
 
+// Coherent, minimal color scheme (no dependency — raw ANSI codes), disabled
+// when NO_COLOR is set or output isn't a real terminal (piped/redirected).
+// Meaning is consistent everywhere it's used: green = success, red = error,
+// yellow = warning/caution, cyan = informational/progress, gray = decorative.
+const supportsColor = !process.env.NO_COLOR && process.stdout.isTTY === true;
+
+function paint(code: string, text: string): string {
+  return supportsColor ? `\x1b[${code}m${text}\x1b[0m` : text;
+}
+
+const color = {
+  bold: (s: string) => paint("1", s),
+  dim: (s: string) => paint("2", s),
+  red: (s: string) => paint("31", s),
+  green: (s: string) => paint("32", s),
+  yellow: (s: string) => paint("33", s),
+  cyan: (s: string) => paint("36", s),
+  gray: (s: string) => paint("90", s),
+};
+
 type Version = { major: number; minor: number; patch: number };
 type BumpKind = "major" | "minor" | "patch";
 type ParsedCommit = { type: string; scope: string | null; breaking: boolean; text: string };
@@ -198,9 +218,12 @@ async function select(title: string, options: string[]): Promise<number> {
     let index = 0;
 
     function render() {
-      console.log(title);
+      // Always prints exactly one title line (even when `title` is ""), so
+      // clear()'s line count below stays in sync with what render() emits.
+      console.log(color.bold(title));
       for (const [i, option] of options.entries()) {
-        console.log(`${i === index ? ">" : " "} ${option}`);
+        const line = `${i === index ? ">" : " "} ${option}`;
+        console.log(i === index ? color.cyan(color.bold(line)) : color.dim(line));
       }
     }
 
@@ -284,17 +307,17 @@ function checkPreconditions(): void {
     throw new Error(`local main is ${behind} commit(s) behind origin/main — pull first`);
   }
 
-  console.log("preconditions OK: on main, clean, up to date with origin/main");
+  console.log(color.green("preconditions OK: on main, clean, up to date with origin/main"));
 }
 
 function runAudit(): void {
-  console.log("running cargo fmt --check...");
+  console.log(color.cyan("running cargo fmt --check..."));
   run(["cargo", "fmt", "--all", "--", "--check"]);
-  console.log("running cargo clippy...");
+  console.log(color.cyan("running cargo clippy..."));
   run(["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]);
-  console.log("running cargo test...");
+  console.log(color.cyan("running cargo test..."));
   run(["cargo", "test", "--workspace"]);
-  console.log("audit OK");
+  console.log(color.green("audit OK"));
 }
 
 async function selectVersion(
@@ -347,9 +370,9 @@ async function resolveChangelogBody(changelog: string): Promise<string> {
   }
 
   while (true) {
-    console.log("──── CHANGELOG draft ────");
+    console.log(color.gray("──── CHANGELOG draft ────"));
     console.log(body.trim());
-    console.log("─────────────────────────");
+    console.log(color.gray("─────────────────────────"));
     const choice = await select("", ["Continue", "Open in editor"]);
     if (choice === 0) {
       return body;
@@ -362,7 +385,9 @@ async function resolveChangelogBody(changelog: string): Promise<string> {
       run([editorProgram, ...editorArgs, tmpPath], { allowFailure: true });
     } catch (err) {
       console.error(
-        `Could not open editor '${editor}': ${err instanceof Error ? err.message : String(err)}. Returning to the preview without changes.`,
+        color.yellow(
+          `Could not open editor '${editor}': ${err instanceof Error ? err.message : String(err)}. Returning to the preview without changes.`,
+        ),
       );
       continue;
     }
@@ -392,14 +417,15 @@ async function writeCommitAndTag(
   const releasedChangelog = renderChangelogRelease(changelog, version, date, changelogBody);
 
   if (dryRun) {
-    console.log("=== dry run: Cargo.toml would become ===");
+    const note = (line: string) => console.log(color.cyan(line));
+    note("=== dry run: Cargo.toml would become ===");
     console.log(bumpedToml);
-    console.log("=== dry run: CHANGELOG.md's new section ===");
+    note("=== dry run: CHANGELOG.md's new section ===");
     console.log(`## v${version} - ${date}\n\n${changelogBody}`);
-    console.log(`=== dry run: would run \`cargo check --workspace --quiet\` to sync Cargo.lock ===`);
-    console.log(`=== dry run: would run \`git add Cargo.toml Cargo.lock CHANGELOG.md\` ===`);
-    console.log(`=== dry run: would run \`git commit -m "chore(release): ${tag}"\` ===`);
-    console.log(`=== dry run: would run \`git tag -a ${tag} -m "${tag}"\` ===`);
+    note(`=== dry run: would run \`cargo check --workspace --quiet\` to sync Cargo.lock ===`);
+    note(`=== dry run: would run \`git add Cargo.toml Cargo.lock CHANGELOG.md\` ===`);
+    note(`=== dry run: would run \`git commit -m "chore(release): ${tag}"\` ===`);
+    note(`=== dry run: would run \`git tag -a ${tag} -m "${tag}"\` ===`);
     return;
   }
 
@@ -409,16 +435,16 @@ async function writeCommitAndTag(
   run(["git", "add", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"]);
   run(["git", "commit", "-m", `chore(release): ${tag}`]);
   run(["git", "tag", "-a", tag, "-m", tag]);
-  console.log(`committed and tagged ${tag}`);
+  console.log(color.green(`committed and tagged ${color.bold(tag)}`));
 }
 
 async function pushGate(tag: string, dryRun: boolean): Promise<void> {
   if (dryRun) {
-    console.log("=== dry run: would run `git push origin main --follow-tags` ===");
+    console.log(color.cyan("=== dry run: would run `git push origin main --follow-tags` ==="));
     return;
   }
 
-  console.log(`Release ${tag} is committed and tagged locally.`);
+  console.log(`Release ${color.bold(tag)} is committed and tagged locally.`);
   const choice = await select("", [
     "Yes — push now (starts the real GitHub release)",
     "No — leave it local, I'll push myself",
@@ -429,13 +455,13 @@ async function pushGate(tag: string, dryRun: boolean): Promise<void> {
     run(["git", "push", "origin", "main", "--follow-tags"]);
     const remoteUrl = run(["git", "remote", "get-url", "origin"], { capture: true }).stdout.trim();
     const { owner, repo } = parseRemoteUrl(remoteUrl);
-    console.log(`pushed. watch the build: https://github.com/${owner}/${repo}/actions`);
+    console.log(color.green(`pushed. watch the build: https://github.com/${owner}/${repo}/actions`));
   } else if (choice === 1) {
-    console.log("left commit and tag local — push whenever you're ready");
+    console.log(color.cyan("left commit and tag local — push whenever you're ready"));
   } else {
     run(["git", "tag", "-d", tag]);
     run(["git", "reset", "--hard", "HEAD~1"]);
-    console.log(`cancelled: deleted tag ${tag} and reset the release commit`);
+    console.log(color.yellow(`cancelled: deleted tag ${tag} and reset the release commit`));
   }
 }
 
@@ -571,7 +597,7 @@ function selfCheck(): void {
     repo: "nox",
   });
 
-  console.log("self-check OK");
+  console.log(color.green("self-check OK"));
 }
 
 const VALID_FLAGS = ["--dry-run", "--self-check"];
@@ -579,8 +605,8 @@ const VALID_FLAGS = ["--dry-run", "--self-check"];
 function validateArgs(argv: string[]): void {
   const unknown = argv.find((arg) => !VALID_FLAGS.includes(arg));
   if (unknown) {
-    console.error(`unknown argument: ${unknown}`);
-    console.error(`valid flags: ${VALID_FLAGS.join(", ")}`);
+    console.error(color.red(`unknown argument: ${unknown}`));
+    console.error(color.gray(`valid flags: ${VALID_FLAGS.join(", ")}`));
     process.exit(1);
   }
 }
@@ -612,9 +638,13 @@ if (import.meta.main) {
     try {
       await main();
     } catch (err) {
-      console.error(`release failed: ${err instanceof Error ? err.message : String(err)}`);
       console.error(
-        "If Cargo.toml or CHANGELOG.md were modified, check 'git status' — you may need 'git checkout -- Cargo.toml CHANGELOG.md' to discard an incomplete release attempt.",
+        color.red(`release failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
+      console.error(
+        color.yellow(
+          "If Cargo.toml or CHANGELOG.md were modified, check 'git status' — you may need 'git checkout -- Cargo.toml CHANGELOG.md' to discard an incomplete release attempt.",
+        ),
       );
       process.exit(1);
     }
