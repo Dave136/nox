@@ -1367,21 +1367,19 @@ impl Render for Nox {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let settings_modal = self.settings_open.then(|| {
-            settings::render_settings_modal(
-                theme,
-                cx.entity(),
-                self.settings.clone(),
-                self.settings_section,
-                self.settings_search.clone(),
-                self.settings_search.read(cx).value().to_string(),
-                self.settings_auto_lock_select.clone(),
-                self.settings_clipboard_select.clone(),
-                &settings::VaultListModel {
+            let data = settings::SettingsDialogData {
+                settings: self.settings.clone(),
+                settings_search: self.settings_search.clone(),
+                settings_query: self.settings_search.read(cx).value().to_string(),
+                settings_auto_lock_select: self.settings_auto_lock_select.clone(),
+                settings_clipboard_select: self.settings_clipboard_select.clone(),
+                vault_list: settings::VaultListModel {
                     entries: self.vaults.vaults.clone(),
                     active_id: self.active_vault.as_ref().map(|vault| vault.id.clone()),
                 },
-                self.conflicts.count(),
-            )
+                conflict_count: self.conflicts.count(),
+            };
+            settings::render_settings_modal(theme, cx.entity(), self.settings_section, &data)
         });
         let remove_vault_modal = self.render_remove_vault_dialog(cx);
         let rename_vault_modal = self.render_rename_vault_dialog(cx);

@@ -17,13 +17,30 @@ use std::time::Duration;
 /// The registered-vault list, snapshotted in `Nox::render`.
 ///
 /// The section renderers are pure functions over `Entity<Nox>` with no `App`
-/// to read it with, so this follows how `Settings` and the conflict count are
-/// already handed down. One struct rather than two parameters: the chain is
-/// four functions deep and two of them are already at clippy's argument limit.
+/// to read it with, so every value they need is snapshotted and handed down
+/// rather than re-read from `locker`. One struct rather than two parameters.
 #[derive(Clone)]
 pub(crate) struct VaultListModel {
     pub(crate) entries: Vec<VaultEntry>,
     pub(crate) active_id: Option<String>,
+}
+
+/// Everything the settings dialog's three-function render chain needs beyond
+/// `theme`/`locker`/`section`, bundled into one struct.
+///
+/// `render_settings_modal` → `render_settings_dialog` → `render_section` all
+/// thread the same data down to whichever leaf section renderer ends up
+/// using it; passed as separate parameters, that chain put two of these
+/// three functions at clippy's argument limit.
+#[derive(Clone)]
+pub(crate) struct SettingsDialogData {
+    pub(crate) settings: Settings,
+    pub(crate) settings_search: Entity<InputState>,
+    pub(crate) settings_query: String,
+    pub(crate) settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
+    pub(crate) settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
+    pub(crate) vault_list: VaultListModel,
+    pub(crate) conflict_count: usize,
 }
 
 #[derive(Clone)]
@@ -102,14 +119,8 @@ const MODAL_BACKDROP: u32 = 0x0A0C0F99;
 pub(crate) fn render_settings_modal(
     theme: Theme,
     locker: Entity<Nox>,
-    settings: Settings,
     section: SettingsSection,
-    settings_search: Entity<InputState>,
-    settings_query: String,
-    settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
-    settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
-    vault_list: &VaultListModel,
-    conflict_count: usize,
+    data: &SettingsDialogData,
 ) -> AnyElement {
     let close_locker = locker.clone();
     div()
@@ -147,18 +158,7 @@ pub(crate) fn render_settings_modal(
                     inset: false,
                 }])
                 .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
-                .child(render_settings_dialog(
-                    theme,
-                    locker,
-                    settings,
-                    section,
-                    settings_search,
-                    settings_query,
-                    settings_auto_lock_select,
-                    settings_clipboard_select,
-                    vault_list,
-                    conflict_count,
-                )),
+                .child(render_settings_dialog(theme, locker, section, data)),
         )
         .with_animation(
             "settings-modal-layer",
@@ -204,14 +204,8 @@ impl SettingsSection {
 pub(crate) fn render_settings_dialog(
     theme: Theme,
     locker: Entity<Nox>,
-    settings: Settings,
     section: SettingsSection,
-    settings_search: Entity<InputState>,
-    settings_query: String,
-    settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
-    settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
-    vault_list: &VaultListModel,
-    conflict_count: usize,
+    data: &SettingsDialogData,
 ) -> AnyElement {
     div()
         .id("settings-dialog")
@@ -224,8 +218,8 @@ pub(crate) fn render_settings_dialog(
             theme,
             locker.clone(),
             section,
-            settings_search,
-            settings_query,
+            data.settings_search.clone(),
+            data.settings_query.clone(),
         ))
         .child(
             div()
@@ -241,16 +235,7 @@ pub(crate) fn render_settings_dialog(
                 .gap(px(22.))
                 .bg(theme.canvas)
                 .overflow_y_scroll()
-                .child(render_section(
-                    theme,
-                    locker.clone(),
-                    settings,
-                    section,
-                    settings_auto_lock_select,
-                    settings_clipboard_select,
-                    vault_list,
-                    conflict_count,
-                ))
+                .child(render_section(theme, locker.clone(), section, data))
                 .with_animation(
                     ("settings-content", section.index()),
                     Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
@@ -410,23 +395,23 @@ fn navigation_item(
 fn render_section(
     theme: Theme,
     locker: Entity<Nox>,
-    settings: Settings,
     section: SettingsSection,
-    settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
-    settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
-    vault_list: &VaultListModel,
-    conflict_count: usize,
+    data: &SettingsDialogData,
 ) -> AnyElement {
     match section {
-        SettingsSection::Appearance => appearance_section(theme, locker, settings),
+        SettingsSection::Appearance => appearance_section(theme, locker, data.settings.clone()),
         SettingsSection::Security => security_section(
             theme,
             locker,
-            settings_auto_lock_select,
-            settings_clipboard_select,
+            data.settings_auto_lock_select.clone(),
+            data.settings_clipboard_select.clone(),
         ),
-        SettingsSection::Vault => vault_section(theme, locker, vault_list, conflict_count),
-        SettingsSection::Autofill => availability_section(theme, locker, settings, &AUTOFILL),
+        SettingsSection::Vault => {
+            vault_section(theme, locker, &data.vault_list, data.conflict_count)
+        }
+        SettingsSection::Autofill => {
+            availability_section(theme, locker, data.settings.clone(), &AUTOFILL)
+        }
         SettingsSection::ImportExport => import_export_section(theme, locker),
     }
 }
