@@ -46,15 +46,15 @@ class CommandError extends Error {
 
 function run(
   cmd: string[],
-  opts: { cwd?: string; allowFailure?: boolean } = {},
+  opts: { cwd?: string; allowFailure?: boolean; capture?: boolean } = {},
 ): { code: number; stdout: string; stderr: string } {
   const proc = Bun.spawnSync(cmd, {
     cwd: opts.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
+    stdout: opts.capture ? "pipe" : "inherit",
+    stderr: opts.capture ? "pipe" : "inherit",
   });
-  const stdout = proc.stdout.toString();
-  const stderr = proc.stderr.toString();
+  const stdout = opts.capture ? proc.stdout.toString() : "";
+  const stderr = opts.capture ? proc.stderr.toString() : "";
   if (proc.exitCode !== 0 && !opts.allowFailure) {
     throw new CommandError(cmd, proc.exitCode, stderr);
   }
@@ -253,23 +253,33 @@ async function select(title: string, options: string[]): Promise<number> {
 }
 
 function checkPreconditions(): void {
-  const branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
+  const branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], { capture: true }).stdout.trim();
   if (branch !== "main") {
     throw new Error(`must be on main to release, currently on ${branch}`);
   }
 
-  const status = run(["git", "status", "--porcelain"]).stdout;
+  const status = run(["git", "status", "--porcelain"], { capture: true }).stdout;
   if (status.trim() !== "") {
     throw new Error("working tree is not clean:\n" + status);
   }
 
   run(["git", "fetch", "origin", "main", "--quiet"]);
-  const behind = run(["git", "rev-list", "HEAD..origin/main", "--count"]).stdout.trim();
+  const behind = run(["git", "rev-list", "HEAD..origin/main", "--count"], { capture: true }).stdout.trim();
   if (behind !== "0") {
     throw new Error(`local main is ${behind} commit(s) behind origin/main — pull first`);
   }
 
   console.log("preconditions OK: on main, clean, up to date with origin/main");
+}
+
+function runAudit(): void {
+  console.log("running cargo fmt --check...");
+  run(["cargo", "fmt", "--all", "--", "--check"]);
+  console.log("running cargo clippy...");
+  run(["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]);
+  console.log("running cargo test...");
+  run(["cargo", "test", "--workspace"]);
+  console.log("audit OK");
 }
 
 function selfCheck(): void {
@@ -410,6 +420,10 @@ function selfCheck(): void {
 if (import.meta.main) {
   if (process.argv.includes("--check-preconditions")) {
     checkPreconditions();
+    process.exit(0);
+  }
+  if (process.argv.includes("--run-audit")) {
+    runAudit();
     process.exit(0);
   }
   if (process.argv.includes("--self-check")) {
