@@ -389,6 +389,33 @@ async function writeCommitAndTag(
   console.log(`committed and tagged ${tag}`);
 }
 
+async function pushGate(tag: string, dryRun: boolean): Promise<void> {
+  if (dryRun) {
+    console.log("=== dry run: would run `git push origin main --follow-tags` ===");
+    return;
+  }
+
+  console.log(`Release ${tag} is committed and tagged locally.`);
+  const choice = await select("", [
+    "Yes — push now (starts the real GitHub release)",
+    "No — leave it local, I'll push myself",
+    "Cancel — undo the release commit and tag",
+  ]);
+
+  if (choice === 0) {
+    run(["git", "push", "origin", "main", "--follow-tags"]);
+    const remoteUrl = run(["git", "remote", "get-url", "origin"], { capture: true }).stdout.trim();
+    const { owner, repo } = parseRemoteUrl(remoteUrl);
+    console.log(`pushed. watch the build: https://github.com/${owner}/${repo}/actions`);
+  } else if (choice === 1) {
+    console.log("left commit and tag local — push whenever you're ready");
+  } else {
+    run(["git", "tag", "-d", tag]);
+    run(["git", "reset", "--hard", "HEAD~1"]);
+    console.log(`cancelled: deleted tag ${tag} and reset the release commit`);
+  }
+}
+
 function selfCheck(): void {
   const ok = run(["true"]);
   assert.strictEqual(ok.code, 0, "run() should report exit code 0 for `true`");
@@ -524,18 +551,28 @@ function selfCheck(): void {
   console.log("self-check OK");
 }
 
+async function main(): Promise<void> {
+  const dryRun = process.argv.includes("--dry-run");
+
+  checkPreconditions();
+  runAudit();
+
+  const cargoToml = await Bun.file("Cargo.toml").text();
+  const { next } = await selectVersion(cargoToml);
+
+  const changelog = await Bun.file("CHANGELOG.md").text();
+  const changelogBody = await resolveChangelogBody(changelog);
+
+  await writeCommitAndTag(next, changelogBody, dryRun);
+
+  const tag = `v${formatVersion(next)}`;
+  await pushGate(tag, dryRun);
+}
+
 if (import.meta.main) {
-  if (process.argv.includes("--check-preconditions")) {
-    checkPreconditions();
-    process.exit(0);
-  }
-  if (process.argv.includes("--run-audit")) {
-    runAudit();
-    process.exit(0);
-  }
   if (process.argv.includes("--self-check")) {
     selfCheck();
   } else {
-    console.log("release flow not implemented yet");
+    await main();
   }
 }
