@@ -68,13 +68,15 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: nox-linux-x86_64
             binary_name: nox
-            package_zip: false
+            package_os: linux
+            release_assets: nox-linux-x86_64.deb nox-linux-x86_64.rpm nox-linux-x86_64.AppImage
           - platform: macOS Apple Silicon
             runner: macos-15
             target: aarch64-apple-darwin
             artifact_name: nox-macos-aarch64
             binary_name: nox
-            package_zip: true
+            package_os: macos
+            release_assets: nox-macos-aarch64.dmg nox-macos-aarch64.zip
           # - platform: macOS Intel
           #   runner: macos-13
           #   target: x86_64-apple-darwin
@@ -106,7 +108,8 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             libfontconfig1-dev libwayland-dev libx11-dev libxcb1-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev \
+            rpm
 
       - name: Cache Cargo dependencies and build
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
@@ -144,16 +147,20 @@ jobs:
         shell: bash
         run: cargo build --release --locked --package gui --bin nox --target "${{ matrix.target }}"
 
-      - name: Package artifact
+      - name: Package installer assets
         shell: bash
         run: |
+          version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.artifact_name }}"
-          chmod +x "dist/${{ matrix.artifact_name }}"
-          tar -czf "dist/${{ matrix.artifact_name }}.tar.gz" -C dist "${{ matrix.artifact_name }}"
-          if [[ "${{ matrix.package_zip }}" == "true" ]]; then
-            zip -j "dist/${{ matrix.artifact_name }}.zip" "dist/${{ matrix.artifact_name }}"
-          fi
+          scripts/package-release-assets.sh \
+            "${{ matrix.package_os }}" \
+            "${{ matrix.target }}" \
+            "${{ matrix.artifact_name }}" \
+            "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" \
+            "$version"
+          for expected in ${{ matrix.release_assets }}; do
+            test -f "dist/$expected"
+          done
           for artifact in dist/*; do
             shasum -a 256 "$artifact" > "$artifact.sha256"
           done
