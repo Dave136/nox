@@ -1296,6 +1296,13 @@ impl Nox {
         window.close_all_dialogs(cx);
         window.close_sheet(cx);
         self.discard_clipboard_state(cx);
+        // The standalone generator is a lightweight overlay, not a dialog or
+        // sheet, so `close_all_dialogs`/`close_sheet` leave it untouched.
+        // Close it and drop its generated secret here, or locking via the
+        // command palette would leave the overlay (and the password) rendered
+        // over the unlock screen.
+        self.password_generator.open = false;
+        self.password_generator.generated = None;
         self.inactivity_epoch += 1;
         self._inactivity_task = Task::ready(());
         self.conflicts = ConflictState::Closed;
@@ -5093,6 +5100,44 @@ mod tests {
         assert!(view.update(cx, |locker, cx| {
             locker.render_password_generator_overlay(cx).is_some()
         }));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn locking_the_vault_closes_the_standalone_generator(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "lock-closes-generator", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_password_generator(window, locker_cx);
+            locker.generate_standalone_password(locker_cx);
+        });
+        let (open, generated) = view.read_with(cx, |locker, _| {
+            (
+                locker.password_generator.open,
+                locker.password_generator.generated.is_some(),
+            )
+        });
+        assert!(
+            open && generated,
+            "precondition: the standalone generator is open with a generated password",
+        );
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.lock_vault(window, locker_cx);
+        });
+        let (open, generated) = view.read_with(cx, |locker, _| {
+            (
+                locker.password_generator.open,
+                locker.password_generator.generated.is_some(),
+            )
+        });
+        assert!(
+            !open,
+            "locking the vault must close the standalone password generator overlay",
+        );
+        assert!(
+            !generated,
+            "locking the vault must drop the generated password",
+        );
         cleanup(&path);
     }
 

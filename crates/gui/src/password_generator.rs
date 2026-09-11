@@ -1,8 +1,8 @@
-//! Standalone "Generate password" quick action on Home: reuses the
-//! item-editor's [`GeneratorPopoverState`] and generation logic, but operates
-//! on its own `Nox::password_generator` field instead of an open item editor,
-//! so a password can be generated and copied without creating or editing an
-//! item.
+//! Title-bar password generator: reuses the item-editor's
+//! [`GeneratorPopoverState`] and generation logic, but operates on its own
+//! `Nox::password_generator` field instead of an open item editor, so a
+//! password can be generated and copied from the title bar in any unlocked
+//! view without creating or editing an item.
 use crate::app::Nox;
 use crate::clipboard::COPY_FEEDBACK_DURATION;
 use crate::item_editor::{GeneratorPopoverState, input, toggle_generator_class};

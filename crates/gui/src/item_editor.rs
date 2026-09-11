@@ -1343,6 +1343,11 @@ fn password_is_reused(password: &str, items: &[(ItemId, ItemPayload)]) -> bool {
 /// switches, and preview, parameterized only by what differs between those
 /// two callers (which `Nox` methods the class-toggle/generate/primary
 /// actions call, and the primary button's label).
+// Ten parameters, each a distinct piece of panel state or a caller-supplied
+// callback. Grouping them into a struct would only move the same fields
+// behind one more layer at both call sites; the explicit signature keeps the
+// item-editor and title-bar callers legible. Revisit if a third caller lands.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_password_generator_content(
     theme: Theme,
     length_input: Entity<InputState>,
