@@ -545,10 +545,6 @@ impl Nox {
             None::<fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>,
             cx,
         );
-        let generate_password = self.render_password_generator_tile(
-            self.auth_hovered.get("home-generate-password").copied(),
-            cx,
-        );
         rsx! {
             <div id="home-workspace" flex flex_col flex_1 min_w={px(0.)} h_full bg={theme.canvas}>
                 <div id="home-header" flex items_center justify_between h={px(88.)} px={px(32.)} flex_shrink_0 border_b_1 borderColor={theme.border}>
@@ -589,7 +585,6 @@ impl Nox {
                             {new_note}
                             {new_card}
                             {new_identity}
-                            {generate_password}
                         </div>
                     </div>
                     <div flex gap={px(20.)} items_start>
@@ -661,18 +656,18 @@ mod tests {
     }
 
     #[test]
-    fn home_quick_actions_render_all_five_tiles_with_on_click_wrapped_in_some() {
+    fn home_quick_actions_render_exactly_four_tiles() {
         let source = include_str!("workspace.rs");
         let production = source.split("#[cfg(test)]").next().unwrap();
-        assert_eq!(production.matches("home_quick_action(").count(), 4);
-        assert_eq!(production.matches("Some({").count(), 2);
-        assert_eq!(
-            production
-                .matches("None::<fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>")
-                .count(),
-            2
-        );
-        assert!(production.contains("render_password_generator_tile"));
+        for id in [
+            "home-new-login",
+            "home-secure-note",
+            "home-payment-card",
+            "home-identity",
+        ] {
+            assert!(production.contains(id), "missing quick-action tile {id}");
+        }
+        assert!(!production.contains("home-generate-password"));
         let quick_actions_start = production
             .find("id=\"home-quick-actions\"")
             .expect("quick actions section");
@@ -681,14 +676,9 @@ mod tests {
                 .find("id=\"home-recent-items\"")
                 .expect("quick actions end")
                 + quick_actions_start];
-        for tile in [
-            "{new_login}",
-            "{new_note}",
-            "{new_card}",
-            "{new_identity}",
-            "{generate_password}",
-        ] {
+        for tile in ["{new_login}", "{new_note}", "{new_card}", "{new_identity}"] {
             assert!(quick_actions.contains(tile), "missing {tile}");
         }
+        assert!(!quick_actions.contains("{generate_password}"));
     }
 }

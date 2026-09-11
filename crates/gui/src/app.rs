@@ -5066,6 +5066,22 @@ mod tests {
     }
 
     #[gpui::test]
+    fn password_generator_overlay_renders_only_when_open(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "generator-overlay-closed", &[]);
+        assert!(view.update(cx, |locker, cx| locker
+            .render_password_generator_overlay(cx)
+            .is_none()));
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_password_generator(window, locker_cx);
+        });
+        assert!(view.update(cx, |locker, cx| locker
+            .render_password_generator_overlay(cx)
+            .is_some()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn newest_clipboard_copy_owns_the_injected_timeout(cx: &mut TestAppContext) {
         init(cx);
         let path = test_path("clipboard-epoch");
