@@ -1337,6 +1337,9 @@ impl Nox {
             }
             WindowCommand::OpenVault => self.return_to_unlock(window, cx),
             WindowCommand::LockVault => self.lock_vault(window, cx),
+            // Behavior is wired up in a follow-up task; the variant and title-bar
+            // button land here first so the command surface stays exhaustive.
+            WindowCommand::GeneratePassword => {}
             WindowCommand::Close => window.remove_window(),
         }
     }
