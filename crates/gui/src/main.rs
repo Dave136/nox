@@ -10,6 +10,7 @@ mod icons;
 mod item_editor;
 mod locked;
 mod nav;
+mod password_generator;
 mod settings;
 mod theme;
 mod trash;

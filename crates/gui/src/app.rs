@@ -2,7 +2,7 @@ use crate::backup::{self, BackupState};
 use crate::clipboard::ClipboardState;
 pub use crate::clipboard::DEFAULT_CLIPBOARD_TIMEOUT;
 use crate::conflicts::ConflictState;
-use crate::item_editor::{self, ItemEditorState};
+use crate::item_editor::{self, GeneratorPopoverState, ItemEditorState};
 use crate::nav::ActiveView;
 use crate::settings::{
     self, Settings, SettingsDurationDelegate, SettingsSection, load_settings, save_settings,
@@ -395,7 +395,7 @@ pub(crate) fn home_quick_action(
     label: &'static str,
     enabled: bool,
     hovered: Option<bool>,
-    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    on_click: Option<impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static>,
     cx: &mut Context<Nox>,
 ) -> AnyElement {
     let theme = Theme::current(cx);
@@ -446,15 +446,17 @@ pub(crate) fn home_quick_action(
                 .child("Soon"),
         );
     }
-    let button = Button::new(id)
+    let mut button = Button::new(id)
         .disabled(!enabled)
         .group(id)
         .flex_1()
         .h(px(62.))
         .px(px(14.))
         .rounded(px(8.))
-        .on_click(on_click)
         .child(content);
+    if let Some(on_click) = on_click {
+        button = button.on_click(on_click);
+    }
 
     if !enabled {
         return button
@@ -611,6 +613,15 @@ pub struct Nox {
     /// change, so list/detail rendering and a reopened editor both see the
     /// same selection without any bytes ever entering synced item state.
     pub(crate) local_icon_selections: HashMap<String, crate::icons::LocalIconRef>,
+    /// Standalone password generator opened from the Home quick action, used
+    /// without an item editor open. Mirrors the item-editor generator state.
+    pub(crate) password_generator: GeneratorPopoverState,
+    pub(crate) password_generator_copied: bool,
+    /// Bumped on every `copy_generated_password` call so a stale revert task
+    /// from an earlier copy can't clear a flag a newer copy just set — the
+    /// same epoch-guard pattern `ClipboardState` uses for its own timer.
+    pub(crate) password_generator_copy_epoch: u64,
+    pub(crate) _password_generator_copy_task: Task<()>,
 }
 
 impl Nox {
@@ -742,6 +753,7 @@ impl Nox {
             },
         );
         let local_icon_selections = crate::icons::load_local_selections(&data_dir);
+        let password_generator = Self::fresh_password_generator(window, cx);
         let window_controls = cx.new(|cx| {
             WindowControls::new(window, cx).with_command_handler(move |command, window, app| {
                 let _ = locker.update(app, |locker, cx| {
@@ -805,6 +817,10 @@ impl Nox {
             detail_revealed_copy_blocks: BTreeSet::new(),
             editor_blur_subscriptions: Vec::new(),
             local_icon_selections,
+            password_generator,
+            password_generator_copied: false,
+            password_generator_copy_epoch: 0,
+            _password_generator_copy_task: Task::ready(()),
         };
 
         match locker.state {
@@ -4969,6 +4985,83 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(clipboard_text(cx), Some("external".into()));
         assert!(view.read_with(cx, |locker, _| locker.clipboard.expected.is_none()));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn standalone_generator_opens_toggles_a_class_and_generates_a_password(
+        cx: &mut TestAppContext,
+    ) {
+        init(cx);
+        let path = test_path("standalone-generator-generate");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_password_generator(window, locker_cx);
+            locker.set_standalone_generator_class(nox_core::CharClasses::SYMBOLS, false, locker_cx);
+            locker.generate_standalone_password(locker_cx);
+        });
+        let (open, generated) = view.read_with(cx, |locker, _| {
+            (
+                locker.password_generator.open,
+                locker.password_generator.generated.clone(),
+            )
+        });
+        assert!(open);
+        let generated = generated.expect("a password should have been generated");
+        assert!(!generated.as_bytes().is_empty());
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn copy_generated_password_writes_the_clipboard_and_flags_copied(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("standalone-generator-copy");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_password_generator(window, locker_cx);
+            locker.generate_standalone_password(locker_cx);
+            locker.copy_generated_password(window, locker_cx);
+        });
+        let expected = view.read_with(cx, |locker, _| {
+            locker
+                .password_generator
+                .generated
+                .as_ref()
+                .map(|password| String::from_utf8_lossy(password.as_bytes()).into_owned())
+        });
+        assert_eq!(clipboard_text(cx), expected);
+        assert!(view.read_with(cx, |locker, _| locker.password_generator_copied));
+        cx.executor()
+            .advance_clock(crate::clipboard::COPY_FEEDBACK_DURATION);
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |locker, _| locker.password_generator_copied));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn newest_generated_password_copy_owns_the_copied_feedback(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("standalone-generator-copy-epoch");
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_password_generator(window, locker_cx);
+            locker.generate_standalone_password(locker_cx);
+            locker.copy_generated_password(window, locker_cx);
+        });
+        // Half the feedback window later, copy again — the first copy's
+        // revert task must not clear the flag the second copy just set.
+        cx.executor()
+            .advance_clock(crate::clipboard::COPY_FEEDBACK_DURATION / 2);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.copy_generated_password(window, locker_cx);
+        });
+        cx.executor()
+            .advance_clock(crate::clipboard::COPY_FEEDBACK_DURATION / 2);
+        cx.run_until_parked();
+        assert!(
+            view.read_with(cx, |locker, _| locker.password_generator_copied),
+            "the first copy's timer fired but must not have cleared the second copy's feedback",
+        );
         cleanup(&path);
     }
 

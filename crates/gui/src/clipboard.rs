@@ -6,7 +6,7 @@ use std::time::Duration;
 pub const DEFAULT_CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a row's "Copied" confirmation stays visible before reverting.
-const COPY_FEEDBACK_DURATION: Duration = Duration::from_millis(1200);
+pub(crate) const COPY_FEEDBACK_DURATION: Duration = Duration::from_millis(1200);
 
 /// Which field of an item was last copied, for row-level "Copied" feedback.
 /// `Uri` carries the index since an item can have more than one website.

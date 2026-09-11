@@ -502,7 +502,33 @@ pub(crate) fn now_millis() -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
-fn input(
+/// Toggles one character class in `classes`: adding `class` when `checked`,
+/// or dropping only `class` (keeping every other set bit) otherwise. Pure so
+/// it can be unit-tested and reused by the standalone password generator.
+pub(crate) fn toggle_generator_class(
+    classes: CharClasses,
+    class: CharClasses,
+    checked: bool,
+) -> CharClasses {
+    if checked {
+        classes | class
+    } else {
+        let mut result = CharClasses::EMPTY;
+        for candidate in [
+            CharClasses::LOWER,
+            CharClasses::UPPER,
+            CharClasses::DIGITS,
+            CharClasses::SYMBOLS,
+        ] {
+            if candidate != class && classes.contains(candidate) {
+                result |= candidate;
+            }
+        }
+        result
+    }
+}
+
+pub(crate) fn input(
     value: impl Into<SharedString>,
     window: &mut Window,
     cx: &mut Context<Nox>,
@@ -2235,22 +2261,8 @@ impl Nox {
         cx: &mut Context<Self>,
     ) {
         if let Some(editor) = self.item_editor_mut() {
-            if checked {
-                editor.generator.classes |= class;
-            } else {
-                let mut classes = CharClasses::EMPTY;
-                for candidate in [
-                    CharClasses::LOWER,
-                    CharClasses::UPPER,
-                    CharClasses::DIGITS,
-                    CharClasses::SYMBOLS,
-                ] {
-                    if candidate != class && editor.generator.classes.contains(candidate) {
-                        classes |= candidate;
-                    }
-                }
-                editor.generator.classes = classes;
-            }
+            editor.generator.classes =
+                toggle_generator_class(editor.generator.classes, class, checked);
             cx.notify();
         }
     }
@@ -5120,6 +5132,25 @@ mod tests {
             note_tags: vec![],
             favorite: false,
         }
+    }
+
+    #[test]
+    fn toggle_generator_class_adds_a_class() {
+        let classes = toggle_generator_class(CharClasses::LOWER, CharClasses::UPPER, true);
+        assert_eq!(classes, CharClasses::LOWER | CharClasses::UPPER);
+    }
+
+    #[test]
+    fn toggle_generator_class_removes_one_class_and_keeps_the_rest() {
+        let classes = CharClasses::LOWER | CharClasses::UPPER | CharClasses::DIGITS;
+        let classes = toggle_generator_class(classes, CharClasses::UPPER, false);
+        assert_eq!(classes, CharClasses::LOWER | CharClasses::DIGITS);
+    }
+
+    #[test]
+    fn toggle_generator_class_removing_the_last_class_yields_empty() {
+        let classes = toggle_generator_class(CharClasses::LOWER, CharClasses::LOWER, false);
+        assert_eq!(classes, CharClasses::EMPTY);
     }
 
     #[test]
