@@ -1,0 +1,49 @@
+name: Dependency audit
+
+on:
+  workflow_call:
+
+env:
+  RUST_VERSION: "1.95.0"
+  CARGO_AUDIT_VERSION: "0.22.2"
+
+jobs:
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust-app
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          linux-native-deps: "false"
+
+      - name: Cache Cargo registry
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+          key: audit-v1-${{ env.RUST_VERSION }}-${{ env.CARGO_AUDIT_VERSION }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Fetch locked dependencies
+        shell: bash
+        run: cargo fetch --locked
+
+      - name: Install cargo-audit
+        shell: bash
+        run: cargo install --locked cargo-audit --version "$CARGO_AUDIT_VERSION"
+
+      - name: Verify cargo-audit version
+        shell: bash
+        run: cargo audit --version
+
+      - name: Dependency audit
+        shell: bash
+        run: cargo audit

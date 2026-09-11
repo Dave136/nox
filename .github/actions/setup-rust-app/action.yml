@@ -1,0 +1,48 @@
+name: Set up Rust app toolchain
+description: Install the pinned Rust toolchain and (optionally) Linux native build dependencies.
+
+inputs:
+  rust-version:
+    description: Rust toolchain version to install.
+    required: true
+  target:
+    description: Additional Rust target to install via `rustup target add`. Empty skips this step.
+    required: false
+    default: ""
+  components:
+    description: Comma-separated rustup components to install.
+    required: false
+    default: "rustfmt,clippy"
+  linux-native-deps:
+    description: When "true" and running on Linux, install the native apt packages GPUI needs.
+    required: false
+    default: "false"
+  extra-packages:
+    description: Extra apt packages to append to the Linux native dependency install, space-separated.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Rust toolchain
+      shell: bash
+      run: |
+        rustup toolchain install "${{ inputs.rust-version }}" --profile minimal --component "${{ inputs.components }}"
+        rustup default "${{ inputs.rust-version }}"
+        if [[ -n "${{ inputs.target }}" ]]; then
+          rustup target add "${{ inputs.target }}"
+        fi
+        rustc --version --verbose
+        cargo --version --verbose
+
+    - name: Install Linux native dependencies
+      if: inputs.linux-native-deps == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y \
+          libfontconfig1-dev libwayland-dev libx11-dev libxcb1-dev \
+          libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+          libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev \
+          ${{ inputs.extra-packages }}

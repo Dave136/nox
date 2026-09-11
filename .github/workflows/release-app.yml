@@ -56,9 +56,13 @@ jobs:
               raise SystemExit(f"CHANGELOG.md must contain a '## {tag}' section")
           PY
 
+  dependency-audit:
+    needs: validate-release
+    uses: ./.github/workflows/dependency-audit.yml
+
   build:
     name: Build app (${{ matrix.platform }})
-    needs: validate-release
+    needs: [validate-release, dependency-audit]
     strategy:
       fail-fast: false
       matrix:
@@ -92,24 +96,12 @@ jobs:
           persist-credentials: false
 
       - name: Set up Rust toolchain
-        shell: bash
-        run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy
-          rustup default "$RUST_VERSION"
-          rustup target add "${{ matrix.target }}"
-          rustc --version --verbose
-          cargo --version --verbose
-
-      - name: Install Linux native dependencies
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            libfontconfig1-dev libwayland-dev libx11-dev libxcb1-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev libxcb-xkb-dev \
-            rpm
+        uses: ./.github/actions/setup-rust-app
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          target: ${{ matrix.target }}
+          linux-native-deps: "true"
+          extra-packages: rpm
 
       - name: Cache Cargo dependencies and build
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
@@ -165,6 +157,40 @@ jobs:
             shasum -a 256 "$artifact" > "$artifact.sha256"
           done
 
+      - name: Smoke test packaged binaries (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          smoke_flag="--version"
+          work="$(mktemp -d)"
+
+          dpkg-deb -x "dist/${{ matrix.artifact_name }}.deb" "$work/deb"
+          timeout 10 "$work/deb/usr/bin/nox" "$smoke_flag"
+
+          mkdir -p "$work/rpm"
+          rpm2cpio "dist/${{ matrix.artifact_name }}.rpm" | (cd "$work/rpm" && cpio -idm)
+          timeout 10 "$work/rpm/usr/bin/nox" "$smoke_flag"
+
+          appimage="$(readlink -f "dist/${{ matrix.artifact_name }}.AppImage")"
+          chmod +x "$appimage"
+          (cd "$work" && "$appimage" --appimage-extract >/dev/null)
+          timeout 10 "$work/squashfs-root/usr/bin/nox" "$smoke_flag"
+
+      - name: Smoke test packaged binaries (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          smoke_flag="--version"
+
+          mount_point="$(mktemp -d)"
+          hdiutil attach "dist/${{ matrix.artifact_name }}.dmg" -mountpoint "$mount_point" -nobrowse -quiet
+          "$mount_point/Nox.app/Contents/MacOS/nox" "$smoke_flag"
+          hdiutil detach "$mount_point" -quiet
+
+          zip_work="$(mktemp -d)"
+          unzip -q "dist/${{ matrix.artifact_name }}.zip" -d "$zip_work"
+          "$zip_work/Nox.app/Contents/MacOS/nox" "$smoke_flag"
+
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -177,6 +203,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    environment: release
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
