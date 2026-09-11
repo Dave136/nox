@@ -49,6 +49,14 @@ fn window_options() -> WindowOptions {
 }
 
 fn main() {
+    // Exit before touching the GPU/window server — lets `nox --version` work
+    // from a terminal and lets CI smoke-test packaged binaries on a headless
+    // runner without opening a real window.
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("nox {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let app = application()
         .with_assets(Assets)
         .with_http_client(std::sync::Arc::new(reqwest_client::ReqwestClient::new()));
