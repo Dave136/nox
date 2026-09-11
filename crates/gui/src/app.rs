@@ -1337,9 +1337,7 @@ impl Nox {
             }
             WindowCommand::OpenVault => self.return_to_unlock(window, cx),
             WindowCommand::LockVault => self.lock_vault(window, cx),
-            // Behavior is wired up in a follow-up task; the variant and title-bar
-            // button land here first so the command surface stays exhaustive.
-            WindowCommand::GeneratePassword => {}
+            WindowCommand::GeneratePassword => self.open_password_generator(window, cx),
             WindowCommand::Close => window.remove_window(),
         }
     }
@@ -1401,6 +1399,7 @@ impl Render for Nox {
         let remove_vault_modal = self.render_remove_vault_dialog(cx);
         let rename_vault_modal = self.render_rename_vault_dialog(cx);
         let change_password_modal = self.render_change_password_dialog(cx);
+        let password_generator_overlay = self.render_password_generator_overlay(cx);
         rsx! {
             <div
                 size_full
@@ -1428,6 +1427,9 @@ impl Render for Nox {
                 }}
                 {for modal in change_password_modal {
                     {modal}
+                }}
+                {for overlay in password_generator_overlay {
+                    {overlay}
                 }}
                 {for dialog in dialog_layer {
                     {dialog}
@@ -5036,6 +5038,18 @@ mod tests {
             .advance_clock(crate::clipboard::COPY_FEEDBACK_DURATION);
         cx.run_until_parked();
         assert!(!view.read_with(cx, |locker, _| locker.password_generator_copied));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn generate_password_window_command_opens_the_generator(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "generate-password-command", &[]);
+        assert!(view.read_with(cx, |locker, _| !locker.password_generator.open));
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.run_window_command(WindowCommand::GeneratePassword, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.password_generator.open));
         cleanup(&path);
     }
 
