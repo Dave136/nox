@@ -119,7 +119,6 @@ impl Nox {
                 <div flex flex_col gap={px(SIDEBAR_ROW_GAP)}>
                     {sidebar_section_label(theme, "TOOLS")}
                     {sidebar_static_item(theme, "icons/shield-check.svg", "Security report")}
-                    {sidebar_static_item(theme, "icons/wand-sparkles.svg", "Password generator")}
                 </div>
                 <div flex_1 />
                 {sidebar_link("open-settings", "icons/settings.svg", "Settings", false, move |_, window, app| {
@@ -245,8 +244,8 @@ fn sidebar_link(
         .into_any_element()
 }
 
-/// A row for a nav destination that doesn't exist yet (Favorites, Cards,
-/// Identities, Security report, Password generator): same look as an inactive
+/// A row for a nav destination that doesn't exist yet (Cards,
+/// Identities, Security report): same look as an inactive
 /// link plus a "Soon" badge, and not clickable.
 fn sidebar_static_item(theme: Theme, icon_path: &'static str, label: &'static str) -> AnyElement {
     div()
@@ -359,5 +358,21 @@ mod tests {
     #[test]
     fn trash_view_has_no_item_type_filter() {
         assert_eq!(ActiveView::Trash.item_type(), None);
+    }
+
+    #[test]
+    fn tools_sidebar_no_longer_lists_password_generator_placeholder() {
+        let source = include_str!("nav.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let tools_start = production
+            .find("TOOLS")
+            .expect("tools section should still exist");
+        let settings_start = production[tools_start..]
+            .find("open-settings")
+            .expect("settings link should follow tools section")
+            + tools_start;
+        let tools_section = &production[tools_start..settings_start];
+        assert!(!tools_section.contains("Password generator"));
+        assert!(!tools_section.contains("icons/wand-sparkles.svg"));
     }
 }
