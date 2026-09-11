@@ -3,11 +3,12 @@
 //! `Nox::password_generator` field instead of an open item editor, so a
 //! password can be generated and copied from the title bar in any unlocked
 //! view without creating or editing an item.
-use crate::app::Nox;
+use crate::app::{AppState, Nox};
 use crate::clipboard::COPY_FEEDBACK_DURATION;
 use crate::item_editor::{GeneratorPopoverState, input, toggle_generator_class};
 use crate::theme::Theme;
-use gpui::{AnyElement, Context, Window, div, prelude::*, px};
+use gpui::{AnyElement, Context, KeyDownEvent, Role, Window, div, prelude::*, px};
+use gpui_component::FocusTrapElement as _;
 use nox_core::{CharClasses, MAX_LENGTH, SecretBytes, generate_password};
 
 impl Nox {
@@ -30,6 +31,12 @@ impl Nox {
     pub(crate) fn open_password_generator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.password_generator = Self::fresh_password_generator(window, cx);
         self.password_generator.open = true;
+        // A freshly opened panel must not flash "Copied!" for a password that
+        // was copied before it was closed.
+        self.password_generator_copied = false;
+        // Move the keyboard into the overlay so Escape and typing are
+        // contained here instead of reaching the view behind the backdrop.
+        Self::focus_input(&self.password_generator.length_input, window, cx);
         cx.notify();
     }
 
@@ -100,10 +107,11 @@ impl Nox {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.password_generator.open {
+        if !self.password_generator.open || !matches!(self.state, AppState::Unlocked(_)) {
             return None;
         }
         let theme = Theme::current(cx);
+        let focus = self.password_generator_focus.clone();
         let length_input = self.password_generator.length_input.clone();
         let classes = self.password_generator.classes;
         let generated = self
@@ -146,6 +154,19 @@ impl Nox {
                 .top_0()
                 .left_0()
                 .size_full()
+                // The overlay is a keyboard scope: it takes focus, occludes
+                // the page beneath it, and dismisses on Escape, so keystrokes
+                // cannot fall through to an editor draft behind the backdrop.
+                .tab_group()
+                .occlude()
+                .role(Role::Dialog)
+                .aria_label("Password generator")
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key.as_str() == "escape" {
+                        window.prevent_default();
+                        this.set_standalone_generator_open(false, cx);
+                    }
+                }))
                 .on_mouse_down(gpui::MouseButton::Left, move |_, _window, app| {
                     dismiss_locker.update(app, |locker, cx| {
                         locker.set_standalone_generator_open(false, cx)
@@ -162,6 +183,7 @@ impl Nox {
                         .on_mouse_down(gpui::MouseButton::Left, |_, _, app| app.stop_propagation())
                         .child(panel),
                 )
+                .focus_trap("password-generator-focus-trap", &focus)
                 .into_any_element(),
         )
     }

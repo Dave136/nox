@@ -620,6 +620,10 @@ pub struct Nox {
     /// same epoch-guard pattern `ClipboardState` uses for its own timer.
     pub(crate) password_generator_copy_epoch: u64,
     pub(crate) _password_generator_copy_task: Task<()>,
+    /// Focus scope for the standalone generator overlay. The overlay takes
+    /// focus while open so Escape and typing are contained by the panel
+    /// instead of reaching the view (or editor draft) behind it.
+    pub(crate) password_generator_focus: FocusHandle,
 }
 
 impl Nox {
@@ -819,6 +823,7 @@ impl Nox {
             password_generator_copied: false,
             password_generator_copy_epoch: 0,
             _password_generator_copy_task: Task::ready(()),
+            password_generator_focus: cx.focus_handle(),
         };
 
         match locker.state {
@@ -5100,6 +5105,43 @@ mod tests {
         assert!(view.update(cx, |locker, cx| {
             locker.render_password_generator_overlay(cx).is_some()
         }));
+        cleanup(&path);
+    }
+
+    /// I1 regression: once the standalone generator overlay is shown it must
+    /// own the keyboard. With an in-progress Login editor behind it, pressing
+    /// Escape must close the overlay and must not reach the editor workspace's
+    /// own Escape handler, which discards the draft.
+    #[gpui::test]
+    fn generator_overlay_escape_closes_it_without_cancelling_the_item_editor(
+        cx: &mut TestAppContext,
+    ) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "generator-overlay-escape", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::Home, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+            locker.open_password_generator(window, locker_cx);
+        });
+        assert!(
+            view.read_with(cx, |locker, _| locker.uses_login_workspace()),
+            "precondition: the Login editor uses the full-page workspace behind the overlay",
+        );
+        assert!(
+            view.read_with(cx, |locker, _| locker.password_generator.open),
+            "precondition: the standalone generator overlay is open",
+        );
+
+        cx.simulate_keystrokes("escape");
+
+        assert!(
+            !view.read_with(cx, |locker, _| locker.password_generator.open),
+            "Escape while the generator is open must close the generator overlay",
+        );
+        assert!(
+            view.read_with(cx, |locker, _| locker.item_editor().is_some()),
+            "Escape handled by the overlay must not cancel the item editor draft behind it",
+        );
         cleanup(&path);
     }
 
