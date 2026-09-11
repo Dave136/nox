@@ -28,16 +28,18 @@ pub enum WindowCommand {
     NewVault,
     OpenVault,
     LockVault,
+    GeneratePassword,
     Close,
 }
 
 impl WindowCommand {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Minimize,
         Self::ToggleMaximize,
         Self::NewVault,
         Self::OpenVault,
         Self::LockVault,
+        Self::GeneratePassword,
         Self::Close,
     ];
 
@@ -48,6 +50,7 @@ impl WindowCommand {
             Self::NewVault => "New Vault",
             Self::OpenVault => "Open Vault",
             Self::LockVault => "Lock Vault",
+            Self::GeneratePassword => "Generate Password",
             Self::Close => "Close Window",
         }
     }
@@ -342,6 +345,24 @@ impl WindowControls {
             div().into_any_element()
         };
 
+        let generate_password_button = if self.authenticated {
+            rsx! {
+                <Button
+                    base={Button::new("window-generate-password")
+                        .ghost()
+                        .icon(Icon::empty().path("icons/wand-sparkles.svg").text_color(theme.text_muted))
+                        .tooltip("Generate password")
+                        .on_key_down(self.command_key_callback(WindowCommand::GeneratePassword, cx))}
+                    bg={cx.theme().transparent}
+                    border_0
+                    onClick={self.command_callback(WindowCommand::GeneratePassword, cx)}
+                />
+            }
+            .into_any_element()
+        } else {
+            div().into_any_element()
+        };
+
         let search_trigger = if self.authenticated {
             rsx! {
                 <div items_center justify_center gap={px(8.)}>
@@ -405,6 +426,7 @@ impl WindowControls {
                 />
                 <div flex items_center gap={px(4.)}>
                     {lock_button}
+                    {generate_password_button}
                     <Button
                         base={Button::new("window-minimize")}
                         // class="bg-transparent border-none"
@@ -578,6 +600,16 @@ mod tests {
         assert!(production.contains("WindowCommand::LockVault"));
         assert!(production.contains("lock-keyhole-open"));
         assert!(production.contains("{lock_button}"));
+    }
+
+    #[test]
+    fn authenticated_generate_password_button_lives_in_title_bar_controls() {
+        let source = include_str!("controls.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        assert!(production.contains("WindowCommand::GeneratePassword"));
+        assert!(production.contains("Button::new(\"window-generate-password\")"));
+        assert!(production.contains("wand-sparkles"));
+        assert!(production.contains("{generate_password_button}"));
     }
 
     #[test]

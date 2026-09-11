@@ -1,20 +1,14 @@
-//! Standalone "Generate password" quick action on Home: reuses the
-//! item-editor's [`GeneratorPopoverState`] and generation logic, but operates
-//! on its own `Nox::password_generator` field instead of an open item editor,
-//! so a password can be generated and copied without creating or editing an
-//! item.
-use crate::app::Nox;
+//! Title-bar password generator: reuses the item-editor's
+//! [`GeneratorPopoverState`] and generation logic, but operates on its own
+//! `Nox::password_generator` field instead of an open item editor, so a
+//! password can be generated and copied from the title bar in any unlocked
+//! view without creating or editing an item.
+use crate::app::{AppState, Nox};
 use crate::clipboard::COPY_FEEDBACK_DURATION;
 use crate::item_editor::{GeneratorPopoverState, input, toggle_generator_class};
 use crate::theme::Theme;
-use gpui::{AnyElement, Context, FontWeight, Window, div, prelude::*, px};
-use gpui_component::{
-    Disableable, Sizable,
-    button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    checkbox::Checkbox,
-    input::Input,
-    popover::Popover,
-};
+use gpui::{AnyElement, Context, KeyDownEvent, Role, Window, div, prelude::*, px};
+use gpui_component::FocusTrapElement as _;
 use nox_core::{CharClasses, MAX_LENGTH, SecretBytes, generate_password};
 
 impl Nox {
@@ -37,6 +31,12 @@ impl Nox {
     pub(crate) fn open_password_generator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.password_generator = Self::fresh_password_generator(window, cx);
         self.password_generator.open = true;
+        // A freshly opened panel must not flash "Copied!" for a password that
+        // was copied before it was closed.
+        self.password_generator_copied = false;
+        // Move the keyboard into the overlay so Escape and typing are
+        // contained here instead of reaching the view behind the backdrop.
+        Self::focus_input(&self.password_generator.length_input, window, cx);
         cx.notify();
     }
 
@@ -98,198 +98,93 @@ impl Nox {
         cx.notify();
     }
 
-    /// Home's 5th quick-action tile: the tile itself is the `Popover`
-    /// trigger, following `render_add_item_menu` in `workspace.rs`.
-    pub(crate) fn render_password_generator_tile(
+    /// The title-bar generator's floating panel: an invisible full-screen
+    /// backdrop (click-outside-to-dismiss, same technique
+    /// `render_change_password_dialog` uses) with the actual panel
+    /// corner-anchored near the title bar instead of centered, since this
+    /// is a lightweight generate-and-copy tool, not a form.
+    pub(crate) fn render_password_generator_overlay(
         &mut self,
-        _hovered: Option<bool>,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Option<AnyElement> {
+        if !self.password_generator.open || !matches!(self.state, AppState::Unlocked(_)) {
+            return None;
+        }
         let theme = Theme::current(cx);
-        let muted_foreground = theme.text_muted;
-        // `Popover::trigger` requires `Selectable`, which `AnyElement` (what
-        // `home_quick_action` returns) does not implement, so this tile is
-        // built as a plain `Button` matching the other tiles' icon-box/label
-        // layout and resting colors instead of routing through
-        // `home_quick_action`/`animated_auth_button` (see report deviation).
-        let id = "home-generate-password";
-        let icon_box = div()
-            .size(px(32.))
-            .rounded(px(8.))
-            .bg(theme.field)
-            .flex()
-            .items_center()
-            .justify_center()
-            .group_hover(id, |style| style.bg(theme.surface))
-            .child(
-                gpui_component::Icon::empty()
-                    .path("icons/wand-sparkles.svg")
-                    .size(px(16.))
-                    .text_color(theme.text_secondary),
-            );
-        let content = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .w_full()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(11.))
-                    .child(icon_box)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.text)
-                            .child("Generate password"),
-                    ),
-            );
-        let tile = Button::new(id)
-            .group(id)
-            .flex_1()
-            .h(px(62.))
-            .px(px(14.))
-            .rounded(px(8.))
-            .custom(
-                ButtonCustomVariant::new(cx)
-                    .color(theme.surface)
-                    .hover(theme.raised)
-                    .foreground(theme.text),
-            )
-            .bg(theme.surface)
-            .child(content);
-        let generator_open = self.password_generator.open;
+        let focus = self.password_generator_focus.clone();
+        let length_input = self.password_generator.length_input.clone();
+        let classes = self.password_generator.classes;
         let generated = self
             .password_generator
             .generated
             .as_ref()
             .map(|password| String::from_utf8_lossy(password.as_bytes()).into_owned());
-        let length_input = self.password_generator.length_input.clone();
-        let classes = self.password_generator.classes;
         let copied = self.password_generator_copied;
         let locker = cx.entity();
-        let locker_for_open = locker.clone();
-        let locker_for_generate = locker.clone();
-        let locker_for_copy = locker.clone();
-        let class_locker = locker.clone();
-        let class_checkbox = move |id: &'static str, label: &'static str, class: CharClasses| {
-            Checkbox::new(id)
-                .label(label)
-                .checked(classes.contains(class))
-                .on_click({
-                    let locker = class_locker.clone();
-                    move |checked, _, app| {
-                        locker.update(app, |locker, cx| {
-                            locker.set_standalone_generator_class(class, *checked, cx)
-                        });
-                    }
-                })
-        };
-        Popover::new("home-generate-password")
-            .trigger(tile)
-            .open(generator_open)
-            .on_open_change(move |open, window, app| {
-                locker_for_open.update(app, |locker, cx| {
-                    if *open {
-                        locker.open_password_generator(window, cx);
-                    } else {
-                        locker.set_standalone_generator_open(false, cx);
-                    }
+        let toggle_locker = locker.clone();
+        let generate_locker = locker.clone();
+        let copy_locker = locker.clone();
+        let dismiss_locker = locker.clone();
+
+        let panel = crate::item_editor::render_password_generator_content(
+            theme,
+            length_input,
+            classes,
+            generated,
+            move |class, checked, _window, app| {
+                toggle_locker.update(app, |locker, cx| {
+                    locker.set_standalone_generator_class(class, checked, cx)
                 });
-            })
-            .content(move |_popover, _window, _cx| {
-                let preview = generated.clone().unwrap_or_else(|| "Click Generate".into());
-                let copy_label = if copied { "Copied!" } else { "Copy password" };
-                div()
-                    .id("password-generator-panel")
-                    .p(px(16.))
-                    .w(px(272.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.))
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(theme.field_border)
-                    .bg(theme.surface)
-                    .text_color(theme.text)
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight(650.))
-                            .child("Password generator"),
-                    )
-                    .child(Input::new(&length_input))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .font_weight(FontWeight::NORMAL)
-                            .child(class_checkbox(
-                                "generator-lower",
-                                "Lowercase",
-                                CharClasses::LOWER,
-                            ))
-                            .child(class_checkbox(
-                                "generator-upper",
-                                "Uppercase",
-                                CharClasses::UPPER,
-                            ))
-                            .child(class_checkbox(
-                                "generator-digits",
-                                "Digits",
-                                CharClasses::DIGITS,
-                            ))
-                            .child(class_checkbox(
-                                "generator-symbols",
-                                "Symbols",
-                                CharClasses::SYMBOLS,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(muted_foreground)
-                            .truncate()
-                            .child(preview),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .child(
-                                Button::new("generate-standalone-password")
-                                    .outline()
-                                    .small()
-                                    .label("Generate")
-                                    .disabled(classes.is_empty())
-                                    .on_click({
-                                        let locker = locker_for_generate.clone();
-                                        move |_, _, app| {
-                                            locker.update(app, |locker, cx| {
-                                                locker.generate_standalone_password(cx)
-                                            });
-                                        }
-                                    }),
-                            )
-                            .child(
-                                Button::new("copy-generated-password")
-                                    .primary()
-                                    .small()
-                                    .label(copy_label)
-                                    .on_click({
-                                        let locker = locker_for_copy.clone();
-                                        move |_, window, app| {
-                                            locker.update(app, |locker, cx| {
-                                                locker.copy_generated_password(window, cx)
-                                            });
-                                        }
-                                    }),
-                            ),
-                    )
-                    .into_any_element()
-            })
-            .into_any_element()
+            },
+            move |_window, app| {
+                generate_locker.update(app, |locker, cx| locker.generate_standalone_password(cx));
+            },
+            "pw-generator-copy",
+            if copied { "Copied!" } else { "Copy password" },
+            false,
+            move |window, app| {
+                copy_locker.update(app, |locker, cx| locker.copy_generated_password(window, cx));
+            },
+        );
+
+        Some(
+            div()
+                .id("password-generator-overlay-layer")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                // The overlay is a keyboard scope: it takes focus, occludes
+                // the page beneath it, and dismisses on Escape, so keystrokes
+                // cannot fall through to an editor draft behind the backdrop.
+                .tab_group()
+                .occlude()
+                .role(Role::Dialog)
+                .aria_label("Password generator")
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key.as_str() == "escape" {
+                        window.prevent_default();
+                        this.set_standalone_generator_open(false, cx);
+                    }
+                }))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, _window, app| {
+                    dismiss_locker.update(app, |locker, cx| {
+                        locker.set_standalone_generator_open(false, cx)
+                    });
+                })
+                .child(
+                    div()
+                        .absolute()
+                        // Sits just under the title bar, aligned toward the
+                        // right where the title-bar controls (including the
+                        // trigger button) live.
+                        .top(px(44.))
+                        .right(px(12.))
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, app| app.stop_propagation())
+                        .child(panel),
+                )
+                .focus_trap("password-generator-focus-trap", &focus)
+                .into_any_element(),
+        )
     }
 }

@@ -395,7 +395,7 @@ pub(crate) fn home_quick_action(
     label: &'static str,
     enabled: bool,
     hovered: Option<bool>,
-    on_click: Option<impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static>,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &mut Context<Nox>,
 ) -> AnyElement {
     let theme = Theme::current(cx);
@@ -446,17 +446,15 @@ pub(crate) fn home_quick_action(
                 .child("Soon"),
         );
     }
-    let mut button = Button::new(id)
+    let button = Button::new(id)
         .disabled(!enabled)
         .group(id)
         .flex_1()
         .h(px(62.))
         .px(px(14.))
         .rounded(px(8.))
+        .on_click(on_click)
         .child(content);
-    if let Some(on_click) = on_click {
-        button = button.on_click(on_click);
-    }
 
     if !enabled {
         return button
@@ -622,6 +620,10 @@ pub struct Nox {
     /// same epoch-guard pattern `ClipboardState` uses for its own timer.
     pub(crate) password_generator_copy_epoch: u64,
     pub(crate) _password_generator_copy_task: Task<()>,
+    /// Focus scope for the standalone generator overlay. The overlay takes
+    /// focus while open so Escape and typing are contained by the panel
+    /// instead of reaching the view (or editor draft) behind it.
+    pub(crate) password_generator_focus: FocusHandle,
 }
 
 impl Nox {
@@ -821,6 +823,7 @@ impl Nox {
             password_generator_copied: false,
             password_generator_copy_epoch: 0,
             _password_generator_copy_task: Task::ready(()),
+            password_generator_focus: cx.focus_handle(),
         };
 
         match locker.state {
@@ -1298,6 +1301,13 @@ impl Nox {
         window.close_all_dialogs(cx);
         window.close_sheet(cx);
         self.discard_clipboard_state(cx);
+        // The standalone generator is a lightweight overlay, not a dialog or
+        // sheet, so `close_all_dialogs`/`close_sheet` leave it untouched.
+        // Close it and drop its generated secret here, or locking via the
+        // command palette would leave the overlay (and the password) rendered
+        // over the unlock screen.
+        self.password_generator.open = false;
+        self.password_generator.generated = None;
         self.inactivity_epoch += 1;
         self._inactivity_task = Task::ready(());
         self.conflicts = ConflictState::Closed;
@@ -1339,6 +1349,7 @@ impl Nox {
             }
             WindowCommand::OpenVault => self.return_to_unlock(window, cx),
             WindowCommand::LockVault => self.lock_vault(window, cx),
+            WindowCommand::GeneratePassword => self.open_password_generator(window, cx),
             WindowCommand::Close => window.remove_window(),
         }
     }
@@ -1400,6 +1411,7 @@ impl Render for Nox {
         let remove_vault_modal = self.render_remove_vault_dialog(cx);
         let rename_vault_modal = self.render_rename_vault_dialog(cx);
         let change_password_modal = self.render_change_password_dialog(cx);
+        let password_generator_overlay = self.render_password_generator_overlay(cx);
         rsx! {
             <div
                 size_full
@@ -1427,6 +1439,9 @@ impl Render for Nox {
                 }}
                 {for modal in change_password_modal {
                     {modal}
+                }}
+                {for overlay in password_generator_overlay {
+                    {overlay}
                 }}
                 {for dialog in dialog_layer {
                     {dialog}
@@ -5039,6 +5054,18 @@ mod tests {
     }
 
     #[gpui::test]
+    fn generate_password_window_command_opens_the_generator(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "generate-password-command", &[]);
+        assert!(view.read_with(cx, |locker, _| !locker.password_generator.open));
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.run_window_command(WindowCommand::GeneratePassword, window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| locker.password_generator.open));
+        cleanup(&path);
+    }
+
+    #[gpui::test]
     fn newest_generated_password_copy_owns_the_copied_feedback(cx: &mut TestAppContext) {
         init(cx);
         let path = test_path("standalone-generator-copy-epoch");
@@ -5061,6 +5088,97 @@ mod tests {
         assert!(
             view.read_with(cx, |locker, _| locker.password_generator_copied),
             "the first copy's timer fired but must not have cleared the second copy's feedback",
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn password_generator_overlay_renders_only_when_open(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "generator-overlay-closed", &[]);
+        assert!(view.update(cx, |locker, cx| {
+            locker.render_password_generator_overlay(cx).is_none()
+        }));
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_password_generator(window, locker_cx);
+        });
+        assert!(view.update(cx, |locker, cx| {
+            locker.render_password_generator_overlay(cx).is_some()
+        }));
+        cleanup(&path);
+    }
+
+    /// I1 regression: once the standalone generator overlay is shown it must
+    /// own the keyboard. With an in-progress Login editor behind it, pressing
+    /// Escape must close the overlay and must not reach the editor workspace's
+    /// own Escape handler, which discards the draft.
+    #[gpui::test]
+    fn generator_overlay_escape_closes_it_without_cancelling_the_item_editor(
+        cx: &mut TestAppContext,
+    ) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "generator-overlay-escape", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.set_active_view(ActiveView::Home, locker_cx);
+            locker.open_create_editor(window, locker_cx);
+            locker.open_password_generator(window, locker_cx);
+        });
+        assert!(
+            view.read_with(cx, |locker, _| locker.uses_login_workspace()),
+            "precondition: the Login editor uses the full-page workspace behind the overlay",
+        );
+        assert!(
+            view.read_with(cx, |locker, _| locker.password_generator.open),
+            "precondition: the standalone generator overlay is open",
+        );
+
+        cx.simulate_keystrokes("escape");
+
+        assert!(
+            !view.read_with(cx, |locker, _| locker.password_generator.open),
+            "Escape while the generator is open must close the generator overlay",
+        );
+        assert!(
+            view.read_with(cx, |locker, _| locker.item_editor().is_some()),
+            "Escape handled by the overlay must not cancel the item editor draft behind it",
+        );
+        cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn locking_the_vault_closes_the_standalone_generator(cx: &mut TestAppContext) {
+        init(cx);
+        let (view, cx, path, _) = unlocked_view(cx, "lock-closes-generator", &[]);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.open_password_generator(window, locker_cx);
+            locker.generate_standalone_password(locker_cx);
+        });
+        let (open, generated) = view.read_with(cx, |locker, _| {
+            (
+                locker.password_generator.open,
+                locker.password_generator.generated.is_some(),
+            )
+        });
+        assert!(
+            open && generated,
+            "precondition: the standalone generator is open with a generated password",
+        );
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.lock_vault(window, locker_cx);
+        });
+        let (open, generated) = view.read_with(cx, |locker, _| {
+            (
+                locker.password_generator.open,
+                locker.password_generator.generated.is_some(),
+            )
+        });
+        assert!(
+            !open,
+            "locking the vault must close the standalone password generator overlay",
+        );
+        assert!(
+            !generated,
+            "locking the vault must drop the generated password",
         );
         cleanup(&path);
     }
