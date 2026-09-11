@@ -395,7 +395,7 @@ pub(crate) fn home_quick_action(
     label: &'static str,
     enabled: bool,
     hovered: Option<bool>,
-    on_click: Option<impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static>,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &mut Context<Nox>,
 ) -> AnyElement {
     let theme = Theme::current(cx);
@@ -446,17 +446,15 @@ pub(crate) fn home_quick_action(
                 .child("Soon"),
         );
     }
-    let mut button = Button::new(id)
+    let button = Button::new(id)
         .disabled(!enabled)
         .group(id)
         .flex_1()
         .h(px(62.))
         .px(px(14.))
         .rounded(px(8.))
+        .on_click(on_click)
         .child(content);
-    if let Some(on_click) = on_click {
-        button = button.on_click(on_click);
-    }
 
     if !enabled {
         return button
@@ -5069,15 +5067,15 @@ mod tests {
     fn password_generator_overlay_renders_only_when_open(cx: &mut TestAppContext) {
         init(cx);
         let (view, cx, path, _) = unlocked_view(cx, "generator-overlay-closed", &[]);
-        assert!(view.update(cx, |locker, cx| locker
-            .render_password_generator_overlay(cx)
-            .is_none()));
+        assert!(view.update(cx, |locker, cx| {
+            locker.render_password_generator_overlay(cx).is_none()
+        }));
         view.update_in(cx, |locker, window, locker_cx| {
             locker.open_password_generator(window, locker_cx);
         });
-        assert!(view.update(cx, |locker, cx| locker
-            .render_password_generator_overlay(cx)
-            .is_some()));
+        assert!(view.update(cx, |locker, cx| {
+            locker.render_password_generator_overlay(cx).is_some()
+        }));
         cleanup(&path);
     }
 

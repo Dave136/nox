@@ -495,9 +495,9 @@ impl Nox {
             "New login",
             true,
             self.auth_hovered.get("home-new-login").copied(),
-            Some({
+            {
                 let locker = locker.clone();
-                move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+                move |_, window, cx| {
                     locker.update(cx, |l, cx| {
                         if let Some(session) = l.session_mut() {
                             session.active_view = ActiveView::Logins;
@@ -505,7 +505,7 @@ impl Nox {
                         l.open_create_editor(window, cx);
                     });
                 }
-            }),
+            },
             cx,
         );
         let new_note = home_quick_action(
@@ -514,9 +514,9 @@ impl Nox {
             "Secure note",
             true,
             self.auth_hovered.get("home-secure-note").copied(),
-            Some({
+            {
                 let locker = locker.clone();
-                move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+                move |_, window, cx| {
                     locker.update(cx, |l, cx| {
                         if let Some(session) = l.session_mut() {
                             session.active_view = ActiveView::SecureNotes;
@@ -524,7 +524,7 @@ impl Nox {
                         l.open_create_editor(window, cx);
                     });
                 }
-            }),
+            },
             cx,
         );
         let new_card = home_quick_action(
@@ -533,7 +533,7 @@ impl Nox {
             "Payment card",
             false,
             None,
-            None::<fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>,
+            |_, _, _| {},
             cx,
         );
         let new_identity = home_quick_action(
@@ -542,7 +542,7 @@ impl Nox {
             "Identity",
             false,
             None,
-            None::<fn(&gpui::ClickEvent, &mut Window, &mut gpui::App)>,
+            |_, _, _| {},
             cx,
         );
         rsx! {
