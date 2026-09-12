@@ -16,6 +16,15 @@ pub(crate) struct Settings {
     pub(crate) language: String,
     pub(crate) autofill_enabled: bool,
     pub(crate) notifications_enabled: bool,
+    /// Locks the vault immediately before the OS suspends. Defaults to
+    /// `true` (secure-by-default) so upgrading users are protected without
+    /// having to find a new toggle first.
+    #[serde(default = "default_lock_on_suspend")]
+    pub(crate) lock_on_suspend: bool,
+}
+
+fn default_lock_on_suspend() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -32,6 +41,7 @@ impl Default for Settings {
             language: "English".into(),
             autofill_enabled: false,
             notifications_enabled: false,
+            lock_on_suspend: true,
         }
     }
 }
