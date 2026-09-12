@@ -12,6 +12,7 @@ mod locked;
 mod nav;
 mod password_generator;
 mod settings;
+mod suspend;
 mod theme;
 mod trash;
 mod ui;
