@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## v0.1.3 - 2026-09-12
+
+### Added
+
+- New download page and native installers per platform.
+- Standalone password generator quick action, including title-bar button and overlay support.
+- Gated release process requiring dependency audit, binary smoke test, and manual approval.
+- `--version` flag for headless invocation.
+- Coherent color coding for CLI script outputs.
+
+### Fixed
+
+- Keyboard focus containment within the title-bar password generator.
+- Layout and rendering issues in the mobile menu.
 ## v0.1.2 - 2026-09-10
 
 ### Added
