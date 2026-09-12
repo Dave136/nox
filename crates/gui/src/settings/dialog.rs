@@ -405,6 +405,7 @@ fn render_section(
             locker,
             data.settings_auto_lock_select.clone(),
             data.settings_clipboard_select.clone(),
+            data.settings.lock_on_suspend,
         ),
         SettingsSection::Vault => {
             vault_section(theme, locker, &data.vault_list, data.conflict_count)
@@ -565,9 +566,17 @@ fn security_section(
     locker: Entity<Nox>,
     settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
     settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
+    lock_on_suspend: bool,
 ) -> AnyElement {
     let auto_lock = duration_control(theme, settings_auto_lock_select);
     let clipboard = duration_control(theme, settings_clipboard_select);
+    let suspend_toggle = toggle(
+        theme,
+        "settings-lock-on-suspend",
+        lock_on_suspend,
+        locker.clone(),
+        |settings| settings.lock_on_suspend = !settings.lock_on_suspend,
+    );
     div()
         .flex()
         .flex_col()
@@ -582,6 +591,13 @@ fn security_section(
             "Lock after inactivity",
             "Nox locks automatically after this period without activity.",
             auto_lock,
+        ))
+        .child(divider(theme))
+        .child(settings_row(
+            theme,
+            "Lock when the system sleeps",
+            "Nox locks immediately before this computer suspends.",
+            suspend_toggle,
         ))
         .child(divider(theme))
         .child(settings_row(
