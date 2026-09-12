@@ -1,9 +1,10 @@
 ---
 import GithubMark from "./GithubMark.astro";
+import { SOURCE_URL } from "../lib/download-links";
 ---
 
 <section id="open" class="bg-paper px-5 py-[72px] min-[801px]:px-14 min-[801px]:py-20">
-  <div class="flex min-h-[600px] flex-col justify-between rounded-[22px] border border-line bg-panel p-16" data-motion>
+  <div class="flex min-h-[600px] flex-col justify-between rounded-[22px] border border-line bg-panel p-8 min-[801px]:p-16" data-motion>
     <div>
       <div class="flex items-center gap-3 font-mono text-[10px] font-semibold tracking-[0.7px] text-muted">
         <i class="h-px w-[34px] bg-current"></i>BUILT IN THE OPEN
@@ -17,7 +18,7 @@ import GithubMark from "./GithubMark.astro";
         Nox is open source because trust is not a claim. Inspect the code,
         understand the model, and make it yours.
       </p>
-      <a class="inline-flex h-[42px] items-center gap-2 rounded-[22px] bg-ink px-[18px] text-[13px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href="https://github.com">
+      <a class="inline-flex h-[42px] items-center gap-2 rounded-[22px] bg-ink px-[18px] text-[13px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href={SOURCE_URL}>
         <GithubMark size={16} /> Explore the repository
       </a>
     </footer>

@@ -1,12 +1,14 @@
 ---
-import { Check, Download, Grid2x2, Menu, Route, ShieldCheck, X } from "@lucide/astro";
+import { Check, Grid2x2, Menu, MonitorDown, Route, ShieldCheck, X } from "@lucide/astro";
 import GithubMark from "./GithubMark.astro";
+import PlatformDownloadCta from "./PlatformDownloadCta.astro";
 
 const items = [
   { href: "#product", label: "Product", Icon: Grid2x2 },
   { href: "#how", label: "How it works", Icon: Route },
   { href: "#security", label: "Security", Icon: ShieldCheck },
   { href: "#open", label: "Open source", Icon: GithubMark },
+  { href: "/download", label: "Download", Icon: MonitorDown },
 ];
 ---
 
@@ -69,13 +71,7 @@ const items = [
           </a>
         ))
       }
-      <a
-        class="mt-2 flex h-[52px] items-center justify-between rounded-[14px] bg-[#c8ff3d] px-4 text-[13px] font-[650] text-[#171a1f]"
-        href="#waitlist"
-        data-island-link
-      >
-        Download preview <Download size={15} stroke-width={2} aria-hidden="true" />
-      </a>
+      <PlatformDownloadCta variant="light" class="mt-2" />
     </nav>
   </div>
 </div>
@@ -118,103 +114,59 @@ const items = [
 
     const setOpen = async (next: boolean) => {
       if (busy || next === open) return;
+
       busy = true;
       open = next;
+      toggle.setAttribute("aria-expanded", String(open));
+      island.toggleAttribute("data-island-open", open);
+      menu.toggleAttribute("inert", !open);
+      openIcon.classList.toggle("hidden", open);
+      openIcon.classList.toggle("block", !open);
+      closeIcon.classList.toggle("hidden", !open);
+      closeIcon.classList.toggle("block", open);
 
-      island.toggleAttribute("data-island-open", next);
-      toggle.setAttribute("aria-expanded", String(next));
-      toggle.setAttribute("aria-label", next ? "Close menu" : "Open menu");
-      openIcon.classList.toggle("hidden", next);
-      closeIcon.classList.toggle("hidden", !next);
-      wordmark.classList.toggle("hidden", !next);
-
-      if (next) {
-        setChip(null);
-        menu.removeAttribute("inert");
-        const width = expandedWidthFor(innerWidth);
-        // Measure at the final width: at 128px the labels wrap and overstate the height.
-        shell.style.width = `${width}px`;
-        const height = shell.scrollHeight;
-        shell.style.width = `${ISLAND.compactWidth}px`;
-        await run(openSequence(width, height));
-        await animate(menu, { opacity: 1 }, { duration: reduced.matches ? 0 : 0.15 }).finished;
+      if (open) {
+        wordmark.classList.remove("hidden");
+        menu.style.opacity = "1";
+        const measuredMenuHeight = menu.scrollHeight;
+        shell.style.setProperty("--island-menu-height", `${measuredMenuHeight}px`);
+        await run(openSequence(expandedWidthFor(window.innerWidth)));
       } else {
-        menu.setAttribute("inert", "");
-        await animate(menu, { opacity: 0 }, { duration: reduced.matches ? 0 : 0.12 }).finished;
-        await run(closeSequence());
-        setStuck(scrollY > ISLAND.scrollThreshold);
+        await run(closeSequence(stuck));
+        menu.style.opacity = "0";
+        wordmark.classList.toggle("hidden", !stuck);
       }
-
       busy = false;
     };
 
     const setStuck = (next: boolean) => {
-      if (next === stuck) return;
+      if (open) return;
       stuck = next;
+      island.classList.toggle("opacity-0", !stuck);
+      island.classList.toggle("opacity-100", stuck);
+      island.toggleAttribute("inert", !stuck);
+      shell.style.width = stuck ? `${ISLAND.stuckWidth}px` : `${ISLAND.closedWidth}px`;
+      wordmark.classList.toggle("hidden", !stuck);
+      setChip(stuck ? "Private vault" : null);
+    };
 
-      if (!next && open) void setOpen(false);
-      island.toggleAttribute("inert", !next);
-
-      const duration = reduced.matches ? 0 : ISLAND.revealDuration;
-      animate(island, { opacity: next ? 1 : 0, y: next ? 0 : -12 }, { duration, ease: "easeOut" });
-      animate(header, { opacity: next ? 0 : 1 }, { duration, ease: "easeOut" });
+    const selectAndClose = (event: Event) => {
+      const link = event.currentTarget as HTMLAnchorElement;
+      setChip(link.textContent?.trim() || null);
+      void setOpen(false);
+      window.setTimeout(() => setChip(stuck ? "Private vault" : null), ISLAND.chipDwellMs);
     };
 
     toggle.addEventListener("click", () => void setOpen(!open));
-
-    // At the top of the page the island is hidden, so the header keeps its own burger.
-    headerMenu?.addEventListener("click", async () => {
-      setStuck(true);
-      await setOpen(true);
+    headerMenu?.addEventListener("click", () => void setOpen(true));
+    menu.querySelectorAll("a").forEach((link) => link.addEventListener("click", selectAndClose));
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") void setOpen(false);
     });
-
-    // Navigating parks the island wide with the section chip, then closes horizontally.
-    const selectAndClose = async (label: string) => {
-      if (busy || !open) return;
-      busy = true;
-      open = false;
-
-      island.removeAttribute("data-island-open");
-      toggle.setAttribute("aria-expanded", "false");
-      toggle.setAttribute("aria-label", "Open menu");
-      openIcon.classList.remove("hidden");
-      closeIcon.classList.add("hidden");
-      menu.setAttribute("inert", "");
-
-      const [collapseHeight, collapseWidth] = closeSequence();
-      await animate(menu, { opacity: 0 }, { duration: reduced.matches ? 0 : 0.12 }).finished;
-      setChip(label);
-      await run([collapseHeight]);
-      await new Promise((resolve) => setTimeout(resolve, ISLAND.chipDwellMs));
-      setChip(null);
-      wordmark.classList.add("hidden");
-      await run([collapseWidth]);
-      setStuck(scrollY > ISLAND.scrollThreshold);
-
-      busy = false;
-    };
-
-    menu.querySelectorAll<HTMLAnchorElement>("[data-island-link]").forEach((link) => {
-      link.addEventListener("click", () => void selectAndClose(link.textContent?.trim() ?? ""));
+    window.addEventListener("resize", () => {
+      if (open) shell.style.width = `${expandedWidthFor(window.innerWidth)}px`;
     });
-
-    addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && open) {
-        void setOpen(false);
-        toggle.focus();
-      }
-    });
-
-    addEventListener("pointerdown", (event) => {
-      if (open && !island.contains(event.target as Node)) void setOpen(false);
-    });
-
-    addEventListener("resize", () => {
-      if (!open) return;
-      shell.style.width = `${expandedWidthFor(innerWidth)}px`;
-      shell.style.height = `${shell.scrollHeight}px`;
-    });
-
-    addEventListener("scroll", () => setStuck(scrollY > ISLAND.scrollThreshold), { passive: true });
+    document.addEventListener("scroll", () => setStuck(window.scrollY > header.offsetHeight), { passive: true });
+    setStuck(window.scrollY > header.offsetHeight);
   }
 </script>

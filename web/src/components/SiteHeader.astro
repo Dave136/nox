@@ -1,8 +1,9 @@
 ---
-import { Download, Menu } from "@lucide/astro";
-import DeviceSyncSignature from "./DeviceSyncSignature.astro";
+import { Menu } from "@lucide/astro";
 import GithubMark from "./GithubMark.astro";
 import MobileNavIsland from "./MobileNavIsland.astro";
+import PlatformDownloadCta from "./PlatformDownloadCta.astro";
+import { SOURCE_URL } from "../lib/download-links";
 ---
 
 <header class="sticky top-0 z-50 flex h-20 items-center justify-between border-b border-line bg-paper/75 px-5 backdrop-blur-md min-[801px]:px-14" data-site-header>
@@ -19,15 +20,14 @@ import MobileNavIsland from "./MobileNavIsland.astro";
     <a class="transition-colors hover:text-ink focus-visible:text-ink" href="#how">How it works</a>
     <a class="transition-colors hover:text-ink focus-visible:text-ink" href="#security">Security</a>
     <a class="transition-colors hover:text-ink focus-visible:text-ink" href="#open">Open source</a>
+    <a class="transition-colors hover:text-ink focus-visible:text-ink" href="/download">Download</a>
   </nav>
 
   <div class="flex items-center gap-3 min-[801px]:gap-7">
-    <a class="hidden items-center gap-[7px] text-[13px] text-muted transition-colors hover:text-ink focus-visible:text-ink min-[801px]:flex" href="https://github.com">
+    <a class="hidden items-center gap-[7px] text-[13px] text-muted transition-colors hover:text-ink focus-visible:text-ink min-[801px]:flex" href={SOURCE_URL}>
       <GithubMark size={15} /> GitHub
     </a>
-    <a class="hidden md:inline-flex h-[42px] items-center gap-2 rounded-[22px] bg-ink px-[18px] text-[13px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href="#waitlist">
-      Download preview <Download size={15} />
-    </a>
+    <PlatformDownloadCta class="hidden md:flex" />
 
     <button
       class="grid size-11 shrink-0 place-items-center rounded-lg text-ink transition-colors hover:bg-panel min-[801px]:hidden"

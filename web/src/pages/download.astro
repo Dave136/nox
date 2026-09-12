@@ -1,0 +1,143 @@
+---
+import { Apple, ArrowLeft, Download, FileArchive, MonitorDown, Terminal } from "@lucide/astro";
+import GithubMark from "../components/GithubMark.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import Layout from "../layouts/Layout.astro";
+import { DOWNLOADS, RELEASE_URL, SOURCE_URL } from "../lib/download-links";
+
+const cards = [
+  {
+    platform: DOWNLOADS.macos.platform,
+    label: DOWNLOADS.macos.label,
+    fileName: "nox-macos-aarch64.zip",
+    href: DOWNLOADS.macos.href,
+    arch: DOWNLOADS.macos.arch,
+    format: DOWNLOADS.macos.format,
+    note: DOWNLOADS.macos.note,
+    title: "macOS Apple Silicon",
+    Icon: Apple,
+    checksum: `${DOWNLOADS.macos.href}.sha256`,
+  },
+  {
+    platform: DOWNLOADS.linux.platform,
+    label: DOWNLOADS.linux.label,
+    fileName: "nox-linux-x86_64.tar.gz",
+    href: DOWNLOADS.linux.href,
+    arch: DOWNLOADS.linux.arch,
+    format: DOWNLOADS.linux.format,
+    note: DOWNLOADS.linux.note,
+    title: "Linux x86_64",
+    Icon: Terminal,
+    checksum: `${DOWNLOADS.linux.href}.sha256`,
+  },
+];
+---
+
+<Layout
+  title="Download Nox — latest release"
+  description="Download the latest Nox preview for macOS and Linux, or inspect the open-source repository."
+>
+  <header class="sticky top-0 z-50 flex h-20 w-full items-center justify-between border-b border-line bg-paper/80 px-5 backdrop-blur-md min-[801px]:px-14">
+    <a class="flex items-center gap-2.5" href="/" aria-label="Nox home">
+      <span class="grid size-[30px] place-items-center rounded-lg bg-ink">
+        <img class="w-5 invert" src="/nox-logo.svg" alt="" />
+      </span>
+      <span class="text-[22px] font-semibold tracking-[-0.7px]">nox</span>
+      <span class="hidden font-mono text-[10px] font-semibold tracking-[0.7px] text-muted min-[801px]:inline">VAULT</span>
+    </a>
+    <nav class="flex items-center gap-4 text-[13px] text-muted min-[801px]:gap-7" aria-label="Download navigation">
+      <a class="hidden transition-colors hover:text-ink focus-visible:text-ink min-[640px]:inline" href="/">Overview</a>
+      <a class="transition-colors hover:text-ink focus-visible:text-ink" href={SOURCE_URL}>GitHub</a>
+      <a class="inline-flex h-9 items-center gap-2 rounded-[20px] bg-ink px-4 text-[12px] font-semibold text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]" href={RELEASE_URL}>
+        Latest release
+      </a>
+    </nav>
+  </header>
+
+  <main class="bg-paper">
+    <section class="mx-auto grid min-h-[620px] w-full max-w-[1180px] grid-cols-1 items-center gap-12 px-5 py-16 min-[900px]:grid-cols-[1fr_380px] min-[900px]:px-8 min-[900px]:py-24">
+      <div class="max-w-[680px]" data-motion>
+        <a class="mb-12 inline-flex items-center gap-2 text-[13px] font-medium text-muted transition-colors hover:text-ink focus-visible:text-ink" href="/">
+          <ArrowLeft size={15} aria-hidden="true" /> Back to overview
+        </a>
+        <p class="m-0 mb-5 flex items-center gap-3 font-mono text-[10px] font-semibold tracking-[0.7px] text-muted">
+          <i class="h-px w-[34px] bg-current"></i>Latest release
+        </p>
+        <h1 class="m-0 text-[64px] leading-[0.9] font-semibold tracking-[-0.07em] min-[640px]:text-[96px]">
+          Download Nox<br /><em class="not-italic text-[#82878d]">for desktop.</em>
+        </h1>
+        <p class="mt-7 mb-0 max-w-[560px] text-[17px] leading-[1.65] text-muted">
+          Pick the preview build that matches your operating system. Links always
+          resolve through GitHub’s latest release, so this page stays current as
+          new versions ship.
+        </p>
+      </div>
+
+      <aside class="rounded-[22px] border border-line bg-panel p-6 shadow-[0_18px_60px_#171a1f12]" data-motion>
+        <div class="mb-5 flex size-10 items-center justify-center rounded-full bg-ink text-light">
+          <MonitorDown size={18} aria-hidden="true" />
+        </div>
+        <h2 class="m-0 text-[22px] font-semibold tracking-[-0.03em]">Release assets</h2>
+        <p class="mt-4 mb-6 text-[14px] leading-[1.6] text-muted">
+          Downloads are served by GitHub Releases. Checksums sit beside each
+          asset, and the source stays available for inspection.
+        </p>
+        <div class="flex flex-col gap-3">
+          <a class="inline-flex h-11 items-center justify-center gap-2 rounded-[22px] bg-ink px-4 text-[13px] font-semibold text-light transition-transform hover:scale-[1.02] focus-visible:scale-[1.02]" href={RELEASE_URL}>
+            Release notes <FileArchive size={15} aria-hidden="true" />
+          </a>
+          <a class="inline-flex h-11 items-center justify-center gap-2 rounded-[22px] border border-line px-4 text-[13px] font-semibold transition-colors hover:border-ink focus-visible:border-ink" href={SOURCE_URL}>
+            <GithubMark size={15} /> Source code
+          </a>
+        </div>
+      </aside>
+    </section>
+
+    <section class="border-t border-line px-5 py-16 min-[801px]:px-8 min-[801px]:py-22">
+      <div class="mx-auto grid max-w-[1180px] grid-cols-1 gap-6 min-[900px]:grid-cols-2" data-motion>
+        {
+          cards.map(({ title, Icon, platform, arch, format, note, href, checksum, fileName, label }) => (
+            <article class="grid grid-cols-1 overflow-hidden rounded-[22px] border border-line bg-panel min-[640px]:grid-cols-[210px_1fr]">
+              <div class="border-b border-line p-7 min-[640px]:border-r min-[640px]:border-b-0">
+                <p class="m-0 font-mono text-[10px] font-semibold tracking-[0.7px] text-muted">DOWNLOADS</p>
+                <h2 class="mt-5 mb-4 text-[38px] leading-none font-semibold tracking-[-0.06em]">{platform}</h2>
+                <p class="m-0 max-w-[28ch] text-[14px] leading-[1.6] text-muted">{note}</p>
+              </div>
+
+              <div class="p-7">
+                <div class="mb-8 flex items-start justify-between gap-4">
+                  <div>
+                    <h3 class="m-0 flex items-center gap-2 text-[28px] leading-tight font-semibold tracking-[-0.04em]">
+                      <Icon size={24} aria-hidden="true" /> {title}
+                    </h3>
+                    <p class="mt-2 mb-0 text-[13px] text-muted">{fileName}</p>
+                  </div>
+                  <span class="rounded border border-line px-2 py-1 font-mono text-[10px] font-semibold tracking-[0.7px] text-muted uppercase">{format}</span>
+                </div>
+
+                <dl class="mb-8 grid grid-cols-2 gap-5 text-[13px]">
+                  <div>
+                    <dt class="font-mono text-[10px] font-semibold tracking-[0.7px] text-muted">ARCH</dt>
+                    <dd class="mt-2 m-0 font-medium">{arch}</dd>
+                  </div>
+                  <div>
+                    <dt class="font-mono text-[10px] font-semibold tracking-[0.7px] text-muted">VERSION</dt>
+                    <dd class="mt-2 m-0 font-medium">Latest release</dd>
+                  </div>
+                </dl>
+
+                <a class="inline-flex h-11 w-full items-center justify-center gap-2 rounded-[22px] bg-ink px-4 text-[13px] font-semibold text-light transition-transform hover:scale-[1.02] focus-visible:scale-[1.02]" href={href}>
+                  <Download size={15} aria-hidden="true" /> {label}
+                </a>
+                <a class="mt-3 inline-flex w-full justify-center text-[12px] font-medium text-muted underline underline-offset-4 transition-colors hover:text-ink focus-visible:text-ink" href={checksum}>
+                  SHA-256 checksum
+                </a>
+              </div>
+            </article>
+          ))
+        }
+      </div>
+    </section>
+  </main>
+  <SiteFooter />
+</Layout>

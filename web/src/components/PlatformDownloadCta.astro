@@ -1,0 +1,92 @@
+---
+import { Apple, Download, MonitorDown, Terminal } from "@lucide/astro";
+import { DOWNLOADS, downloadOptionsPath, primaryDownload } from "../lib/download-links";
+
+interface Props {
+  variant?: "ink" | "light" | "outline";
+  size?: "sm" | "md";
+  showAlternative?: boolean;
+  class?: string;
+}
+
+const {
+  variant = "ink",
+  size = "sm",
+  showAlternative = false,
+  class: extraClass = "",
+} = Astro.props;
+
+const sizeClass = size === "md" ? "h-12 rounded-3xl px-6" : "h-10.5 rounded-[22px] px-4.5";
+const variantClass = {
+  ink: "bg-ink text-light transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]",
+  light: "bg-acid text-ink transition-transform hover:scale-[1.03] focus-visible:scale-[1.03]",
+  outline:
+    "border border-[#c4c4be] text-ink transition-colors hover:border-ink focus-visible:border-ink",
+}[variant];
+---
+
+<div class={`flex flex-col items-start gap-2 ${extraClass}`}>
+  <a
+    class={`inline-flex ${sizeClass} items-center gap-2 text-[13px] font-semibold ${variantClass}`}
+    href={primaryDownload.href}
+    data-primary-download
+    data-download-macos={DOWNLOADS.macos.href}
+    data-download-linux={DOWNLOADS.linux.href}
+    data-download-options={downloadOptionsPath}
+  >
+    <span data-platform-icon="macos"><Apple size={16} aria-hidden="true" /></span>
+    <span class="hidden" data-platform-icon="linux"><Terminal size={16} aria-hidden="true" /></span>
+    <span class="hidden" data-platform-icon="generic"><MonitorDown size={16} aria-hidden="true" /></span>
+    <span data-download-label>Download preview</span>
+    <Download size={16} aria-hidden="true" />
+  </a>
+  {
+    showAlternative && (
+      <p class="m-0 text-[13px] leading-[1.5] text-muted" data-download-alternative>
+        Also available for <span data-alternative-platform>Linux</span> · <a class="font-semibold text-ink underline underline-offset-4 transition-colors hover:text-muted focus-visible:text-muted" href={downloadOptionsPath}>See options</a>
+      </p>
+    )
+  }
+</div>
+
+<script>
+  const detectPlatform = () => {
+    const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+    const value = [nav.userAgentData?.platform, navigator.platform, navigator.userAgent]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    if (value.includes("mac")) return "macos";
+    if (value.includes("linux") || value.includes("x11")) return "linux";
+    return "generic";
+  };
+
+  const platform = detectPlatform();
+  const fallbackLabels = {
+    macos: "macOS",
+    linux: "Linux",
+    generic: "your system",
+  } as const;
+  const alternativeLabels = {
+    macos: "Linux",
+    linux: "macOS",
+    generic: "macOS and Linux",
+  } as const;
+
+  document.querySelectorAll<HTMLAnchorElement>("[data-primary-download]").forEach((link) => {
+    const href = platform === "macos" ? link.dataset.downloadMacos : platform === "linux" ? link.dataset.downloadLinux : link.dataset.downloadOptions;
+    link.href = href ?? link.href;
+    link.setAttribute("aria-label", platform === "generic" ? "Choose a Nox download" : `Download Nox for ${fallbackLabels[platform]}`);
+
+    link.querySelector<HTMLElement>("[data-download-label]")?.replaceChildren(`Download preview for ${fallbackLabels[platform]}`);
+    link.querySelectorAll<HTMLElement>("[data-platform-icon]").forEach((icon) => {
+      const active = icon.dataset.platformIcon === platform;
+      icon.classList.toggle("hidden", !active);
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-alternative-platform]").forEach((target) => {
+    target.textContent = alternativeLabels[platform];
+  });
+</script>

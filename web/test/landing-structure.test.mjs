@@ -101,7 +101,7 @@ test("mobile nav island replaces the details dropdown", async () => {
   assert.match(island, /chipDwellMs/);
   assert.match(island, /selectAndClose/);
 
-  for (const href of ["#product", "#security", "#how", "#open", "#waitlist"]) {
+  for (const href of ["#product", "#security", "#how", "#open", "/download"]) {
     assert.ok(island.includes(`"${href}"`), `island links to ${href}`);
   }
 });
@@ -122,22 +122,62 @@ test("a back-to-top control appears once the page is scrolled", async () => {
   assert.match(backToTop, /aria-label/);
 });
 
-test("every preview CTA uses one label and promises only what it does", async () => {
-  const [hero, header, island, preview] = await Promise.all([
+test("download CTAs use latest release assets and real source links", async () => {
+  const [hero, header, island, preview, openSource, footer, links, cta] = await Promise.all([
     read("src/components/HeroSection.astro"),
     read("src/components/SiteHeader.astro"),
     read("src/components/MobileNavIsland.astro"),
     read("src/components/WaitlistSection.astro"),
+    read("src/components/OpenSourceSection.astro"),
+    read("src/components/SiteFooter.astro"),
+    read("src/lib/download-links.ts"),
+    read("src/components/PlatformDownloadCta.astro"),
   ]);
 
-  for (const [name, source] of [["hero", hero], ["header", header], ["island", island]]) {
-    assert.ok(source.includes("Download preview"), `${name} uses the shared CTA label`);
-    assert.doesNotMatch(source, /waitlist</i, `${name} has no leftover waitlist wording`);
+  const sources = [hero, header, island, preview, openSource, footer, links, cta];
+  for (const source of sources) {
+    assert.doesNotMatch(source, /href="https:\/\/github\.com"/);
   }
 
-  // The section collects nothing: two CTAs, no email capture.
-  assert.doesNotMatch(preview, /<form|<input|<label/);
-  assert.match(preview, /Download preview/);
+  assert.match(links, /SOURCE_URL = "https:\/\/github\.com\/Dave136\/nox"/);
+  assert.match(links, /RELEASE_URL = "https:\/\/github\.com\/Dave136\/nox\/releases\/latest"/);
+  assert.match(links, /releases\/latest\/download\/nox-macos-aarch64\.zip/);
+  assert.match(links, /releases\/latest\/download\/nox-linux-x86_64\.tar\.gz/);
+  assert.doesNotMatch(links, /releases\/download\/v\d/);
+
+  for (const [name, source] of [["hero", hero], ["header", header], ["island", island]]) {
+    assert.ok(source.includes("PlatformDownloadCta"), `${name} uses the shared download CTA`);
+    assert.ok(source.includes("/download") || source.includes("showAlternative"), `${name} links to download options`);
+  }
+  assert.ok(links.includes("primaryDownload"), "shared module exposes the OS-aware primary download");
+
+  assert.match(cta, /Also available for/);
+  assert.match(cta, /See options/);
+  assert.match(cta, /data-alternative-platform/);
+  assert.match(cta, /navigator\.userAgentData|navigator\.platform|navigator\.userAgent/s);
   assert.match(preview, /View source/);
   assert.match(preview, /PREVIEW ACCESS/);
+});
+
+test("download page presents responsive platform options", async () => {
+  const page = await read("src/pages/download.astro");
+
+  assert.match(page, /Download Nox/);
+  assert.match(page, /Latest release/);
+  const header = page.match(/<header[\s\S]*?<\/header>/)?.[0] ?? "";
+  assert.ok(header, "download page has a header");
+  assert.doesNotMatch(header, /mx-auto/);
+  assert.doesNotMatch(header, /max-w-\[1180px\]/);
+  assert.match(header, /w-full/);
+  assert.match(header, /justify-between/);
+  assert.match(header, /min-\[801px\]:px-14/);
+  assert.match(page, /SOURCE_URL/);
+  assert.match(page, /RELEASE_URL/);
+  assert.match(page, /DOWNLOADS/);
+  assert.match(page, /macOS Apple Silicon/);
+  assert.match(page, /Linux x86_64/);
+  assert.match(page, /nox-macos-aarch64\.zip/);
+  assert.match(page, /nox-linux-x86_64\.tar\.gz/);
+  assert.match(page, /grid-cols-1/);
+  assert.match(page, /min-\[900px\]:grid-cols/);
 });
