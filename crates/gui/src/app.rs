@@ -324,6 +324,20 @@ impl Nox {
         }
     }
 
+    /// Locks the vault in response to an OS session/screen-lock signal,
+    /// honoring the `lock_on_session_lock` setting. See
+    /// `handle_suspend_signal`'s doc comment for why this decision lives
+    /// here, separate from the OS listener itself.
+    pub(crate) fn handle_session_lock_signal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.lock_on_session_lock {
+            self.lock_vault(window, cx);
+        }
+    }
+
     /// Starts the OS suspend listener. Deliberately not called from `Nox::new`
     /// itself: on Linux it transitively spawns a zbus connection on its own
     /// OS thread, which GPUI's `TestScheduler` treats as non-deterministic
@@ -2430,6 +2444,36 @@ mod tests {
             locker.state = unlocked_state(second_vault, window, locker_cx);
             locker.settings.lock_on_suspend = true;
             locker.handle_suspend_signal(window, locker_cx);
+        });
+        assert!(second_view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
+        cleanup(&second_path);
+    }
+
+    #[gpui::test]
+    fn handle_session_lock_signal_locks_only_when_the_setting_is_enabled(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("session-lock-signal-disabled");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.state = unlocked_state(vault, window, locker_cx);
+            locker.settings.lock_on_session_lock = false;
+            locker.handle_session_lock_signal(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| matches!(
+            &locker.state,
+            AppState::Unlocked(_)
+        )));
+        cleanup(&path);
+
+        let second_path = test_path("session-lock-signal-enabled");
+        let second_vault = Vault::create(b"correct", &second_path).unwrap();
+        let (second_view, cx) =
+            add_locker_view(cx, second_path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        second_view.update_in(cx, |locker, window, locker_cx| {
+            locker.state = unlocked_state(second_vault, window, locker_cx);
+            locker.settings.lock_on_session_lock = true;
+            locker.handle_session_lock_signal(window, locker_cx);
         });
         assert!(second_view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
         cleanup(&second_path);
