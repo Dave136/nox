@@ -54,6 +54,7 @@ Release: 1%{?dist}
 Summary: Native desktop password manager
 License: GPL-3.0-only
 URL: https://github.com/Dave136/nox
+Source0: nox-%{version}.tar.gz
 BuildArch: x86_64
 Requires: glibc, fontconfig, libX11, libxcb, libxkbcommon, libxkbcommon-x11
 
