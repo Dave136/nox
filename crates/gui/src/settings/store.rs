@@ -86,4 +86,23 @@ mod tests {
         assert!(loaded.lock_on_suspend);
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    #[test]
+    fn settings_missing_lock_on_session_lock_field_defaults_to_true_and_preserves_other_fields() {
+        let dir = std::env::temp_dir().join(format!(
+            "nox-settings-missing-lock-on-session-lock-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            Settings::path(&dir),
+            br#"{"version":1,"auto_lock_seconds":120,"clipboard_seconds":15,"sync_system_theme":false,"bright_colors":true,"transparency_percent":100,"background_blur":true,"dim_inactive_panes":true,"language":"English","autofill_enabled":false,"notifications_enabled":false,"lock_on_suspend":true}"#,
+        )
+        .unwrap();
+
+        let loaded = load_settings(&dir);
+        assert_eq!(loaded.auto_lock_seconds, 120);
+        assert!(loaded.lock_on_session_lock);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

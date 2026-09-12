@@ -21,9 +21,18 @@ pub(crate) struct Settings {
     /// having to find a new toggle first.
     #[serde(default = "default_lock_on_suspend")]
     pub(crate) lock_on_suspend: bool,
+    /// Locks the vault when the operating system's session/screen lock
+    /// activates. Best-effort on Linux (see `crates/gui/src/suspend/linux.rs`);
+    /// defaults to `true` (secure-by-default).
+    #[serde(default = "default_lock_on_session_lock")]
+    pub(crate) lock_on_session_lock: bool,
 }
 
 fn default_lock_on_suspend() -> bool {
+    true
+}
+
+fn default_lock_on_session_lock() -> bool {
     true
 }
 
@@ -42,6 +51,7 @@ impl Default for Settings {
             autofill_enabled: false,
             notifications_enabled: false,
             lock_on_suspend: true,
+            lock_on_session_lock: true,
         }
     }
 }
