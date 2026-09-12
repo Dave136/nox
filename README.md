@@ -47,8 +47,10 @@ the codebase but is not yet wired into the app.
 Version 1 supports **macOS and Linux**. Windows is unsupported.
 
 Nox listens for a suspend signal on both macOS (`NSWorkspaceWillSleepNotification`)
-and Linux (systemd-logind's `PrepareForSleep`) and locks the vault
-immediately. Nox also listens for an OS session/screen-lock signal: on
+and Linux (systemd-logind's `PrepareForSleep`) and issues the lock on that
+signal; on Linux this may complete by resume rather than strictly before
+suspend, since Nox does not yet hold a delay inhibitor. Nox also listens for
+an OS session/screen-lock signal: on
 macOS, the undocumented `com.apple.screenIsLocked` distributed
 notification; on Linux, there is **no single freedesktop standard** for
 this, so Nox listens best-effort for both GNOME's `org.gnome.ScreenSaver`
@@ -61,9 +63,9 @@ table below still marks Linux X11 as unverified for this column.
 
 | Environment | Explicit Lock | Inactivity timeout | Suspend | OS session lock |
 | --- | --- | --- | --- | --- |
-| macOS | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Locks on screen lock (manually verified; no automated coverage) |
-| Linux Wayland / GNOME | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Locks on screen lock via GNOME's ScreenSaver signal (manually verified; no automated coverage) |
-| Linux X11 | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Best-effort only — depends on the running desktop environment exposing GNOME's or KDE's ScreenSaver D-Bus interface; not guaranteed on every X11 desktop environment |
+| macOS | Not verified | Not verified | Locks on suspend (implemented; not yet verified on hardware; no automated coverage) | Locks on screen lock (implemented; not yet verified on hardware; no automated coverage) |
+| Linux Wayland / GNOME | Not verified | Not verified | Locks on suspend (implemented; not yet verified on hardware; no automated coverage) | Locks on screen lock via GNOME's ScreenSaver signal (implemented; not yet verified on hardware; no automated coverage) |
+| Linux X11 | Not verified | Not verified | Locks on suspend (implemented; not yet verified on hardware; no automated coverage) | Best-effort only — depends on the running desktop environment exposing GNOME's or KDE's ScreenSaver D-Bus interface; not guaranteed on every X11 desktop environment |
 
 Suspend and session-lock detection both rely on a real suspend/lock event to
 verify (see `docs/superpowers/plans/` for the exact manual steps per
