@@ -31,8 +31,6 @@ trait Login1Manager {
 /// Connects to systemd-logind on the system bus and sends `()` on `tx` once
 /// per suspend edge of `PrepareForSleep`. Logs once and returns — never
 /// panics — if the system bus or systemd-logind isn't available.
-// wired in Task 5
-#[allow(dead_code)]
 pub(crate) async fn watch_prepare_for_sleep(tx: UnboundedSender<()>) {
     let connection = match zbus::Connection::system().await {
         Ok(connection) => connection,

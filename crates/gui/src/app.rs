@@ -312,6 +312,28 @@ impl Nox {
         self.arm_inactivity_timer(window, cx);
         cx.notify();
     }
+
+    /// Locks the vault in response to an OS suspend signal, honoring the
+    /// `lock_on_suspend` setting. Kept separate from the OS listener itself
+    /// (`crate::suspend`) so this decision is unit-testable without a real
+    /// suspend event — the listener's only job is calling this once per
+    /// suspend edge.
+    pub(crate) fn handle_suspend_signal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.lock_on_suspend {
+            self.lock_vault(window, cx);
+        }
+    }
+
+    /// Starts the OS suspend listener. Deliberately not called from `Nox::new`
+    /// itself: on Linux it transitively spawns a zbus connection on its own
+    /// OS thread, which GPUI's `TestScheduler` treats as non-deterministic
+    /// and panics on — every test constructs a `Nox` via `Nox::new`, so
+    /// starting the listener there broke the whole test suite. `main.rs`
+    /// calls this once, after the view is constructed, so no test path ever
+    /// reaches it.
+    pub(crate) fn start_suspend_listener(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._suspend_listener_task = crate::suspend::spawn_suspend_listener(window, cx);
+    }
 }
 
 /// Best-effort display label for a recent item's secondary line: the login's
@@ -562,6 +584,13 @@ pub struct Nox {
     last_activity: Instant,
     inactivity_epoch: usize,
     _inactivity_task: Task<()>,
+    /// Drives the OS suspend (and, from Phase 2, session-lock) listener for
+    /// the app's entire lifetime. Unlike `_inactivity_task`, this is
+    /// deliberately never reassigned by `lock_vault` or `update_settings` —
+    /// it must keep listening even while the vault is already locked
+    /// (harmless: `lock_vault` is a no-op then) and across every future
+    /// unlock/lock cycle, not just the current one.
+    _suspend_listener_task: Task<()>,
 
     /// Freshly rendered (title, body) for the open item-editor Sheet, refreshed
     /// every `render_unlocked` pass. See `open_item_editor_sheet` for why this
@@ -783,6 +812,7 @@ impl Nox {
             last_activity: Instant::now(),
             inactivity_epoch: 0,
             _inactivity_task: Task::ready(()),
+            _suspend_listener_task: Task::ready(()),
             item_editor_sheet_cell: Rc::new(RefCell::new(None)),
             clipboard: ClipboardState::new(clipboard_timeout),
             conflicts: ConflictState::Closed,
@@ -2373,6 +2403,36 @@ mod tests {
         assert_eq!(first, second);
         cx.run_until_parked();
         cleanup(&path);
+    }
+
+    #[gpui::test]
+    fn handle_suspend_signal_locks_only_when_the_setting_is_enabled(cx: &mut TestAppContext) {
+        init(cx);
+        let path = test_path("suspend-signal-disabled");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.state = unlocked_state(vault, window, locker_cx);
+            locker.settings.lock_on_suspend = false;
+            locker.handle_suspend_signal(window, locker_cx);
+        });
+        assert!(view.read_with(cx, |locker, _| matches!(
+            &locker.state,
+            AppState::Unlocked(_)
+        )));
+        cleanup(&path);
+
+        let second_path = test_path("suspend-signal-enabled");
+        let second_vault = Vault::create(b"correct", &second_path).unwrap();
+        let (second_view, cx) =
+            add_locker_view(cx, second_path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        second_view.update_in(cx, |locker, window, locker_cx| {
+            locker.state = unlocked_state(second_vault, window, locker_cx);
+            locker.settings.lock_on_suspend = true;
+            locker.handle_suspend_signal(window, locker_cx);
+        });
+        assert!(second_view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
+        cleanup(&second_path);
     }
 
     #[gpui::test]

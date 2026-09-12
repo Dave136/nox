@@ -85,6 +85,9 @@ fn main() {
                             cx,
                         )
                     });
+                    view.update(cx, |view, cx| {
+                        view.start_suspend_listener(window, cx);
+                    });
                     // `Root`'s own CSD border wrapper is themed (light/dark) and would
                     // flip color with `Theme::change` (e.g. white once Home switches to
                     // light mode) around our fully custom title bar — we draw all window
