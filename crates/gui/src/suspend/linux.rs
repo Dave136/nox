@@ -98,8 +98,8 @@ pub(crate) async fn watch_prepare_for_sleep(tx: UnboundedSender<SuspendSignal>) 
         let Ok(args) = signal.args() else {
             continue;
         };
-        if is_suspend_edge(args.start) {
-            let _ = tx.unbounded_send(SuspendSignal::Suspend);
+        if is_suspend_edge(args.start) && tx.unbounded_send(SuspendSignal::Suspend).is_err() {
+            return;
         }
     }
 }
@@ -136,8 +136,10 @@ pub(crate) async fn watch_gnome_screensaver(tx: UnboundedSender<SuspendSignal>) 
         let Ok(args) = signal.args() else {
             continue;
         };
-        if is_session_lock_edge(args.active) {
-            let _ = tx.unbounded_send(SuspendSignal::SessionLock);
+        if is_session_lock_edge(args.active)
+            && tx.unbounded_send(SuspendSignal::SessionLock).is_err()
+        {
+            return;
         }
     }
 }
@@ -149,6 +151,13 @@ pub(crate) async fn watch_gnome_screensaver(tx: UnboundedSender<SuspendSignal>) 
 /// D-Bus interfaces are similar by convention, not by any shared contract,
 /// and duplicating fifteen straightforward lines is clearer than a generic
 /// wrapper built for exactly two callers.
+///
+/// Targets `org.freedesktop.ScreenSaver`, which KDE implements but which
+/// other desktop environments — including GNOME, via `gsd-screensaver` —
+/// may also implement alongside `org.gnome.ScreenSaver`. On such a system
+/// both this listener and `watch_gnome_screensaver` fire together on the
+/// same screen lock; that's expected and harmless, since `lock_vault` is
+/// idempotent, not a bug to dedupe.
 pub(crate) async fn watch_kde_screensaver(tx: UnboundedSender<SuspendSignal>) {
     let connection = match zbus::Connection::session().await {
         Ok(connection) => connection,
@@ -177,8 +186,10 @@ pub(crate) async fn watch_kde_screensaver(tx: UnboundedSender<SuspendSignal>) {
         let Ok(args) = signal.args() else {
             continue;
         };
-        if is_session_lock_edge(args.active) {
-            let _ = tx.unbounded_send(SuspendSignal::SessionLock);
+        if is_session_lock_edge(args.active)
+            && tx.unbounded_send(SuspendSignal::SessionLock).is_err()
+        {
+            return;
         }
     }
 }

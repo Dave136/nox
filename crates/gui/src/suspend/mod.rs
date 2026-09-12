@@ -15,6 +15,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 /// True only for the suspend edge of systemd-logind's
 /// `PrepareForSleep(start: bool)` signal; the matching `start == false`
 /// fires again on resume and must not lock a second time.
@@ -22,6 +23,7 @@ pub(crate) fn is_suspend_edge(start: bool) -> bool {
     start
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 /// True only for the "now locked" edge of `ActiveChanged(active: bool)`,
 /// emitted by both GNOME's `org.gnome.ScreenSaver` and KDE's
 /// `org.freedesktop.ScreenSaver`; `active == false` fires again on unlock
@@ -38,13 +40,30 @@ pub(crate) enum SuspendSignal {
     SessionLock,
 }
 
+/// Routes one received `SuspendSignal` to its handler on `Nox`. Extracted
+/// out of `spawn_suspend_listener`'s consumer loop so the routing logic is
+/// callable directly from a test, instead of a test hand-duplicating the
+/// same match and being unable to catch a swapped arm.
+pub(crate) fn dispatch(
+    signal: SuspendSignal,
+    this: &mut crate::app::Nox,
+    window: &mut Window,
+    cx: &mut Context<crate::app::Nox>,
+) {
+    match signal {
+        SuspendSignal::Suspend => this.handle_suspend_signal(window, cx),
+        SuspendSignal::SessionLock => this.handle_session_lock_signal(window, cx),
+    }
+}
+
 /// Starts the OS suspend and session-lock listeners for the current
 /// platform and returns the `Task` driving their shared consumer. The
-/// returned task never completes on its own — the caller (`Nox::new`) must
-/// store it in a field that is never reassigned, unlike
-/// `Nox::_inactivity_task`, because this must keep listening for the app's
-/// entire lifetime, including while the vault is already locked (harmless:
-/// `Nox::lock_vault` is a no-op then).
+/// returned task never completes on its own — the caller
+/// (`Nox::start_suspend_listener`, called once from `main.rs` after the
+/// view is constructed) must store it in a field that is assigned exactly
+/// once, unlike `Nox::_inactivity_task`, because this must keep listening
+/// for the app's entire lifetime, including while the vault is already
+/// locked (harmless: `Nox::lock_vault` is a no-op then).
 pub(crate) fn spawn_suspend_listener(
     window: &mut Window,
     cx: &mut Context<crate::app::Nox>,
@@ -74,10 +93,7 @@ pub(crate) fn spawn_suspend_listener(
     cx.spawn_in(window, async move |this, cx| {
         while let Some(signal) = rx.next().await {
             let updated = cx.update(|window, app| {
-                this.update(app, |this, cx| match signal {
-                    SuspendSignal::Suspend => this.handle_suspend_signal(window, cx),
-                    SuspendSignal::SessionLock => this.handle_session_lock_signal(window, cx),
-                })
+                this.update(app, |this, cx| dispatch(signal, this, window, cx))
             });
             if updated.is_err() {
                 return;

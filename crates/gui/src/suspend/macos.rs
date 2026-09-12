@@ -39,7 +39,8 @@ pub(crate) fn watch_will_sleep(tx: UnboundedSender<SuspendSignal>) {
     // `(NSNotification *) -> Void`, which is exactly `block`'s type here.
     // `queue: None` delivers on the thread that posts the notification
     // (AppKit's main thread) — this function is only ever called from
-    // `Nox::new`, which itself runs on the main thread inside
+    // `Nox::start_suspend_listener`, called once from `main.rs` after the
+    // view is constructed, which itself runs on the main thread inside
     // `cx.open_window`'s callback.
     let _observer = unsafe {
         center.addObserverForName_object_queue_usingBlock(

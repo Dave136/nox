@@ -599,11 +599,13 @@ pub struct Nox {
     inactivity_epoch: usize,
     _inactivity_task: Task<()>,
     /// Drives the OS suspend (and, from Phase 2, session-lock) listener for
-    /// the app's entire lifetime. Unlike `_inactivity_task`, this is
-    /// deliberately never reassigned by `lock_vault` or `update_settings` —
-    /// it must keep listening even while the vault is already locked
-    /// (harmless: `lock_vault` is a no-op then) and across every future
-    /// unlock/lock cycle, not just the current one.
+    /// the app's entire lifetime. Starts as `Task::ready(())` and is armed
+    /// exactly once, by `Nox::start_suspend_listener` (called from
+    /// `main.rs` after the view is constructed) — unlike `_inactivity_task`,
+    /// it is never reassigned again by `lock_vault` or `update_settings`,
+    /// because it must keep listening even while the vault is already
+    /// locked (harmless: `lock_vault` is a no-op then) and across every
+    /// future unlock/lock cycle, not just the current one.
     _suspend_listener_task: Task<()>,
 
     /// Freshly rendered (title, body) for the open item-editor Sheet, refreshed
@@ -5704,17 +5706,15 @@ mod tests {
         view.update_in(cx, |locker, window, locker_cx| {
             locker.state = unlocked_state(vault, window, locker_cx);
             locker.settings.lock_on_session_lock = true;
-            // Exercises the same match arm `spawn_suspend_listener`'s
-            // consumer loop uses for `SuspendSignal::SessionLock`, without
+            // Exercises the real production dispatch function
+            // `spawn_suspend_listener`'s consumer loop calls, without
             // needing a real D-Bus/NSDistributedNotificationCenter event.
-            match crate::suspend::SuspendSignal::SessionLock {
-                crate::suspend::SuspendSignal::Suspend => {
-                    locker.handle_suspend_signal(window, locker_cx)
-                }
-                crate::suspend::SuspendSignal::SessionLock => {
-                    locker.handle_session_lock_signal(window, locker_cx)
-                }
-            }
+            crate::suspend::dispatch(
+                crate::suspend::SuspendSignal::SessionLock,
+                locker,
+                window,
+                locker_cx,
+            );
         });
         assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
         cleanup(&path);

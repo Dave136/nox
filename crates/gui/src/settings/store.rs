@@ -43,6 +43,7 @@ mod tests {
         std::fs::create_dir_all(&path).unwrap();
         let settings = Settings {
             auto_lock_seconds: 120,
+            lock_on_suspend: false,
             ..Settings::default()
         };
         save_settings(&path, &settings).unwrap();
