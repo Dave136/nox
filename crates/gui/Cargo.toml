@@ -36,5 +36,8 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSNotification",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5.19.0"
+
 [lints]
 workspace = true
