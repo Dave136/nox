@@ -22,6 +22,14 @@ pub(crate) fn is_suspend_edge(start: bool) -> bool {
     start
 }
 
+/// True only for the "now locked" edge of `ActiveChanged(active: bool)`,
+/// emitted by both GNOME's `org.gnome.ScreenSaver` and KDE's
+/// `org.freedesktop.ScreenSaver`; `active == false` fires again on unlock
+/// and must not lock a second time.
+pub(crate) fn is_session_lock_edge(active: bool) -> bool {
+    active
+}
+
 /// One event this module can forward into `Nox`. Carried over one shared
 /// channel (rather than two separate channels) so there is a single
 /// long-lived consumer task for both suspend and session-lock signals.
@@ -86,5 +94,11 @@ mod tests {
     fn is_suspend_edge_is_true_only_when_going_to_sleep() {
         assert!(is_suspend_edge(true));
         assert!(!is_suspend_edge(false));
+    }
+
+    #[test]
+    fn is_session_lock_edge_is_true_only_when_the_screen_locks() {
+        assert!(is_session_lock_edge(true));
+        assert!(!is_session_lock_edge(false));
     }
 }
