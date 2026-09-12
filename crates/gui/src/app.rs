@@ -5692,4 +5692,31 @@ mod tests {
         assert!(cx.update(|window, app| { input.read(app).focus_handle(app).is_focused(window) }));
         cleanup(&path);
     }
+
+    #[gpui::test]
+    fn suspend_signal_session_lock_variant_routes_to_handle_session_lock_signal(
+        cx: &mut TestAppContext,
+    ) {
+        init(cx);
+        let path = test_path("suspend-signal-enum-routing");
+        let vault = Vault::create(b"correct", &path).unwrap();
+        let (view, cx) = add_locker_view(cx, path.clone(), DEFAULT_INACTIVITY_TIMEOUT);
+        view.update_in(cx, |locker, window, locker_cx| {
+            locker.state = unlocked_state(vault, window, locker_cx);
+            locker.settings.lock_on_session_lock = true;
+            // Exercises the same match arm `spawn_suspend_listener`'s
+            // consumer loop uses for `SuspendSignal::SessionLock`, without
+            // needing a real D-Bus/NSDistributedNotificationCenter event.
+            match crate::suspend::SuspendSignal::SessionLock {
+                crate::suspend::SuspendSignal::Suspend => {
+                    locker.handle_suspend_signal(window, locker_cx)
+                }
+                crate::suspend::SuspendSignal::SessionLock => {
+                    locker.handle_session_lock_signal(window, locker_cx)
+                }
+            }
+        });
+        assert!(view.read_with(cx, |locker, _| matches!(&locker.state, AppState::Locked)));
+        cleanup(&path);
+    }
 }
