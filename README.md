@@ -36,6 +36,7 @@ the codebase but is not yet wired into the app.
 - Create, edit, delete, restore, search, and local password generation.
 - Explicit locking and an inactivity timeout while the unlocked Nox window
   is inactive.
+- Automatic locking when the operating system suspends (macOS and Linux).
 - Conditional clipboard clearing that leaves newer clipboard content alone.
 - Encrypted backup export and restore.
 - Local conflict selection when conflicting journal revisions are present.
@@ -44,25 +45,25 @@ the codebase but is not yet wired into the app.
 
 Version 1 supports **macOS and Linux**. Windows is unsupported.
 
-Nox currently has no dedicated operating-system suspend or session-lock
-notification in its GUI stack. The macOS and Linux Wayland rows below therefore
-record the accepted v1 limitation; Linux X11 was not exercised and remains a
-separate unverified environment.
+Nox listens for a suspend signal on both macOS (`NSWorkspaceWillSleepNotification`)
+and Linux (systemd-logind's `PrepareForSleep`) and locks the vault immediately.
+Nox has no dedicated operating-system session/screen-lock notification yet —
+that row remains the accepted v1 limitation described below.
 
 | Environment | Explicit Lock | Inactivity timeout | Suspend | OS session lock |
 | --- | --- | --- | --- | --- |
-| macOS | Not verified | Not verified | Not guaranteed—lock explicitly | Not guaranteed—lock explicitly |
-| Linux Wayland / GNOME | Not verified | Not verified | Not guaranteed—lock explicitly | Not guaranteed—lock explicitly |
-| Linux X11 | Not verified | Not verified | Not verified | Not verified |
+| macOS | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Not guaranteed—lock explicitly |
+| Linux Wayland / GNOME | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Not guaranteed—lock explicitly |
+| Linux X11 | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Not guaranteed—lock explicitly |
 
-The Suspend and OS session lock cells for macOS and Linux Wayland record the
-accepted v1 limitation, not positive runtime claims. Explicitly lock Nox
-before suspending the machine, locking the operating-system session, or leaving
-it unattended. The real
-production-duration and suspend/session runs must be completed on supported
-hardware before the unverified explicit-lock and inactivity rows can support a
-release claim. Nox does not currently promise immediate locking on a suspend
-or operating-system session-lock event.
+The OS session lock column records the accepted v1 limitation, not a positive
+runtime claim: explicitly lock Nox before locking the operating-system session
+or leaving it unattended. Suspend detection relies on a real suspend/resume
+cycle to verify (see the implementation plan under
+`docs/superpowers/plans/` for the exact manual steps); it has no automated
+test coverage because no unit test can make the OS actually suspend. The real
+production-duration and explicit-lock/inactivity runs must still be completed
+on supported hardware before those rows can support a release claim.
 
 ## Data and security model
 
