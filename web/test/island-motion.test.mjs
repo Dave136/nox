@@ -3,8 +3,8 @@ import test from "node:test";
 
 import { ISLAND, closeSequence, expandedWidthFor, openSequence } from "../src/lib/island-motion.ts";
 
-test("island dimensions match the Pencil prototype", () => {
-  assert.equal(ISLAND.compactWidth, 128);
+test("island dimensions support a branded compact pill", () => {
+  assert.equal(ISLAND.compactWidth, 224);
   assert.equal(ISLAND.compactHeight, 52);
   assert.equal(ISLAND.expandedWidth, 354);
   assert.equal(ISLAND.top, 18);
@@ -31,15 +31,5 @@ test("closing reverses the order: height first, then width", () => {
 
   assert.equal(steps.length, 2);
   assert.deepEqual(steps[0], { keyframes: { height: "52px" }, duration: 0.22 });
-  assert.deepEqual(steps[1], { keyframes: { width: "128px" }, duration: 0.18 });
-});
-
-test("the chip dwell outlasts the vertical collapse it follows", () => {
-  const [collapseHeight] = closeSequence();
-
-  assert.equal(typeof ISLAND.chipDwellMs, "number");
-  assert.ok(
-    ISLAND.chipDwellMs > collapseHeight.duration * 1000,
-    "chip must stay visible after the island finishes collapsing vertically",
-  );
+  assert.deepEqual(steps[1], { keyframes: { width: "224px" }, duration: 0.18 });
 });

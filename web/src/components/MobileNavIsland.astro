@@ -1,5 +1,5 @@
 ---
-import { Check, Grid2x2, Menu, MonitorDown, Route, ShieldCheck, X } from "@lucide/astro";
+import { Grid2x2, Menu, MonitorDown, Route, ShieldCheck, X } from "@lucide/astro";
 import GithubMark from "./GithubMark.astro";
 import PlatformDownloadCta from "./PlatformDownloadCta.astro";
 
@@ -13,42 +13,32 @@ const items = [
 ---
 
 <div
-  class="pointer-events-none fixed inset-x-0 top-[18px] z-[60] flex justify-center px-5 opacity-0 min-[801px]:hidden"
+  class="pointer-events-none fixed inset-x-0 top-[18px] z-[60] flex justify-center px-5 opacity-0 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] min-[801px]:hidden"
   data-island
   inert
 >
   <div
-    class="pointer-events-auto h-[52px] w-[128px] overflow-hidden rounded-[26px] border border-white/15 bg-[#171a1f] shadow-[0_12px_28px_#00000038]"
+    class="pointer-events-auto h-[52px] w-[224px] overflow-hidden rounded-[26px] border border-white/15 bg-[#171a1f] shadow-[0_12px_28px_#00000038]"
     data-island-shell
   >
     <div class="flex h-[52px] shrink-0 items-center justify-between px-[7px]" data-island-bar>
-      <a class="flex items-center gap-[9px] pl-[7px]" href="#top" aria-label="Nox home">
+      <a class="flex min-w-0 items-center gap-[9px] pl-[7px]" href="#top" aria-label="Nox home">
         <span class="grid size-8 shrink-0 place-items-center rounded-lg">
           <img class="w-[22px] invert" src="/nox-logo.svg" alt="" />
         </span>
-        <span
-          class="hidden text-[18px] leading-none font-[650] text-[#f2f3f5]"
-          data-island-wordmark
-        >nox</span>
+        <span class="text-[18px] leading-none font-[650] text-[#f2f3f5]" data-island-wordmark>nox</span>
       </a>
 
-      <span class="hidden items-center gap-2 rounded-[19px] bg-[#262b32] px-3 py-1.75" data-island-chip>
-        <span class="grid size-5 shrink-0 place-items-center rounded-full bg-[#c8ff3d]">
-          <Check size={11} stroke-width={2} class="text-[#171a1f]" aria-hidden="true" />
-        </span>
-        <span class="text-[11px] leading-none font-semibold text-[#e8ebef]" data-island-chip-label></span>
-      </span>
-
       <button
-        class="grid size-[38px] shrink-0 place-items-center rounded-full bg-[#262b32] text-[#f1f3f6] transition-colors hover:bg-[#292f37]"
+        class="relative grid size-[38px] shrink-0 place-items-center overflow-hidden rounded-full bg-[#262b32] text-[#f1f3f6] transition-colors hover:bg-[#292f37]"
         type="button"
         aria-expanded="false"
         aria-controls="island-menu"
         aria-label="Open menu"
         data-island-toggle
       >
-        <Menu size={17} class="block" data-island-icon="open" aria-hidden="true" />
-        <X size={17} class="hidden" data-island-icon="close" aria-hidden="true" />
+        <Menu size={17} class="block transition-[opacity,scale,filter] duration-150 ease-[cubic-bezier(0.2,0,0,1)]" data-island-icon="open" aria-hidden="true" />
+        <X size={17} class="absolute hidden transition-[opacity,scale,filter] duration-150 ease-[cubic-bezier(0.2,0,0,1)]" data-island-icon="close" aria-hidden="true" />
       </button>
     </div>
 
@@ -85,15 +75,12 @@ const items = [
   const shell = document.querySelector<HTMLElement>("[data-island-shell]");
   const toggle = document.querySelector<HTMLButtonElement>("[data-island-toggle]");
   const menu = document.querySelector<HTMLElement>("[data-island-menu]");
-  const wordmark = document.querySelector<HTMLElement>("[data-island-wordmark]");
   const openIcon = document.querySelector<HTMLElement>('[data-island-icon="open"]');
   const closeIcon = document.querySelector<HTMLElement>('[data-island-icon="close"]');
   const headerMenu = document.querySelector<HTMLButtonElement>("[data-header-menu]");
-  const chip = document.querySelector<HTMLElement>("[data-island-chip]");
-  const chipLabel = document.querySelector<HTMLElement>("[data-island-chip-label]");
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
 
-  if (island && header && shell && toggle && menu && wordmark && openIcon && closeIcon && chip && chipLabel) {
+  if (island && header && shell && toggle && menu && openIcon && closeIcon) {
     let stuck = false;
     let open = false;
     let busy = false;
@@ -101,15 +88,27 @@ const items = [
     const run = async (steps: { keyframes: Record<string, string>; duration: number }[]) => {
       for (const step of steps) {
         const duration = reduced.matches ? 0 : step.duration;
-        await animate(shell, step.keyframes, { duration, ease: "easeInOut" }).finished;
+        await animate(shell, step.keyframes, { duration, ease: [0.16, 1, 0.3, 1] }).finished;
       }
     };
 
-    const setChip = (label: string | null) => {
-      chipLabel.textContent = label ?? "";
-      chip.classList.toggle("hidden", label === null);
-      chip.classList.toggle("flex", label !== null);
-      toggle.classList.toggle("hidden", label !== null);
+    const setHeaderReplaced = (replaced: boolean) => {
+      header.toggleAttribute("data-island-replaced", replaced);
+      header.classList.toggle("max-[800px]:-translate-y-full", replaced);
+      header.classList.toggle("max-[800px]:pointer-events-none", replaced);
+    };
+
+    const setIconState = (nextOpen: boolean) => {
+      openIcon.classList.toggle("hidden", nextOpen);
+      openIcon.classList.toggle("block", !nextOpen);
+      closeIcon.classList.toggle("hidden", !nextOpen);
+      closeIcon.classList.toggle("block", nextOpen);
+    };
+
+    const setIslandVisible = (visible: boolean) => {
+      island.classList.toggle("opacity-0", !visible);
+      island.classList.toggle("opacity-100", visible);
+      island.toggleAttribute("inert", !visible);
     };
 
     const setOpen = async (next: boolean) => {
@@ -117,24 +116,20 @@ const items = [
 
       busy = true;
       open = next;
+      setIslandVisible(open || stuck);
+      setHeaderReplaced(open || stuck);
       toggle.setAttribute("aria-expanded", String(open));
       island.toggleAttribute("data-island-open", open);
       menu.toggleAttribute("inert", !open);
-      openIcon.classList.toggle("hidden", open);
-      openIcon.classList.toggle("block", !open);
-      closeIcon.classList.toggle("hidden", !open);
-      closeIcon.classList.toggle("block", open);
+      setIconState(open);
 
       if (open) {
-        wordmark.classList.remove("hidden");
         menu.style.opacity = "1";
         const measuredMenuHeight = menu.scrollHeight;
-        shell.style.setProperty("--island-menu-height", `${measuredMenuHeight}px`);
-        await run(openSequence(expandedWidthFor(window.innerWidth)));
+        await run(openSequence(expandedWidthFor(window.innerWidth), measuredMenuHeight + ISLAND.compactHeight));
       } else {
-        await run(closeSequence(stuck));
+        await run(closeSequence());
         menu.style.opacity = "0";
-        wordmark.classList.toggle("hidden", !stuck);
       }
       busy = false;
     };
@@ -142,19 +137,13 @@ const items = [
     const setStuck = (next: boolean) => {
       if (open) return;
       stuck = next;
-      island.classList.toggle("opacity-0", !stuck);
-      island.classList.toggle("opacity-100", stuck);
-      island.toggleAttribute("inert", !stuck);
-      shell.style.width = stuck ? `${ISLAND.stuckWidth}px` : `${ISLAND.closedWidth}px`;
-      wordmark.classList.toggle("hidden", !stuck);
-      setChip(stuck ? "Private vault" : null);
+      setIslandVisible(stuck);
+      setHeaderReplaced(stuck);
+      shell.style.width = `${ISLAND.compactWidth}px`;
     };
 
-    const selectAndClose = (event: Event) => {
-      const link = event.currentTarget as HTMLAnchorElement;
-      setChip(link.textContent?.trim() || null);
+    const selectAndClose = () => {
       void setOpen(false);
-      window.setTimeout(() => setChip(stuck ? "Private vault" : null), ISLAND.chipDwellMs);
     };
 
     toggle.addEventListener("click", () => void setOpen(!open));

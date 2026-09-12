@@ -91,14 +91,21 @@ test("mobile nav island replaces the details dropdown", async () => {
   assert.match(island, /#171a1f/);
   assert.match(island, /aria-expanded/);
   assert.match(island, /openSequence/);
+  assert.match(island, /openSequence\(expandedWidthFor\(window\.innerWidth\), measuredMenuHeight \+ ISLAND\.compactHeight\)/);
+  assert.doesNotMatch(island, /openSequence\(expandedWidthFor\(window\.innerWidth\)\)/);
   assert.match(island, /closeSequence/);
+  assert.match(island, /data-island-replaced/);
+  assert.match(island, /max-\[800px\]:-translate-y-full/);
+  assert.match(island, /max-\[800px\]:pointer-events-none/);
+  assert.doesNotMatch(island, /max-\[800px\]:opacity-0/);
   assert.match(island, /data-island-open/);
   assert.match(island, /scrollHeight/);
-  assert.match(island, /data-island-chip-label/);
+  assert.doesNotMatch(island, /data-island-chip/);
+  assert.doesNotMatch(island, /Private vault/);
   assert.match(island, /Escape/);
   assert.match(island, /data-island-link/);
   assert.match(island, /resize/);
-  assert.match(island, /chipDwellMs/);
+  assert.doesNotMatch(island, /chipDwellMs/);
   assert.match(island, /selectAndClose/);
 
   for (const href of ["#product", "#security", "#how", "#open", "/download"]) {
