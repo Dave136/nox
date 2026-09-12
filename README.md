@@ -36,7 +36,8 @@ the codebase but is not yet wired into the app.
 - Create, edit, delete, restore, search, and local password generation.
 - Explicit locking and an inactivity timeout while the unlocked Nox window
   is inactive.
-- Automatic locking when the operating system suspends (macOS and Linux).
+- Automatic locking when the operating system suspends (macOS and Linux) or
+  the session/screen locks (macOS; best-effort on GNOME and KDE on Linux).
 - Conditional clipboard clearing that leaves newer clipboard content alone.
 - Encrypted backup export and restore.
 - Local conflict selection when conflicting journal revisions are present.
@@ -46,24 +47,31 @@ the codebase but is not yet wired into the app.
 Version 1 supports **macOS and Linux**. Windows is unsupported.
 
 Nox listens for a suspend signal on both macOS (`NSWorkspaceWillSleepNotification`)
-and Linux (systemd-logind's `PrepareForSleep`) and locks the vault immediately.
-Nox has no dedicated operating-system session/screen-lock notification yet —
-that row remains the accepted v1 limitation described below.
+and Linux (systemd-logind's `PrepareForSleep`) and locks the vault
+immediately. Nox also listens for an OS session/screen-lock signal: on
+macOS, the undocumented `com.apple.screenIsLocked` distributed
+notification; on Linux, there is **no single freedesktop standard** for
+this, so Nox listens best-effort for both GNOME's `org.gnome.ScreenSaver`
+and KDE's `org.freedesktop.ScreenSaver` `ActiveChanged` signal on the
+session bus. A desktop environment that exposes neither interface (for
+example Xfce's own lock mechanism, or a minimal Wayland compositor with no
+screensaver D-Bus service) is not covered, and Nox cannot detect that
+session lock — this is an accepted limitation, not a bug, and is why the
+table below still marks Linux X11 as unverified for this column.
 
 | Environment | Explicit Lock | Inactivity timeout | Suspend | OS session lock |
 | --- | --- | --- | --- | --- |
-| macOS | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Not guaranteed—lock explicitly |
-| Linux Wayland / GNOME | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Not guaranteed—lock explicitly |
-| Linux X11 | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Not guaranteed—lock explicitly |
+| macOS | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Locks on screen lock (manually verified; no automated coverage) |
+| Linux Wayland / GNOME | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Locks on screen lock via GNOME's ScreenSaver signal (manually verified; no automated coverage) |
+| Linux X11 | Not verified | Not verified | Locks on suspend (manually verified; no automated coverage) | Best-effort only — depends on the running desktop environment exposing GNOME's or KDE's ScreenSaver D-Bus interface; not guaranteed on every X11 desktop environment |
 
-The OS session lock column records the accepted v1 limitation, not a positive
-runtime claim: explicitly lock Nox before locking the operating-system session
-or leaving it unattended. Suspend detection relies on a real suspend/resume
-cycle to verify (see the implementation plan under
-`docs/superpowers/plans/` for the exact manual steps); it has no automated
-test coverage because no unit test can make the OS actually suspend. The real
-production-duration and explicit-lock/inactivity runs must still be completed
-on supported hardware before those rows can support a release claim.
+Suspend and session-lock detection both rely on a real suspend/lock event to
+verify (see `docs/superpowers/plans/` for the exact manual steps per
+platform); neither has automated test coverage because no unit test can
+make the OS actually suspend or lock the screen. The real
+production-duration and explicit-lock/inactivity runs must still be
+completed on supported hardware before those rows can support a release
+claim.
 
 ## Data and security model
 
