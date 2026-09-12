@@ -406,6 +406,7 @@ fn render_section(
             data.settings_auto_lock_select.clone(),
             data.settings_clipboard_select.clone(),
             data.settings.lock_on_suspend,
+            data.settings.lock_on_session_lock,
         ),
         SettingsSection::Vault => {
             vault_section(theme, locker, &data.vault_list, data.conflict_count)
@@ -567,6 +568,7 @@ fn security_section(
     settings_auto_lock_select: Entity<SelectState<SettingsDurationDelegate>>,
     settings_clipboard_select: Entity<SelectState<SettingsDurationDelegate>>,
     lock_on_suspend: bool,
+    lock_on_session_lock: bool,
 ) -> AnyElement {
     let auto_lock = duration_control(theme, settings_auto_lock_select);
     let clipboard = duration_control(theme, settings_clipboard_select);
@@ -576,6 +578,13 @@ fn security_section(
         lock_on_suspend,
         locker.clone(),
         |settings| settings.lock_on_suspend = !settings.lock_on_suspend,
+    );
+    let session_lock_toggle = toggle(
+        theme,
+        "settings-lock-on-session-lock",
+        lock_on_session_lock,
+        locker.clone(),
+        |settings| settings.lock_on_session_lock = !settings.lock_on_session_lock,
     );
     div()
         .flex()
@@ -598,6 +607,13 @@ fn security_section(
             "Lock when the system sleeps",
             "Nox locks immediately before this computer suspends.",
             suspend_toggle,
+        ))
+        .child(divider(theme))
+        .child(settings_row(
+            theme,
+            "Lock when the screen locks",
+            "Nox locks when the operating system session or screen locks. Best-effort on Linux.",
+            session_lock_toggle,
         ))
         .child(divider(theme))
         .child(settings_row(
