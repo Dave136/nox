@@ -81,6 +81,9 @@ pub(crate) fn spawn_suspend_listener(
             .spawn(linux::watch_prepare_for_sleep(tx.clone()))
             .detach();
         cx.background_executor()
+            .spawn(linux::watch_locked_hint(tx.clone()))
+            .detach();
+        cx.background_executor()
             .spawn(linux::watch_gnome_screensaver(tx.clone()))
             .detach();
         cx.background_executor()
