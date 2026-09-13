@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Automatic vault locking on OS suspend, on macOS and Linux.
-- Automatic vault locking on OS session/screen lock, on macOS and best-effort on Linux (GNOME/KDE).
+- Automatic vault locking on OS session/screen lock, on macOS and on Linux via systemd-logind's `LockedHint` (with GNOME/KDE screensaver signals as a secondary, best-effort source).
 - Settings toggles for "Lock when the system sleeps" and "Lock when the screen locks".
 
 ### Changed

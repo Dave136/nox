@@ -37,7 +37,8 @@ the codebase but is not yet wired into the app.
 - Explicit locking and an inactivity timeout while the unlocked Nox window
   is inactive.
 - Automatic locking when the operating system suspends (macOS and Linux) or
-  the session/screen locks (macOS; best-effort on GNOME and KDE on Linux).
+  the session/screen locks (macOS; Linux via systemd-logind, with GNOME/KDE
+  screensaver signals as a secondary source).
 - Conditional clipboard clearing that leaves newer clipboard content alone.
 - Encrypted backup export and restore.
 - Local conflict selection when conflicting journal revisions are present.
@@ -50,22 +51,29 @@ Nox listens for a suspend signal on both macOS (`NSWorkspaceWillSleepNotificatio
 and Linux (systemd-logind's `PrepareForSleep`) and issues the lock on that
 signal; on Linux this may complete by resume rather than strictly before
 suspend, since Nox does not yet hold a delay inhibitor. Nox also listens for
-an OS session/screen-lock signal: on
-macOS, the undocumented `com.apple.screenIsLocked` distributed
-notification; on Linux, there is **no single freedesktop standard** for
-this, so Nox listens best-effort for both GNOME's `org.gnome.ScreenSaver`
-and KDE's `org.freedesktop.ScreenSaver` `ActiveChanged` signal on the
-session bus. A desktop environment that exposes neither interface (for
-example Xfce's own lock mechanism, or a minimal Wayland compositor with no
-screensaver D-Bus service) is not covered, and Nox cannot detect that
-session lock — this is an accepted limitation, not a bug, and is why the
-table below still marks Linux X11 as unverified for this column.
+an OS session/screen-lock signal: on macOS, the undocumented
+`com.apple.screenIsLocked` distributed notification; on Linux, the primary
+source is systemd-logind's own `Session.LockedHint` property (watched via
+`PropertiesChanged` on the system bus) — this is desktop-environment-agnostic
+and, in testing, the one mechanism that reliably reflected the lock state
+GNOME Shell's own `org.gnome.ScreenSaver` compatibility interface did not:
+on GNOME Shell, neither the Super+L keybinding nor `loginctl lock-session`
+was observed to emit that interface's `ActiveChanged` signal at all, despite
+both actually locking the session. Nox also subscribes to GNOME's
+`org.gnome.ScreenSaver` and KDE's `org.freedesktop.ScreenSaver`
+`ActiveChanged` signal as a secondary, best-effort source, for environments
+where those do fire correctly; `LockedHint` needs no such caveat since it's
+systemd's own tracked session state, not a desktop-environment compatibility
+shim. A system without systemd-logind (a container, or a non-systemd init)
+falls back to the screensaver-only sources above — this is an accepted
+limitation, not a bug, and is why the table below still marks Linux X11 as
+unverified for this column.
 
 | Environment | Explicit Lock | Inactivity timeout | Suspend | OS session lock |
 | --- | --- | --- | --- | --- |
 | macOS | Not verified | Not verified | Locks on suspend (implemented; not yet verified on hardware; no automated coverage) | Locks on screen lock (implemented; not yet verified on hardware; no automated coverage) |
-| Linux Wayland / GNOME | Not verified | Not verified | Locks on suspend (implemented; not yet verified on hardware; no automated coverage) | Locks on screen lock via GNOME's ScreenSaver signal (implemented; not yet verified on hardware; no automated coverage) |
-| Linux X11 | Not verified | Not verified | Locks on suspend (implemented; not yet verified on hardware; no automated coverage) | Best-effort only — depends on the running desktop environment exposing GNOME's or KDE's ScreenSaver D-Bus interface; not guaranteed on every X11 desktop environment |
+| Linux Wayland / GNOME | Not verified | Not verified | Locks on suspend (implemented; not yet verified on hardware; no automated coverage) | Locks on screen lock via systemd-logind's `LockedHint` (manually verified against Super+L on GNOME Shell; no automated coverage) |
+| Linux X11 | Not verified | Not verified | Locks on suspend (implemented; not yet verified on hardware; no automated coverage) | Locks via systemd-logind's `LockedHint` where systemd-logind is present; the GNOME/KDE screensaver fallback is best-effort only and not guaranteed on every X11 desktop environment |
 
 Suspend and session-lock detection both rely on a real suspend/lock event to
 verify (see `docs/superpowers/plans/` for the exact manual steps per
